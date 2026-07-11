@@ -1,0 +1,994 @@
+import { db } from "../db.js";
+
+function cleanText(value) {
+  return String(value || "").trim();
+}
+
+function parseJsonList(value) {
+  if (Array.isArray(value)) return value;
+
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function toJsonList(value) {
+  return JSON.stringify(Array.isArray(value) ? value : parseJsonList(value));
+}
+
+function normalizeStatus(status) {
+  const value = cleanText(status).toLowerCase();
+  return value === "publish" || value === "published" ? "published" : "draft";
+}
+
+function normalizeVisibility(visibility) {
+  return cleanText(visibility).toLowerCase() === "public" ? "public" : "private";
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
+let courseIdColumn;
+
+async function getCourseIdColumn() {
+  if (courseIdColumn) return courseIdColumn;
+
+  const [columns] = await db.execute(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'courses'
+       AND COLUMN_NAME IN ('course_id', 'id')`
+  );
+  const columnNames = new Set(columns.map((column) => column.COLUMN_NAME));
+
+  courseIdColumn = columnNames.has("course_id") ? "course_id" : "id";
+  return courseIdColumn;
+}
+
+function getCourseId(row) {
+  return row?.course_pk || row?.course_id || row?.id;
+}
+
+function rowToCourse(row, learningModules = []) {
+  const courseId = getCourseId(row);
+  const storedLessonPages = parseJsonList(row.lesson_pages);
+  const storedQuizItems = parseJsonList(row.quiz_items);
+  const fallbackLessonPages = learningModules.flatMap((module) => module.lessonPages || []);
+  const fallbackQuizItems = learningModules.flatMap((module) => module.quizItems || []);
+  const lessonPages = storedLessonPages.length ? storedLessonPages : fallbackLessonPages;
+  const quizItems = storedQuizItems.length ? storedQuizItems : fallbackQuizItems;
+  const courseCode = row.course_code || row.code || "";
+  const courseName = row.course_name || row.title || row.subject || courseCode;
+  const summary = row.summary || row.description || "";
+  const pageCount = lessonPages.length || Number(row.modules || 0);
+  const quizCount = quizItems.length || Number(row.quizzes || 0);
+
+  return {
+    id: courseId,
+    course_id: courseId,
+    courseName,
+    course_name: courseName,
+    title: courseName,
+    code: courseCode,
+    courseCode,
+    course_code: courseCode,
+    description: summary,
+    summary,
+    subject: row.subject || courseName,
+    learningObjectives: row.learning_objectives || "",
+    learning_objectives: row.learning_objectives || "",
+    status: normalizeStatus(row.status),
+    visibility: normalizeVisibility(row.visibility),
+    lessonPages,
+    lessonContent: row.lesson_pages || JSON.stringify(lessonPages),
+    lesson_content: row.lesson_pages || JSON.stringify(lessonPages),
+    quizItems,
+    quizModule: row.quiz_items || JSON.stringify(quizItems),
+    quiz_contents: row.quiz_items || JSON.stringify(quizItems),
+    hasQuiz: quizCount > 0,
+    has_quiz: quizCount > 0,
+    students: Number(row.students || 0),
+    modules: pageCount,
+    quizzes: quizCount,
+    learningModules,
+    moduleCount: learningModules.length,
+    joinLink: row.join_link || "",
+    join_link: row.join_link || "",
+    archived: row.archived === 1 || row.archived === true,
+    professorId: row.professor_id || null,
+    professorName: row.professor_name || "",
+    professorEmail: row.professor_email || "",
+    createdAt: formatDate(row.created_at),
+    updatedAt: formatDate(row.updated_at || row.created_at),
+  };
+}
+
+function rowToModule(row) {
+  const courseId = getCourseId(row);
+  const lessonPages = parseJsonList(row.lesson_contents);
+  const quizItems = parseJsonList(row.quiz_contents);
+  const courseCode = row.course_code || row.code || "";
+  const courseName = row.course_name || row.course_subject || row.course_title || courseCode;
+  const updatedAt = formatDate(row.updated_at || row.created_at);
+
+  return {
+    id: row.lesson_id,
+    lesson_id: row.lesson_id,
+    courseId,
+    course_id: courseId,
+    courseName,
+    course_name: courseName,
+    code: courseCode,
+    courseCode,
+    course_code: courseCode,
+    title: row.title,
+    summary: row.description || "",
+    description: row.description || "",
+    module_description: row.description || "",
+    subject: row.subject || "",
+    learningObjectives: row.learning_objectives || "",
+    learning_objectives: row.learning_objectives || "",
+    status: normalizeStatus(row.status),
+    visibility: normalizeVisibility(row.course_visibility),
+    lessonPages,
+    lessonContent: row.lesson_contents || "[]",
+    lesson_content: row.lesson_contents || "[]",
+    quizItems,
+    quizModule: row.quiz_contents || "[]",
+    quiz_contents: row.quiz_contents || "[]",
+    hasQuiz: row.has_quiz === 1 || quizItems.length > 0,
+    has_quiz: row.has_quiz === 1 || quizItems.length > 0,
+    students: Number(row.students || 0),
+    modules: lessonPages.length,
+    quizzes: quizItems.length,
+    joinLink: row.join_link || "",
+    join_link: row.join_link || "",
+    archived: row.archived === 1 || row.archived === true,
+    professorName: row.professor_name || "",
+    professorEmail: row.professor_email || "",
+    createdAt: formatDate(row.created_at),
+    updatedAt,
+  };
+}
+
+function payloadToModuleFields(body) {
+  const courseCode = cleanText(body.courseCode || body.course_code || body.code).toUpperCase();
+  const courseName = cleanText(
+    body.courseName || body.course_name || body.courseTitle || body.subject || courseCode
+  );
+  const courseDescription = cleanText(
+    body.courseDescription || body.course_description || body.courseSummary || body.summary
+  );
+  const lessonPages = Array.isArray(body.lessonPages)
+    ? body.lessonPages
+    : parseJsonList(body.lessonContent || body.lesson_content);
+  const quizItems = Array.isArray(body.quizItems)
+    ? body.quizItems
+    : parseJsonList(body.quizModule || body.quiz_contents);
+
+  return {
+    courseId: body.courseId || body.course_id || null,
+    courseCode,
+    courseName,
+    courseDescription,
+    courseStatus: normalizeStatus(body.courseStatus || body.course_status || body.status),
+    courseVisibility: normalizeVisibility(body.visibility),
+    professorId: body.professorId || body.professor_id || null,
+    professorName: cleanText(body.professorName || body.professor_name),
+    professorEmail: cleanText(body.professorEmail || body.professor_email),
+    title: cleanText(body.title),
+    description: cleanText(body.description || body.module_description || body.summary),
+    subject: cleanText(body.subject || courseName),
+    learningObjectives: cleanText(body.learningObjectives || body.learning_objectives),
+    status: normalizeStatus(body.status),
+    lessonPages,
+    quizItems,
+    archived:
+      body.archived === true ||
+      body.archived === 1 ||
+      body.archived === "1" ||
+      body.archived === "true",
+  };
+}
+
+function payloadToCourseFields(body) {
+  const courseCode = cleanText(body.courseCode || body.course_code || body.code).toUpperCase();
+  const title = cleanText(body.title || body.courseName || body.course_name || courseCode);
+  const summary = cleanText(
+    body.summary || body.description || body.courseDescription || body.course_description
+  );
+  const lessonPages = Array.isArray(body.lessonPages)
+    ? body.lessonPages
+    : parseJsonList(body.lessonContent || body.lesson_content || body.lesson_pages);
+  const quizItems = Array.isArray(body.quizItems)
+    ? body.quizItems
+    : parseJsonList(body.quizModule || body.quiz_contents || body.quiz_items);
+
+  return {
+    courseCode,
+    title,
+    summary,
+    subject: cleanText(body.subject || title),
+    learningObjectives: cleanText(body.learningObjectives || body.learning_objectives),
+    status: normalizeStatus(body.status),
+    visibility: normalizeVisibility(body.visibility),
+    professorId: body.professorId || body.professor_id || null,
+    professorName: cleanText(body.professorName || body.professor_name),
+    professorEmail: cleanText(body.professorEmail || body.professor_email),
+    lessonPages,
+    quizItems,
+    students: Number(body.students || 0),
+    archived:
+      body.archived === true ||
+      body.archived === 1 ||
+      body.archived === "1" ||
+      body.archived === "true",
+  };
+}
+
+function validateModule(fields) {
+  if (!fields.courseCode && !fields.courseId) {
+    return "Course code is required.";
+  }
+
+  if (!fields.title || !fields.description || !fields.subject) {
+    return "Module title, description, and subject are required.";
+  }
+
+  if (!fields.learningObjectives || fields.lessonPages.length === 0) {
+    return "Learning objectives and at least one lesson page are required.";
+  }
+
+  return "";
+}
+
+function validateCourse(fields) {
+  if (!fields.courseCode) {
+    return "Course code is required.";
+  }
+
+  if (!fields.title || !fields.summary || !fields.subject) {
+    return "Course title, description, and subject are required.";
+  }
+
+  if (!fields.learningObjectives || fields.lessonPages.length === 0) {
+    return "Learning objectives and at least one lesson page are required.";
+  }
+
+  return "";
+}
+
+function duplicateCourseCode(error) {
+  return error?.code === "ER_DUP_ENTRY" && String(error?.message || "").includes("code");
+}
+
+async function sendCourseWriteError(res, error, fallbackMessage) {
+  if (duplicateCourseCode(error)) {
+    return res.status(409).json({
+      success: false,
+      message: "A course with that code already exists.",
+    });
+  }
+
+  return res.status(500).json({
+    success: false,
+    message: fallbackMessage,
+  });
+}
+
+async function getOrCreateCourse(fields) {
+  const idColumn = await getCourseIdColumn();
+
+  if (fields.courseId) {
+    const [rows] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [
+      fields.courseId,
+    ]);
+
+    if (rows.length > 0) return rows[0];
+  }
+
+  const [existing] = await db.execute(
+    `SELECT *
+     FROM courses
+     WHERE course_code = ? OR code = ?
+     LIMIT 1`,
+    [fields.courseCode, fields.courseCode]
+  );
+
+  if (existing.length > 0) {
+    await db.execute(
+      `UPDATE courses
+       SET course_name = ?,
+           title = ?,
+           description = ?,
+           summary = ?,
+           subject = ?,
+           status = ?,
+           visibility = ?,
+           professor_id = ?,
+           professor_name = ?,
+           professor_email = ?,
+           join_link = ?
+       WHERE ${idColumn} = ?`,
+      [
+        fields.courseName,
+        fields.courseName,
+        fields.courseDescription,
+        fields.courseDescription,
+        fields.courseName,
+        fields.courseStatus,
+        fields.courseVisibility,
+        fields.professorId,
+        fields.professorName,
+        fields.professorEmail,
+        `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`,
+        getCourseId(existing[0]),
+      ]
+    );
+
+    const [updated] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [
+      getCourseId(existing[0]),
+    ]);
+    return updated[0];
+  }
+
+  const [result] = await db.execute(
+    `INSERT INTO courses
+     (title, code, summary, subject, professor_id, course_name, description,
+      course_code, status, visibility, join_link, archived, professor_name,
+      professor_email)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+    [
+      fields.courseName,
+      fields.courseCode,
+      fields.courseDescription,
+      fields.courseName,
+      fields.professorId,
+      fields.courseName,
+      fields.courseDescription,
+      fields.courseCode,
+      fields.courseStatus,
+      fields.courseVisibility,
+      `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`,
+      fields.professorName,
+      fields.professorEmail,
+    ]
+  );
+
+  const [rows] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [
+    result.insertId,
+  ]);
+  return rows[0];
+}
+
+async function getCourseLearningModules(courseIds) {
+  if (!courseIds.length) return new Map();
+
+  const placeholders = courseIds.map(() => "?").join(", ");
+  const rows = await getModuleRows(`WHERE lm.course_id IN (${placeholders})`, courseIds);
+  const grouped = new Map();
+
+  rows.forEach((row) => {
+    const module = rowToModule(row);
+    const key = String(module.courseId);
+
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(module);
+  });
+
+  return grouped;
+}
+
+async function getModuleRows(where = "", params = []) {
+  const idColumn = await getCourseIdColumn();
+
+  const [rows] = await db.execute(
+    `SELECT
+       lm.*,
+       c.${idColumn} AS course_pk,
+       c.course_name,
+       c.course_code,
+       c.title AS course_title,
+       c.code,
+       c.subject AS course_subject,
+       c.visibility AS course_visibility,
+       c.join_link,
+       c.archived,
+       c.students,
+       c.professor_name,
+       c.professor_email
+     FROM learning_modules lm
+     INNER JOIN courses c ON c.${idColumn} = lm.course_id
+     ${where}
+     ORDER BY lm.updated_at DESC, lm.lesson_id DESC`,
+    params
+  );
+
+  return rows;
+}
+
+export async function getCourses(req, res) {
+  try {
+    const idColumn = await getCourseIdColumn();
+    const includeArchived =
+      req.query.includeArchived === "1" || req.query.includeArchived === "true";
+    const publicOnly = req.query.public === "1" || req.query.public === "true";
+    const publishedOnly =
+      req.query.published === "1" || req.query.published === "true";
+    const where = [];
+    const params = [];
+
+    if (!includeArchived) where.push("archived = 0");
+    if (publicOnly) {
+      where.push("visibility = ?");
+      params.push("public");
+    }
+    if (publishedOnly) {
+      where.push("status = ?");
+      params.push("published");
+    }
+
+    const [courseRows] = await db.execute(
+      `SELECT *
+       FROM courses
+       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+       ORDER BY updated_at DESC, ${idColumn} DESC`,
+      params
+    );
+
+    const modulesByCourse = await getCourseLearningModules(courseRows.map(getCourseId));
+
+    const courses = courseRows.map((course) =>
+      rowToCourse(course, modulesByCourse.get(String(getCourseId(course))) || [])
+    );
+
+    return res.json({
+      success: true,
+      courses,
+    });
+  } catch (error) {
+    console.error("Get courses error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch courses.",
+    });
+  }
+}
+
+export async function getCourseById(req, res) {
+  try {
+    const idColumn = await getCourseIdColumn();
+    const [rows] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [
+      req.params.id,
+    ]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found.",
+      });
+    }
+
+    const courseId = getCourseId(rows[0]);
+    const modulesByCourse = await getCourseLearningModules([courseId]);
+    const course = rowToCourse(rows[0], modulesByCourse.get(String(courseId)) || []);
+
+    return res.json({
+      success: true,
+      course,
+    });
+  } catch (error) {
+    console.error("Get course error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch course.",
+    });
+  }
+}
+
+export async function joinCourseByCode(req, res) {
+  const courseCode = cleanText(
+    req.body.courseCode || req.body.course_code || req.body.code || req.query.courseCode
+  ).toUpperCase();
+
+  if (!courseCode) {
+    return res.status(400).json({
+      success: false,
+      message: "Course code is required.",
+    });
+  }
+
+  try {
+    const idColumn = await getCourseIdColumn();
+    const [rows] = await db.execute(
+      `SELECT *
+       FROM courses
+       WHERE archived = 0
+         AND status = 'published'
+         AND (course_code = ? OR code = ?)
+       LIMIT 1`,
+      [courseCode, courseCode]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Course code not found. Please check the code from your professor.",
+      });
+    }
+
+    const courseId = getCourseId(rows[0]);
+    const modulesByCourse = await getCourseLearningModules([courseId]);
+    const course = rowToCourse(rows[0], modulesByCourse.get(String(courseId)) || []);
+
+    return res.json({
+      success: true,
+      course,
+    });
+  } catch (error) {
+    console.error("Join course by code error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to join course.",
+    });
+  }
+}
+
+export async function getLearningModules(req, res) {
+  try {
+    const includeArchived =
+      req.query.includeArchived === "1" || req.query.includeArchived === "true";
+    const publicOnly = req.query.public === "1" || req.query.public === "true";
+    const publishedOnly =
+      req.query.published === "1" || req.query.published === "true";
+
+    const where = [];
+    const params = [];
+
+    if (!includeArchived) where.push("c.archived = 0");
+    if (publicOnly) {
+      where.push("c.visibility = ?");
+      params.push("public");
+    }
+    if (publishedOnly) {
+      where.push("lm.status = ?");
+      params.push("published");
+    }
+
+    const rows = await getModuleRows(
+      where.length ? `WHERE ${where.join(" AND ")}` : "",
+      params
+    );
+    const modules = rows.map(rowToModule);
+
+    return res.json({
+      success: true,
+      modules,
+      courses: modules,
+    });
+  } catch (error) {
+    console.error("Get learning modules error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch learning modules.",
+    });
+  }
+}
+
+export async function getLearningModuleById(req, res) {
+  try {
+    const rows = await getModuleRows("WHERE lm.lesson_id = ?", [req.params.id]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Learning module not found.",
+      });
+    }
+
+    const module = rowToModule(rows[0]);
+
+    return res.json({
+      success: true,
+      module,
+      course: module,
+    });
+  } catch (error) {
+    console.error("Get learning module error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch learning module.",
+    });
+  }
+}
+
+export async function createCourse(req, res) {
+  const fields = payloadToCourseFields(req.body);
+  const validationMessage = validateCourse(fields);
+
+  if (validationMessage) {
+    return res.status(400).json({
+      success: false,
+      message: validationMessage,
+    });
+  }
+
+  try {
+    const idColumn = await getCourseIdColumn();
+    const lessonPages = toJsonList(fields.lessonPages);
+    const quizItems = toJsonList(fields.quizItems);
+    const joinLink = `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`;
+
+    const [result] = await db.execute(
+      `INSERT INTO courses
+       (title, code, summary, subject, professor_id, course_name, description,
+        course_code, learning_objectives, status, visibility, lesson_pages,
+        quiz_items, students, modules, quizzes, join_link, archived,
+        professor_name, professor_email)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        fields.title,
+        fields.courseCode,
+        fields.summary,
+        fields.subject,
+        fields.professorId,
+        fields.title,
+        fields.summary,
+        fields.courseCode,
+        fields.learningObjectives,
+        fields.status,
+        fields.visibility,
+        lessonPages,
+        quizItems,
+        fields.students,
+        fields.lessonPages.length,
+        fields.quizItems.length,
+        joinLink,
+        fields.archived ? 1 : 0,
+        fields.professorName,
+        fields.professorEmail,
+      ]
+    );
+
+    const [rows] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [
+      result.insertId,
+    ]);
+    const course = rowToCourse(rows[0], []);
+
+    return res.status(201).json({
+      success: true,
+      message: "Course added successfully.",
+      course,
+    });
+  } catch (error) {
+    console.error("Create course error:", error);
+    return sendCourseWriteError(res, error, "Failed to add course.");
+  }
+}
+
+export async function createLearningModule(req, res) {
+  const fields = payloadToModuleFields(req.body);
+  const validationMessage = validateModule(fields);
+
+  if (validationMessage) {
+    return res.status(400).json({
+      success: false,
+      message: validationMessage,
+    });
+  }
+
+  try {
+    const course = await getOrCreateCourse(fields);
+    const quizContents = toJsonList(fields.quizItems);
+    const lessonContents = toJsonList(fields.lessonPages);
+
+    const [result] = await db.execute(
+      `INSERT INTO learning_modules
+       (course_id, title, description, subject, status, quiz_contents,
+        learning_objectives, lesson_contents, has_quiz)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        getCourseId(course),
+        fields.title,
+        fields.description,
+        fields.subject,
+        fields.status,
+        quizContents,
+        fields.learningObjectives,
+        lessonContents,
+        fields.quizItems.length > 0 ? 1 : 0,
+      ]
+    );
+
+    const rows = await getModuleRows("WHERE lm.lesson_id = ?", [result.insertId]);
+    const module = rowToModule(rows[0]);
+
+    return res.status(201).json({
+      success: true,
+      message: "Learning module added successfully.",
+      module,
+      course: module,
+    });
+  } catch (error) {
+    console.error("Create learning module error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to add learning module.",
+    });
+  }
+}
+
+export async function updateCourse(req, res) {
+  const fields = payloadToCourseFields(req.body);
+  const validationMessage = validateCourse(fields);
+  const id = req.params.id || req.body.id || req.body.course_id;
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      message: "Course ID is required.",
+    });
+  }
+
+  if (validationMessage) {
+    return res.status(400).json({
+      success: false,
+      message: validationMessage,
+    });
+  }
+
+  try {
+    const idColumn = await getCourseIdColumn();
+    const lessonPages = toJsonList(fields.lessonPages);
+    const quizItems = toJsonList(fields.quizItems);
+    const joinLink = `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`;
+
+    const [result] = await db.execute(
+      `UPDATE courses
+       SET title = ?,
+           code = ?,
+           summary = ?,
+           subject = ?,
+           professor_id = ?,
+           course_name = ?,
+           description = ?,
+           course_code = ?,
+           learning_objectives = ?,
+           status = ?,
+           visibility = ?,
+           lesson_pages = ?,
+           quiz_items = ?,
+           students = ?,
+           modules = ?,
+           quizzes = ?,
+           join_link = ?,
+           archived = ?,
+           professor_name = ?,
+           professor_email = ?
+       WHERE ${idColumn} = ?`,
+      [
+        fields.title,
+        fields.courseCode,
+        fields.summary,
+        fields.subject,
+        fields.professorId,
+        fields.title,
+        fields.summary,
+        fields.courseCode,
+        fields.learningObjectives,
+        fields.status,
+        fields.visibility,
+        lessonPages,
+        quizItems,
+        fields.students,
+        fields.lessonPages.length,
+        fields.quizItems.length,
+        joinLink,
+        fields.archived ? 1 : 0,
+        fields.professorName,
+        fields.professorEmail,
+        id,
+      ]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found.",
+      });
+    }
+
+    const [rows] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [id]);
+    const courseId = getCourseId(rows[0]);
+    const modulesByCourse = await getCourseLearningModules([courseId]);
+    const course = rowToCourse(rows[0], modulesByCourse.get(String(courseId)) || []);
+
+    return res.json({
+      success: true,
+      message: "Course updated successfully.",
+      course,
+    });
+  } catch (error) {
+    console.error("Update course error:", error);
+    return sendCourseWriteError(res, error, "Failed to update course.");
+  }
+}
+
+export async function updateLearningModule(req, res) {
+  const fields = payloadToModuleFields(req.body);
+  const validationMessage = validateModule(fields);
+  const id = req.params.id || req.body.id || req.body.lesson_id;
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      message: "Learning module ID is required.",
+    });
+  }
+
+  if (validationMessage) {
+    return res.status(400).json({
+      success: false,
+      message: validationMessage,
+    });
+  }
+
+  try {
+    const course = await getOrCreateCourse(fields);
+    const [result] = await db.execute(
+      `UPDATE learning_modules
+       SET course_id = ?,
+           title = ?,
+           description = ?,
+           subject = ?,
+           status = ?,
+           quiz_contents = ?,
+           learning_objectives = ?,
+           lesson_contents = ?,
+           has_quiz = ?
+       WHERE lesson_id = ?`,
+      [
+        getCourseId(course),
+        fields.title,
+        fields.description,
+        fields.subject,
+        fields.status,
+        toJsonList(fields.quizItems),
+        fields.learningObjectives,
+        toJsonList(fields.lessonPages),
+        fields.quizItems.length > 0 ? 1 : 0,
+        id,
+      ]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Learning module not found.",
+      });
+    }
+
+    const rows = await getModuleRows("WHERE lm.lesson_id = ?", [id]);
+    const module = rowToModule(rows[0]);
+
+    return res.json({
+      success: true,
+      message: "Learning module updated successfully.",
+      module,
+      course: module,
+    });
+  } catch (error) {
+    console.error("Update learning module error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update learning module.",
+    });
+  }
+}
+
+export async function deleteCourse(req, res) {
+  const id = req.params.id || req.body.id || req.body.course_id;
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      message: "Course ID is required.",
+    });
+  }
+
+  try {
+    const idColumn = await getCourseIdColumn();
+    const [result] = await db.execute(`DELETE FROM courses WHERE ${idColumn} = ?`, [id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Course deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Delete course error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete course.",
+    });
+  }
+}
+
+export async function deleteLearningModule(req, res) {
+  const id = req.params.id || req.body.id || req.body.lesson_id;
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      message: "Learning module ID is required.",
+    });
+  }
+
+  try {
+    const [result] = await db.execute(
+      "DELETE FROM learning_modules WHERE lesson_id = ?",
+      [id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Learning module not found.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Learning module deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Delete learning module error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete learning module.",
+    });
+  }
+}
+
+export async function handleLegacyLearningModule(req, res) {
+  if (req.method === "GET") {
+    return getLearningModules(req, res);
+  }
+
+  const action = cleanText(req.body.action).toLowerCase();
+
+  if (action === "delete") {
+    return deleteLearningModule(req, res);
+  }
+
+  if (req.body.id || req.body.lesson_id) {
+    req.params.id = req.body.id || req.body.lesson_id;
+    return updateLearningModule(req, res);
+  }
+
+  return createLearningModule(req, res);
+}
