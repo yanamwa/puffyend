@@ -9,8 +9,19 @@ function createOtp() {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
+function isTemporaryAccountExpired(user) {
+  if (Number(user.is_temporary) !== 1 || !user.temporary_expires_at) {
+    return false;
+  }
+
+  const expiresAt = new Date(user.temporary_expires_at);
+  return !Number.isNaN(expiresAt.getTime()) && expiresAt <= new Date();
+}
+
 function authUserPayload(user) {
   const displayName = user.display_name || user.name || "";
+  const isTemporary = Number(user.is_temporary) === 1;
+  const temporaryExpired = isTemporaryAccountExpired(user);
 
   return {
     id: user.userId,
@@ -27,6 +38,17 @@ function authUserPayload(user) {
     onboardingCompleted: Number(user.onboarding_completed) === 1,
     onboarding_completed: Number(user.onboarding_completed) === 1 ? 1 : 0,
     verificationStatus: user.verification_status,
+    verification_status: user.verification_status,
+    isArchived: Number(user.is_archived) === 1,
+    is_archived: Number(user.is_archived) === 1 ? 1 : 0,
+    mustChangePassword: Number(user.must_change_password) === 1,
+    must_change_password: Number(user.must_change_password) === 1 ? 1 : 0,
+    isTemporary,
+    is_temporary: isTemporary ? 1 : 0,
+    temporaryExpiresAt: user.temporary_expires_at,
+    temporary_expires_at: user.temporary_expires_at,
+    temporaryExpired,
+    temporary_expired: temporaryExpired ? 1 : 0,
   };
 }
 
@@ -34,24 +56,24 @@ export async function signup(req, res) {
   const {
     email,
     password,
-    role,
     name,
-    verificationId,
-    studentId,
-    professorId,
+    role = "professor",
+    facultyId,
+    employeeId,
+    department,
+    employmentProof,
+    proofOfEmployment,
   } = req.body;
   const cleanEmail = email?.toString().trim().toLowerCase();
   const cleanName = name?.toString().trim();
-  const requestedRole = role === "student" || role === "professor" ? role : "";
-  const roleVerificationId = (
-    requestedRole === "student"
-      ? studentId || verificationId
-      : professorId || verificationId
-  )
-    ?.toString()
+  const cleanFacultyId = (facultyId || employeeId || "").toString().trim();
+  const cleanDepartment = (department || "").toString().trim();
+  const cleanEmploymentProof = (employmentProof || proofOfEmployment || "")
+    .toString()
     .trim();
+  const requestedRole = role === "professor" ? "professor" : "";
 
-  if (!cleanEmail || !password || !cleanName || !role) {
+  if (!cleanEmail || !password || !cleanName) {
     return res.status(400).json({
       success: false,
       message: "Missing required fields.",
@@ -61,17 +83,7 @@ export async function signup(req, res) {
   if (!requestedRole) {
     return res.status(400).json({
       success: false,
-      message: "Please choose Student or Professor.",
-    });
-  }
-
-  if (!roleVerificationId) {
-    return res.status(400).json({
-      success: false,
-      message:
-        requestedRole === "student"
-          ? "Student ID is required."
-          : "Professor verification ID is required.",
+      message: "Public sign up is only available for professors.",
     });
   }
 
@@ -88,44 +100,25 @@ export async function signup(req, res) {
       });
     }
 
-    const [existingVerification] = await db.execute(
-      "SELECT userId FROM users WHERE role = ? AND verification_id = ? LIMIT 1",
-      [requestedRole, roleVerificationId]
-    );
-
-    if (existingVerification.length > 0) {
-      return res.status(409).json({
-        success: false,
-        message:
-          requestedRole === "student"
-            ? "This Student ID is already registered."
-            : "This Professor ID is already registered.",
-      });
-    }
-
     const hashedPassword = await bcrypt.hash(password, 10);
     const otp = createOtp();
     const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
-    const submittedStudentId =
-      requestedRole === "student" ? roleVerificationId : null;
-    const submittedProfessorId =
-      requestedRole === "professor" ? roleVerificationId : null;
 
     const [result] = await db.execute(
       `INSERT INTO users 
       (email, password, role, name, display_name, verification_id, student_id,
-       professor_id, verification_status, otp_code, otp_expires, is_verified,
-       onboarding_completed)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, 0)`,
+       professor_id, professor_faculty_id, professor_department,
+       professor_employment_proof, verification_status, otp_code, otp_expires,
+       is_verified, onboarding_completed)
+      VALUES (?, ?, 'professor', ?, ?, NULL, NULL, NULL, ?, ?, ?, 'pending', ?, ?, 0, 1)`,
       [
         cleanEmail,
         hashedPassword,
-        requestedRole,
         cleanName,
         cleanName,
-        roleVerificationId,
-        submittedStudentId,
-        submittedProfessorId,
+        cleanFacultyId || null,
+        cleanDepartment || null,
+        cleanEmploymentProof || null,
         otp,
         otpExpires,
       ]
@@ -136,8 +129,10 @@ export async function signup(req, res) {
 
       return res.json({
         success: true,
-        message: "Verification code sent to your email.",
+        message:
+          "Verification code sent to your email. Your professor account will be reviewed by the Super Admin after email verification.",
         email: cleanEmail,
+        requiresApproval: true,
       });
     } catch (emailError) {
       await db.execute(
@@ -326,6 +321,49 @@ export async function login(req, res) {
       });
     }
 
+    if (Number(user.is_archived) === 1) {
+      return res.status(403).json({
+        success: false,
+        message: "This account is archived. Please contact the Super Admin.",
+      });
+    }
+
+    if (isTemporaryAccountExpired(user)) {
+      return res.status(403).json({
+        success: false,
+        message: "This temporary account has expired. Please contact the Super Admin.",
+      });
+    }
+
+    const verificationStatus = String(
+      user.verification_status || "pending"
+    ).toLowerCase();
+
+    if (user.role === "professor" && verificationStatus !== "approved") {
+      const isDeclined = verificationStatus === "declined";
+
+      return res.status(403).json({
+        success: false,
+        message: isDeclined
+          ? "Your professor registration was declined by the Super Admin."
+          : "Your professor registration is pending Super Admin approval.",
+        verificationStatus,
+      });
+    }
+
+    const tokenMaxAgeSeconds = 7 * 24 * 60 * 60;
+    const temporaryExpiresAt =
+      Number(user.is_temporary) === 1 && user.temporary_expires_at
+        ? new Date(user.temporary_expires_at)
+        : null;
+    const temporaryRemainingSeconds =
+      temporaryExpiresAt && !Number.isNaN(temporaryExpiresAt.getTime())
+        ? Math.max(
+            1,
+            Math.floor((temporaryExpiresAt.getTime() - Date.now()) / 1000)
+          )
+        : tokenMaxAgeSeconds;
+
     const token = jwt.sign(
       {
         id: user.userId,
@@ -334,9 +372,10 @@ export async function login(req, res) {
         role: user.role,
         name: user.name,
         verificationStatus: user.verification_status,
+        verification_status: user.verification_status,
       },
       JWT_SECRET,
-      { expiresIn: "7d" }
+      { expiresIn: Math.min(tokenMaxAgeSeconds, temporaryRemainingSeconds) }
     );
 
     return res.json({
@@ -346,7 +385,7 @@ export async function login(req, res) {
       email: user.email,
       username: user.name,
       isNewUser:
-        (user.role === "student" || user.role === "professor") &&
+        user.role === "student" &&
         Number(user.onboarding_completed) !== 1,
       user: authUserPayload(user),
     });

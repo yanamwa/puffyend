@@ -105,8 +105,16 @@ function rowToCourse(row, learningModules = []) {
     join_link: row.join_link || "",
     archived: row.archived === 1 || row.archived === true,
     professorId: row.professor_id || null,
-    professorName: row.professor_name || "",
-    professorEmail: row.professor_email || "",
+    professorDisplayName:
+      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+    professor_display_name:
+      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+    professorName:
+      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+    professor_name:
+      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+    professorEmail: row.professor_email || row.database_professor_email || "",
+    professor_email: row.professor_email || row.database_professor_email || "",
     createdAt: formatDate(row.created_at),
     updatedAt: formatDate(row.updated_at || row.created_at),
   };
@@ -153,8 +161,16 @@ function rowToModule(row) {
     joinLink: row.join_link || "",
     join_link: row.join_link || "",
     archived: row.archived === 1 || row.archived === true,
-    professorName: row.professor_name || "",
-    professorEmail: row.professor_email || "",
+    professorDisplayName:
+      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+    professor_display_name:
+      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+    professorName:
+      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+    professor_name:
+      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+    professorEmail: row.professor_email || row.database_professor_email || "",
+    professor_email: row.professor_email || row.database_professor_email || "",
     createdAt: formatDate(row.created_at),
     updatedAt,
   };
@@ -405,9 +421,13 @@ async function getModuleRows(where = "", params = []) {
        c.archived,
        c.students,
        c.professor_name,
-       c.professor_email
+       c.professor_email,
+       u.display_name AS database_professor_display_name,
+       u.name AS database_professor_name,
+       u.email AS database_professor_email
      FROM learning_modules lm
      INNER JOIN courses c ON c.${idColumn} = lm.course_id
+     LEFT JOIN users u ON u.userId = c.professor_id
      ${where}
      ORDER BY lm.updated_at DESC, lm.lesson_id DESC`,
     params
@@ -427,21 +447,26 @@ export async function getCourses(req, res) {
     const where = [];
     const params = [];
 
-    if (!includeArchived) where.push("archived = 0");
+    if (!includeArchived) where.push("c.archived = 0");
     if (publicOnly) {
-      where.push("visibility = ?");
+      where.push("c.visibility = ?");
       params.push("public");
     }
     if (publishedOnly) {
-      where.push("status = ?");
+      where.push("c.status = ?");
       params.push("published");
     }
 
     const [courseRows] = await db.execute(
-      `SELECT *
-       FROM courses
+      `SELECT
+         c.*,
+         u.display_name AS database_professor_display_name,
+         u.name AS database_professor_name,
+         u.email AS database_professor_email
+       FROM courses c
+       LEFT JOIN users u ON u.userId = c.professor_id
        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-       ORDER BY updated_at DESC, ${idColumn} DESC`,
+       ORDER BY c.updated_at DESC, c.${idColumn} DESC`,
       params
     );
 
@@ -468,9 +493,18 @@ export async function getCourses(req, res) {
 export async function getCourseById(req, res) {
   try {
     const idColumn = await getCourseIdColumn();
-    const [rows] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [
-      req.params.id,
-    ]);
+    const [rows] = await db.execute(
+      `SELECT
+         c.*,
+         u.display_name AS database_professor_display_name,
+         u.name AS database_professor_name,
+         u.email AS database_professor_email
+       FROM courses c
+       LEFT JOIN users u ON u.userId = c.professor_id
+       WHERE c.${idColumn} = ?
+       LIMIT 1`,
+      [req.params.id]
+    );
 
     if (rows.length === 0) {
       return res.status(404).json({
@@ -512,11 +546,16 @@ export async function joinCourseByCode(req, res) {
   try {
     const idColumn = await getCourseIdColumn();
     const [rows] = await db.execute(
-      `SELECT *
-       FROM courses
-       WHERE archived = 0
-         AND status = 'published'
-         AND (course_code = ? OR code = ?)
+      `SELECT
+         c.*,
+         u.display_name AS database_professor_display_name,
+         u.name AS database_professor_name,
+         u.email AS database_professor_email
+       FROM courses c
+       LEFT JOIN users u ON u.userId = c.professor_id
+       WHERE c.archived = 0
+         AND c.status = 'published'
+         AND (c.course_code = ? OR c.code = ?)
        LIMIT 1`,
       [courseCode, courseCode]
     );
