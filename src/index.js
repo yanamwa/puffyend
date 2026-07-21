@@ -5,6 +5,8 @@ import dotenv from "dotenv";
 import authRoutes from "./routes/authRoutes.js";
 import courseRoutes from "./routes/courseRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
+import lessonRoutes from "./routes/lessonRoutes.js";
+
 import { initDb } from "./db.js";
 
 dotenv.config();
@@ -12,29 +14,74 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(cors({
-  origin: [
-    "http://localhost",
-    "http://127.0.0.1",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://puffybrain.fun",
-    "https://www.puffybrain.fun",
-  ],
-  credentials: true,
-}));
+const allowedOrigins = [
+  "http://localhost",
+  "http://127.0.0.1",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://puffybrain.fun",
+  "https://www.puffybrain.fun",
+];
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Allow requests without an Origin (Postman, server-to-server)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      console.error("Blocked CORS Origin:", origin);
+
+      callback(new Error(`Origin not allowed: ${origin}`));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+    ],
+  })
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Request logger
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.originalUrl}`);
+  next();
+});
+
+// Health check
+app.get("/api/health", (req, res) => {
+  res.json({
+    success: true,
+    message: "PuffyBrain API is running.",
+  });
+});
+
+// Routes
 app.use("/api", authRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api", courseRoutes);
 app.use("/api", userRoutes);
+app.use("/api/lessons", lessonRoutes);
 
-app.use((error, _req, res, next) => {
+// 404
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found.",
+  });
+});
+
+// Invalid JSON
+app.use((error, req, res, next) => {
   if (error instanceof SyntaxError && "body" in error) {
     return res.status(400).json({
       success: false,
@@ -42,19 +89,45 @@ app.use((error, _req, res, next) => {
     });
   }
 
-  return next(error);
+  next(error);
+});
+
+// General Error Handler
+app.use((error, req, res, next) => {
+  console.error("Unhandled Server Error:");
+  console.error(error);
+
+  res.status(error.statusCode || 500).json({
+    success: false,
+    message:
+      error.message ||
+      "Internal Server Error",
+  });
 });
 
 async function startServer() {
   try {
+    console.log("--------------------------------------");
+    console.log("Starting PuffyBrain Backend...");
+    console.log("--------------------------------------");
+
+    console.log("Connecting to MySQL...");
     await initDb();
+    console.log("MySQL Connected Successfully.");
 
     app.listen(port, () => {
-      console.log(`Auth server running at http://localhost:${port}`);
+      console.log("--------------------------------------");
+      console.log(`Server running on http://localhost:${port}`);
+      console.log(`Health Check: http://localhost:${port}/api/health`);
+      console.log(`Lesson Upload: http://localhost:${port}/api/lessons/process-file`);
+      console.log("--------------------------------------");
     });
+
   } catch (error) {
-    console.error("Failed to start server:", error);
-    process.exit(1);
+    console.error("--------------------------------------");
+    console.error("SERVER FAILED TO START");
+    console.error("--------------------------------------");
+    console.error(error);
   }
 }
 

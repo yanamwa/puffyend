@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
+import authenticateUser from "../middleware/authMiddleware.js";
 
 const YEAR_LEVELS = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
 const APPROVAL_STATUSES = ["pending", "approved", "declined"];
@@ -963,6 +964,78 @@ export async function getProfile(req, res) {
     return res.status(500).json({
       success: false,
       message: "Could not load profile.",
+    });
+  }
+}
+
+export async function getCurrentUser(req, res) {
+  try {
+    const authenticatedUserId = req.user?.id || req.user?.userId;
+    const authenticatedEmail = cleanEmail(req.user?.email);
+
+    let rows = [];
+
+    if (authenticatedUserId) {
+      [rows] = await db.execute(
+        `SELECT userId, email, role, name, display_name, year_level,
+                section_name, onboarding_completed, is_verified,
+                verification_id, student_id, professor_id,
+                professor_faculty_id, professor_department,
+                professor_employment_proof, verification_status,
+                is_archived, archived_at, must_change_password,
+                is_temporary, temporary_expires_at, created_at
+         FROM users
+         WHERE userId = ?
+         LIMIT 1`,
+        [authenticatedUserId]
+      );
+    } else if (authenticatedEmail) {
+      [rows] = await db.execute(
+        `SELECT userId, email, role, name, display_name, year_level,
+                section_name, onboarding_completed, is_verified,
+                verification_id, student_id, professor_id,
+                professor_faculty_id, professor_department,
+                professor_employment_proof, verification_status,
+                is_archived, archived_at, must_change_password,
+                is_temporary, temporary_expires_at, created_at
+         FROM users
+         WHERE email = ?
+         LIMIT 1`,
+        [authenticatedEmail]
+      );
+    } else {
+      return res.status(401).json({
+        success: false,
+        message: "You are not authenticated.",
+      });
+    }
+
+    const user = rows[0];
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
+    if (Number(user.is_archived) === 1) {
+      return res.status(403).json({
+        success: false,
+        message: "This account has been archived.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      user: rowToUser(user),
+    });
+  } catch (error) {
+    console.error("Get current user error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not load the logged-in user.",
     });
   }
 }
