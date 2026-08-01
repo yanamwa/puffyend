@@ -4,16 +4,43 @@ import bcrypt from "bcrypt";
 
 dotenv.config();
 
+const dbConfig = {
+  host: process.env.DB_HOST || "127.0.0.1",
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASSWORD || "",
+  database: process.env.DB_NAME || "puffybrain",
+};
+
 const pool = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
+  host: dbConfig.host,
+  user: dbConfig.user,
+  password: dbConfig.password,
+  database: dbConfig.database,
   waitForConnections: true,
   connectionLimit: 10,
 });
 
 export const db = pool;
+
+async function ensureDatabaseExists() {
+  const bootstrapPool = mysql.createPool({
+    host: dbConfig.host,
+    user: dbConfig.user,
+    password: dbConfig.password,
+    waitForConnections: true,
+    connectionLimit: 1,
+  });
+
+  try {
+    await bootstrapPool.execute(
+      `CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\`
+       CHARACTER SET utf8mb4
+       COLLATE utf8mb4_general_ci`
+    );
+  } finally {
+    await bootstrapPool.end();
+  }
+}
 
 async function ensureColumn(columnName, columnDefinition) {
   const [columns] = await db.execute(
@@ -226,45 +253,77 @@ async function initQuizModeTables() {
   await ensureTableColumn("quiz_modes", "image", "image VARCHAR(500) NULL");
   await ensureTableColumn("quiz_modes", "route", "route VARCHAR(500) NOT NULL");
 
-  const [rows] = await db.execute("SELECT COUNT(*) AS count FROM quiz_modes");
-  if (Number(rows[0]?.count || 0) > 0) return;
-
-  await db.execute(
-    `INSERT INTO quiz_modes (mode_name, title, description, image, route)
-     VALUES
-       (?, ?, ?, ?, ?),
-       (?, ?, ?, ?, ?),
-       (?, ?, ?, ?, ?),
-       (?, ?, ?, ?, ?),
-       (?, ?, ?, ?, ?)`,
+  const defaultQuizModes = [
     [
       "Flashcards",
       "Flashcards",
       "Review facts and test your memory in a fun and quick way. Perfect for learning on the go!",
       "/images/flashcard.png",
       "/flashcards-tutorial",
+    ],
+    [
       "Q & A",
       "Q & A",
       "Challenge your brain with interesting questions and discover something new every time you play!",
       "/images/qna.png",
       "/QandA-tutorial",
+    ],
+    [
       "Multiple Choice",
       "Multiple Choice",
       "Only one answer is correct. Trust your instincts, think carefully, and aim for that perfect score!",
       "/images/multiplechoice.png",
       "/multipleChoice-tutorial",
+    ],
+    [
       "Matching Type",
       "Matching Type",
       "Pair the terms, ideas, or clues correctly. It's a fun way to test your memory and logic!",
       "/images/matching.png",
       "/Matching-tutorial",
+    ],
+    [
       "Timed Quiz",
       "Timed Quiz",
       "Answer questions within a time limit and build speed while reviewing the lesson.",
       "/images/timedquiz.png",
       "/timedquiz-tutorial",
-    ]
+    ],
+    [
+      "Survival Mode",
+      "Survival Mode",
+      "Practice with three lives. Each missed answer costs a life, so students stay focused while reviewing.",
+      "/images/needpractice.png",
+      "/survival-tutorial",
+    ],
+  ];
+
+  const [existingModes] = await db.execute(
+    "SELECT mode_name, title, route FROM quiz_modes"
   );
+  const existingKeys = new Set(
+    existingModes.flatMap((mode) => [
+      String(mode.mode_name || "").toLowerCase(),
+      String(mode.title || "").toLowerCase(),
+      String(mode.route || "").toLowerCase(),
+    ])
+  );
+
+  for (const mode of defaultQuizModes) {
+    const [modeName, title, description, image, route] = mode;
+    const hasMode =
+      existingKeys.has(modeName.toLowerCase()) ||
+      existingKeys.has(title.toLowerCase()) ||
+      existingKeys.has(route.toLowerCase());
+
+    if (hasMode) continue;
+
+    await db.execute(
+      `INSERT INTO quiz_modes (mode_name, title, description, image, route)
+       VALUES (?, ?, ?, ?, ?)`,
+      [modeName, title, description, image, route]
+    );
+  }
 }
 
 async function initMonitoringTables() {
@@ -431,6 +490,8 @@ async function ensureSuperAdminUser() {
 }
 
 export async function initDb() {
+  await ensureDatabaseExists();
+
   await db.execute(`
     CREATE TABLE IF NOT EXISTS users (
       userId INT AUTO_INCREMENT PRIMARY KEY,
@@ -456,6 +517,8 @@ export async function initDb() {
       temporary_expires_at DATETIME NULL,
       otp_code VARCHAR(10) NULL,
       otp_expires DATETIME NULL,
+      password_reset_token VARCHAR(64) NULL,
+      password_reset_expires DATETIME NULL,
       is_verified TINYINT(1) NOT NULL DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
@@ -463,6 +526,14 @@ export async function initDb() {
 
   await ensureColumn("otp_code", "otp_code VARCHAR(10) NULL");
   await ensureColumn("otp_expires", "otp_expires DATETIME NULL");
+  await ensureColumn(
+    "password_reset_token",
+    "password_reset_token VARCHAR(64) NULL"
+  );
+  await ensureColumn(
+    "password_reset_expires",
+    "password_reset_expires DATETIME NULL"
+  );
   await ensureColumn(
     "is_verified",
     "is_verified TINYINT(1) NOT NULL DEFAULT 0"

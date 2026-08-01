@@ -1,10 +1,12 @@
 import express from "express";
+import authenticateUser from "../middleware/authMiddleware.js";
 import {
   changeUserPassword,
   completeOnboarding,
   createAdminAccount,
   createProfessorAccount,
   createStudentAccount,
+  getCurrentUser,
   getProfile,
   getUsers,
   getUserById,
@@ -23,6 +25,7 @@ router.get("/users", getUsers);
 router.post("/users/admin", createAdminAccount);
 router.post("/users/professor", createProfessorAccount);
 router.post("/users/student", createStudentAccount);
+router.get("/users/me", authenticateUser, getCurrentUser);
 router.get("/users/:id", getUserById);
 router.patch("/users/:id/registration", updateProfessorRegistration);
 router.patch("/users/:id/archive", updateAccountArchive);

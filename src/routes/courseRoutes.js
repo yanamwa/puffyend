@@ -5,10 +5,13 @@ import {
   deleteCourse,
   deleteLearningModule,
   getCourseById,
+  getEnrolledCourses,
   getCourses,
   getLearningModuleById,
   getLearningModules,
   handleLegacyLearningModule,
+  enrollCourse,
+  joinCourseByCode,
   updateCourse,
   updateLearningModule,
 } from "../controllers/courseController.js";
@@ -74,6 +77,10 @@ function parseLegacyModeBody(req, _res, next) {
 
 router.get("/courses", getCourses);
 router.post("/courses", createCourse);
+router.get("/courses/enrolled", getEnrolledCourses);
+router.post("/courses/enroll", enrollCourse);
+router.get("/courses/join", joinCourseByCode);
+router.post("/courses/join", joinCourseByCode);
 router.get("/courses/:id", getCourseById);
 router.put("/courses/:id", updateCourse);
 router.delete("/courses/:id", deleteCourse);

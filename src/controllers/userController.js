@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import authenticateUser from "../middleware/authMiddleware.js";
+import { sendStudentTemporaryPasswordEmail } from "../utils/mailer.js";
 
 const YEAR_LEVELS = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
 const APPROVAL_STATUSES = ["pending", "approved", "declined"];
@@ -443,9 +444,21 @@ export async function createStudentAccount(req, res) {
       [result.insertId]
     );
 
+    try {
+      await sendStudentTemporaryPasswordEmail(email, temporaryPassword);
+    } catch (emailError) {
+      await db.execute("DELETE FROM users WHERE userId = ?", [result.insertId]);
+
+      return res.status(500).json({
+        success: false,
+        message: "Email failed: " + emailError.message,
+      });
+    }
+
     return res.status(201).json({
       success: true,
-      message: "Student account created.",
+      message: "Student account created and credentials emailed.",
+      credentialsEmailed: true,
       temporaryPassword,
       user: rowToUser(rows[0]),
     });
@@ -934,7 +947,7 @@ export async function changeUserPassword(req, res) {
 
     return res.json({
       success: true,
-      message: "Password updated.",
+      message: "Successfully changed password.",
     });
   } catch (error) {
     console.error("Change password error:", error);

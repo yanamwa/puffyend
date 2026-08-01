@@ -27,6 +27,84 @@ const allowedExtensions = new Set([
 const maximumInlinePdfSize =
   15 * 1024 * 1024;
 
+const minimumReadableCharacterCount = 30;
+
+function cleanExtractedText(value) {
+  return String(value || "")
+    .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, " ")
+    .replace(/\f/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function hasReadableLessonText(value) {
+  const text = cleanExtractedText(value);
+  const letters = text.replace(/[^A-Za-z]/g, "");
+
+  return letters.length >= minimumReadableCharacterCount;
+}
+
+function createFallbackModuleTitle(fileName) {
+  const baseName = path.basename(
+    String(fileName || "Uploaded lesson"),
+    path.extname(String(fileName || ""))
+  );
+
+  return baseName
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || "Uploaded lesson";
+}
+
+function summarizeText(value, maxLength = 220) {
+  const text = cleanExtractedText(value).replace(/\s+/g, " ");
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength).trim()}...`;
+}
+
+function titleFromChunk(chunk, index) {
+  const firstLine = String(chunk || "")
+    .split(/\n|[.!?]\s/)
+    .map((part) => part.trim())
+    .find(Boolean);
+
+  const title = String(firstLine || "")
+    .replace(/[^A-Za-z0-9 ():/,.-]/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, 80)
+    .trim();
+
+  return title || `Lesson Page ${index + 1}`;
+}
+
+function createFallbackLessonPages(textContent) {
+  const text = cleanExtractedText(textContent);
+
+  if (!hasReadableLessonText(text)) {
+    return [];
+  }
+
+  const words = text.split(/\s+/).filter(Boolean);
+  const pages = [];
+  const wordsPerPage = 140;
+
+  for (let index = 0; index < words.length; index += wordsPerPage) {
+    const chunk = words.slice(index, index + wordsPerPage).join(" ");
+
+    pages.push({
+      title: titleFromChunk(chunk, pages.length),
+      content: chunk,
+    });
+  }
+
+  return pages;
+}
+
 /*
  * POST /api/lessons/process-file
  *
@@ -80,9 +158,9 @@ export async function processLessonFile(
         extension
       );
 
-    textContent = String(
-      textContent || ""
-    ).trim();
+    textContent = cleanExtractedText(
+      textContent
+    );
 
     let pdfInlineData = null;
 
@@ -91,7 +169,11 @@ export async function processLessonFile(
      * no content, send the original PDF
      * directly to Gemini.
      */
-    if (!textContent) {
+    if (
+      !hasReadableLessonText(
+        textContent
+      )
+    ) {
       if (extension !== "pdf") {
         return res.status(400).json({
           success: false,
@@ -136,8 +218,10 @@ export async function processLessonFile(
           "base64"
         );
 
+      textContent = "";
+
       console.log(
-        "No searchable PDF text found. Sending PDF directly to Gemini."
+        "No readable PDF text found. Sending PDF directly to Gemini."
       );
     }
 
@@ -156,33 +240,74 @@ export async function processLessonFile(
         pdfInlineData,
       });
 
-    const lessonPages =
+    let lessonPages =
       normalizeLessonPages(
         parsed.lesson_pages
       );
+
+    if (
+      lessonPages.length === 0 &&
+      hasReadableLessonText(
+        textContent
+      )
+    ) {
+      lessonPages =
+        createFallbackLessonPages(
+          textContent
+        );
+    }
+
+    if (lessonPages.length === 0) {
+      return res.status(422).json({
+        success: false,
+        message:
+          extension === "pdf"
+            ? "The PDF uploaded, but no readable lesson text could be found. If it is scanned or image-only, please upload a searchable PDF, DOCX, or TXT file."
+            : "The uploaded file was processed, but no lesson pages could be created from its text.",
+      });
+    }
+
+    const moduleTitle =
+      normalizeTextValue(
+        parsed.module_title
+      ) ||
+      createFallbackModuleTitle(
+        req.file.originalname
+      );
+
+    const description =
+      normalizeTextValue(
+        parsed.description
+      ) ||
+      summarizeText(
+        textContent ||
+          lessonPages
+            .map((page) => page.content)
+            .join(" ")
+      );
+
+    const learningObjectives =
+      normalizeTextValue(
+        parsed.learning_objectives
+      ) ||
+      `- Understand the key ideas in ${moduleTitle}.`;
 
     return res.status(200).json({
       success: true,
 
       module_title:
-        normalizeTextValue(
-          parsed.module_title
-        ),
+        moduleTitle,
 
       subject:
         normalizeTextValue(
           parsed.subject
-        ),
+        ) || moduleTitle,
 
       description:
-        normalizeTextValue(
-          parsed.description
-        ),
+        description,
 
       learning_objectives:
-        normalizeTextValue(
-          parsed.learning_objectives
-        ),
+        learningObjectives,
 
       lesson_pages:
         lessonPages,

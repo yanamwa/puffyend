@@ -1,12 +1,88 @@
 import bcrypt from "bcrypt";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import jwt from "jsonwebtoken";
 import { db } from "../db.js";
-import { sendOtpEmail } from "../utils/mailer.js";
+import { sendOtpEmail, sendPasswordResetEmail } from "../utils/mailer.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "puffybrain-secret";
+const OTP_TTL_SECONDS = 5 * 60;
+const RESET_PASSWORD_TTL_SECONDS = 60 * 60;
+const RESERVED_SUPER_ADMIN_EMAIL = cleanEmailValue(
+  process.env.SUPER_ADMIN_EMAIL || "superadmin@puffybrain.local"
+);
 
 function createOtp() {
   return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
+function cleanEmailValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function hashPasswordResetToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function createPasswordResetToken() {
+  const token = crypto.randomBytes(32).toString("hex");
+
+  return {
+    token,
+    tokenHash: hashPasswordResetToken(token),
+  };
+}
+
+function isStrongPassword(password) {
+  return (
+    password.length >= 12 &&
+    /[A-Z]/.test(password) &&
+    /[a-z]/.test(password) &&
+    /[0-9]/.test(password) &&
+    /[^A-Za-z0-9]/.test(password)
+  );
+}
+
+function getPasswordResetBaseUrl(req) {
+  const configuredBaseUrl =
+    process.env.FRONTEND_URL ||
+    process.env.APP_URL ||
+    process.env.PUBLIC_APP_URL ||
+    req.get("origin") ||
+    "http://localhost:5173";
+
+  return String(configuredBaseUrl).replace(/\/+$/, "");
+}
+
+async function getOtpTiming(userId) {
+  const [rows] = await db.execute(
+    `SELECT GREATEST(TIMESTAMPDIFF(SECOND, NOW(), otp_expires), 0) AS otp_seconds_remaining
+     FROM users
+     WHERE userId = ?
+     LIMIT 1`,
+    [userId]
+  );
+
+  const seconds = Number(rows[0]?.otp_seconds_remaining);
+
+  return Number.isFinite(seconds) ? seconds : OTP_TTL_SECONDS;
+}
+
+function getUploadedProofUrl(file) {
+  if (!file?.filename) return "";
+  return `/api/uploads/professor-ids/${file.filename}`;
+}
+
+async function removeUploadedProof(file) {
+  if (!file?.path) return;
+
+  try {
+    await fs.unlink(file.path);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.error("Could not delete uploaded proof:", error);
+    }
+  }
 }
 
 function isTemporaryAccountExpired(user) {
@@ -35,6 +111,8 @@ function authUserPayload(user) {
     year_level: user.year_level || "",
     sectionName: user.section_name || "",
     section_name: user.section_name || "",
+    professorDepartment: user.professor_department || "",
+    professor_department: user.professor_department || "",
     onboardingCompleted: Number(user.onboarding_completed) === 1,
     onboarding_completed: Number(user.onboarding_completed) === 1 ? 1 : 0,
     verificationStatus: user.verification_status,
@@ -63,27 +141,63 @@ export async function signup(req, res) {
     department,
     employmentProof,
     proofOfEmployment,
-  } = req.body;
-  const cleanEmail = email?.toString().trim().toLowerCase();
+  } = req.body || {};
+  const uploadedProofUrl = getUploadedProofUrl(req.file);
+  const cleanEmail = cleanEmailValue(email);
   const cleanName = name?.toString().trim();
   const cleanFacultyId = (facultyId || employeeId || "").toString().trim();
   const cleanDepartment = (department || "").toString().trim();
-  const cleanEmploymentProof = (employmentProof || proofOfEmployment || "")
+  const cleanEmploymentProof = (
+    uploadedProofUrl ||
+    employmentProof ||
+    proofOfEmployment ||
+    ""
+  )
     .toString()
     .trim();
   const requestedRole = role === "professor" ? "professor" : "";
 
   if (!cleanEmail || !password || !cleanName) {
+    await removeUploadedProof(req.file);
+
     return res.status(400).json({
       success: false,
       message: "Missing required fields.",
     });
   }
 
+  if (cleanEmail === RESERVED_SUPER_ADMIN_EMAIL) {
+    await removeUploadedProof(req.file);
+
+    return res.status(409).json({
+      success: false,
+      message:
+        "This email is reserved for the Super Admin account. Please use a different professor email.",
+    });
+  }
+
   if (!requestedRole) {
+    await removeUploadedProof(req.file);
+
     return res.status(400).json({
       success: false,
       message: "Public sign up is only available for professors.",
+    });
+  }
+
+  if (!cleanDepartment) {
+    await removeUploadedProof(req.file);
+
+    return res.status(400).json({
+      success: false,
+      message: "Department is required.",
+    });
+  }
+
+  if (!cleanEmploymentProof) {
+    return res.status(400).json({
+      success: false,
+      message: "Faculty or employee ID photo is required.",
     });
   }
 
@@ -94,6 +208,8 @@ export async function signup(req, res) {
     );
 
     if (existing.length > 0) {
+      await removeUploadedProof(req.file);
+
       return res.status(409).json({
         success: false,
         message: "Email is already registered.",
@@ -102,15 +218,16 @@ export async function signup(req, res) {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const otp = createOtp();
-    const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
-
     const [result] = await db.execute(
       `INSERT INTO users 
       (email, password, role, name, display_name, verification_id, student_id,
        professor_id, professor_faculty_id, professor_department,
        professor_employment_proof, verification_status, otp_code, otp_expires,
        is_verified, onboarding_completed)
-      VALUES (?, ?, 'professor', ?, ?, NULL, NULL, NULL, ?, ?, ?, 'pending', ?, ?, 0, 1)`,
+      VALUES (
+        ?, ?, 'professor', ?, ?, NULL, NULL, NULL, ?, ?, ?,
+        'pending', ?, DATE_ADD(NOW(), INTERVAL ? SECOND), 0, 1
+      )`,
       [
         cleanEmail,
         hashedPassword,
@@ -120,12 +237,13 @@ export async function signup(req, res) {
         cleanDepartment || null,
         cleanEmploymentProof || null,
         otp,
-        otpExpires,
+        OTP_TTL_SECONDS,
       ]
     );
 
     try {
       await sendOtpEmail(cleanEmail, cleanName, otp);
+      const otpSecondsRemaining = await getOtpTiming(result.insertId);
 
       return res.json({
         success: true,
@@ -133,12 +251,14 @@ export async function signup(req, res) {
           "Verification code sent to your email. Your professor account will be reviewed by the Super Admin after email verification.",
         email: cleanEmail,
         requiresApproval: true,
+        otpSecondsRemaining,
       });
     } catch (emailError) {
       await db.execute(
         "DELETE FROM users WHERE userId = ? AND is_verified = 0",
         [result.insertId]
       );
+      await removeUploadedProof(req.file);
 
       return res.status(500).json({
         success: false,
@@ -146,6 +266,7 @@ export async function signup(req, res) {
       });
     }
   } catch (error) {
+    await removeUploadedProof(req.file);
     console.error("Signup error:", error);
 
     return res.status(500).json({
@@ -156,7 +277,8 @@ export async function signup(req, res) {
 }
 
 export async function verifyEmail(req, res) {
-  const { email, otp } = req.body;
+  const { otp } = req.body;
+  const email = cleanEmailValue(req.body?.email);
 
   if (!email || !otp) {
     return res.status(400).json({
@@ -167,7 +289,12 @@ export async function verifyEmail(req, res) {
 
   try {
     const [rows] = await db.execute(
-      "SELECT * FROM users WHERE email = ? LIMIT 1",
+      `SELECT users.*,
+              TIMESTAMPDIFF(SECOND, NOW(), otp_expires) AS otp_seconds_remaining
+       FROM users
+       WHERE email = ?
+         AND role = 'professor'
+       LIMIT 1`,
       [email]
     );
 
@@ -194,10 +321,11 @@ export async function verifyEmail(req, res) {
       });
     }
 
-    if (new Date(user.otp_expires) < new Date()) {
+    if (!user.otp_expires || Number(user.otp_seconds_remaining) <= 0) {
       return res.status(400).json({
         success: false,
-        message: "OTP has expired.",
+        message: "Verification code expired",
+        otpSecondsRemaining: 0,
       });
     }
 
@@ -223,7 +351,7 @@ export async function verifyEmail(req, res) {
 }
 
 export async function resendOtp(req, res) {
-  const { email } = req.body;
+  const email = cleanEmailValue(req.body?.email);
 
   if (!email) {
     return res.status(400).json({
@@ -234,7 +362,7 @@ export async function resendOtp(req, res) {
 
   try {
     const [rows] = await db.execute(
-      "SELECT * FROM users WHERE email = ? LIMIT 1",
+      "SELECT * FROM users WHERE email = ? AND role = 'professor' LIMIT 1",
       [email]
     );
 
@@ -255,18 +383,21 @@ export async function resendOtp(req, res) {
     }
 
     const otp = createOtp();
-    const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
-
     await db.execute(
-      "UPDATE users SET otp_code = ?, otp_expires = ? WHERE userId = ?",
-      [otp, otpExpires, user.userId]
+      `UPDATE users
+       SET otp_code = ?,
+           otp_expires = DATE_ADD(NOW(), INTERVAL ? SECOND)
+       WHERE userId = ?`,
+      [otp, OTP_TTL_SECONDS, user.userId]
     );
 
     await sendOtpEmail(user.email, user.name, otp);
+    const otpSecondsRemaining = await getOtpTiming(user.userId);
 
     return res.json({
       success: true,
       message: "New verification code sent.",
+      otpSecondsRemaining,
     });
   } catch (error) {
     console.error("Resend OTP error:", error);
@@ -278,6 +409,130 @@ export async function resendOtp(req, res) {
   }
 }
 
+export async function forgotPassword(req, res) {
+  const email = cleanEmailValue(req.body?.email);
+  const genericResponse = {
+    success: true,
+    message:
+      "If an account exists for that email, a password reset link has been sent.",
+  };
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: "Email is required.",
+    });
+  }
+
+  try {
+    const [rows] = await db.execute(
+      `SELECT userId, email, name, is_archived
+       FROM users
+       WHERE email = ?
+       LIMIT 1`,
+      [email]
+    );
+
+    const user = rows[0];
+
+    if (!user || Number(user.is_archived) === 1) {
+      return res.json(genericResponse);
+    }
+
+    const { token, tokenHash } = createPasswordResetToken();
+
+    await db.execute(
+      `UPDATE users
+       SET password_reset_token = ?,
+           password_reset_expires = DATE_ADD(NOW(), INTERVAL ? SECOND)
+       WHERE userId = ?`,
+      [tokenHash, RESET_PASSWORD_TTL_SECONDS, user.userId]
+    );
+
+    const resetLink = `${getPasswordResetBaseUrl(
+      req
+    )}/change-password?token=${encodeURIComponent(token)}`;
+
+    await sendPasswordResetEmail(user.email, user.name || "there", resetLink);
+
+    return res.json(genericResponse);
+  } catch (error) {
+    console.error("Forgot password error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to send password reset email.",
+    });
+  }
+}
+
+export async function resetPassword(req, res) {
+  const token = String(req.body?.token || "").trim();
+  const password = String(req.body?.password || req.body?.newPassword || "");
+
+  if (!token || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "Reset token and new password are required.",
+    });
+  }
+
+  if (!isStrongPassword(password)) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "Password must contain 12 characters, uppercase, lowercase, number, and symbol.",
+    });
+  }
+
+  try {
+    const tokenHash = hashPasswordResetToken(token);
+    const [rows] = await db.execute(
+      `SELECT userId
+       FROM users
+       WHERE password_reset_token = ?
+         AND password_reset_expires IS NOT NULL
+         AND password_reset_expires > NOW()
+         AND is_archived = 0
+       LIMIT 1`,
+      [tokenHash]
+    );
+
+    const user = rows[0];
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "This password reset link is invalid or has expired.",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    await db.execute(
+      `UPDATE users
+       SET password = ?,
+           password_reset_token = NULL,
+           password_reset_expires = NULL,
+           must_change_password = 0
+       WHERE userId = ?`,
+      [hashedPassword, user.userId]
+    );
+
+    return res.json({
+      success: true,
+      message: "Your password has been updated.",
+    });
+  } catch (error) {
+    console.error("Reset password error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update password.",
+    });
+  }
+}
+
 export async function login(req, res) {
   const { email, username, password } = req.body;
   const loginEmail = (email || username || "").trim().toLowerCase();
@@ -285,7 +540,8 @@ export async function login(req, res) {
   if (!loginEmail || !password) {
     return res.status(400).json({
       success: false,
-      message: "Missing required fields.",
+      code: "MISSING_LOGIN_FIELDS",
+      message: "Please enter email and password.",
     });
   }
 
@@ -298,9 +554,10 @@ export async function login(req, res) {
     const user = rows[0];
 
     if (!user) {
-      return res.status(401).json({
+      return res.status(404).json({
         success: false,
-        message: "Invalid credentials.",
+        code: "EMAIL_NOT_FOUND",
+        message: "Email not found. Please check your email or sign up.",
       });
     }
 
@@ -309,13 +566,15 @@ export async function login(req, res) {
     if (!validPassword) {
       return res.status(401).json({
         success: false,
-        message: "Invalid credentials.",
+        code: "INCORRECT_PASSWORD",
+        message: "Incorrect password. Please try again.",
       });
     }
 
     if (user.is_verified !== 1) {
       return res.status(403).json({
         success: false,
+        code: "EMAIL_NOT_VERIFIED",
         message: "Please verify your email first.",
         email: user.email,
       });
@@ -324,6 +583,7 @@ export async function login(req, res) {
     if (Number(user.is_archived) === 1) {
       return res.status(403).json({
         success: false,
+        code: "ACCOUNT_ARCHIVED",
         message: "This account is archived. Please contact the Super Admin.",
       });
     }
@@ -331,6 +591,7 @@ export async function login(req, res) {
     if (isTemporaryAccountExpired(user)) {
       return res.status(403).json({
         success: false,
+        code: "TEMPORARY_ACCOUNT_EXPIRED",
         message: "This temporary account has expired. Please contact the Super Admin.",
       });
     }
@@ -344,6 +605,9 @@ export async function login(req, res) {
 
       return res.status(403).json({
         success: false,
+        code: isDeclined
+          ? "PROFESSOR_REGISTRATION_DECLINED"
+          : "PROFESSOR_REGISTRATION_PENDING",
         message: isDeclined
           ? "Your professor registration was declined by the Super Admin."
           : "Your professor registration is pending Super Admin approval.",
