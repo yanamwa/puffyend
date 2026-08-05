@@ -29,7 +29,6 @@ const allowedOrigins = [
 app.use(
   cors({
     origin(origin, callback) {
-      // Allow requests without an Origin (Postman, server-to-server)
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
         return;
@@ -37,10 +36,22 @@ app.use(
 
       console.error("Blocked CORS Origin:", origin);
 
-      callback(new Error(`Origin not allowed: ${origin}`));
+      callback(
+        new Error(`Origin not allowed: ${origin}`)
+      );
     },
+
     credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+
+    methods: [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+    ],
+
     allowedHeaders: [
       "Content-Type",
       "Authorization",
@@ -50,12 +61,45 @@ app.use(
 );
 
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use("/api/uploads", express.static(path.resolve("src/uploads")));
+app.use(
+  express.urlencoded({
+    extended: true,
+  })
+);
+
+/*
+  Profile image uploads are saved here:
+
+  C:\xampp\htdocs\server\uploads\profile-images
+
+  and are available through:
+
+  http://localhost:5000/uploads/profile-images/filename.jpg
+*/
+app.use(
+  "/uploads",
+  express.static(
+    path.join(process.cwd(), "uploads")
+  )
+);
+
+/*
+  Keep this because your lesson upload files
+  currently use src/uploads.
+*/
+app.use(
+  "/api/uploads",
+  express.static(
+    path.resolve("src/uploads")
+  )
+);
 
 // Request logger
 app.use((req, res, next) => {
-  console.log(`${req.method} ${req.originalUrl}`);
+  console.log(
+    `${req.method} ${req.originalUrl}`
+  );
+
   next();
 });
 
@@ -84,7 +128,10 @@ app.use((req, res) => {
 
 // Invalid JSON
 app.use((error, req, res, next) => {
-  if (error instanceof SyntaxError && "body" in error) {
+  if (
+    error instanceof SyntaxError &&
+    "body" in error
+  ) {
     return res.status(400).json({
       success: false,
       message: "Invalid JSON request body.",
@@ -94,12 +141,14 @@ app.use((error, req, res, next) => {
   next(error);
 });
 
-// General Error Handler
+// General error handler
 app.use((error, req, res, next) => {
   console.error("Unhandled Server Error:");
   console.error(error);
 
-  res.status(error.statusCode || 500).json({
+  res.status(
+    error.statusCode || 500
+  ).json({
     success: false,
     message:
       error.message ||
@@ -115,16 +164,24 @@ async function startServer() {
 
     console.log("Connecting to MySQL...");
     await initDb();
-    console.log("MySQL Connected Successfully.");
+
+    console.log(
+      "MySQL Connected Successfully."
+    );
 
     app.listen(port, () => {
       console.log("--------------------------------------");
-      console.log(`Server running on http://localhost:${port}`);
-      console.log(`Health Check: http://localhost:${port}/api/health`);
-      console.log(`Lesson Upload: http://localhost:${port}/api/lessons/process-file`);
+      console.log(
+        `Server running on http://localhost:${port}`
+      );
+      console.log(
+        `Health Check: http://localhost:${port}/api/health`
+      );
+      console.log(
+        `Lesson Upload: http://localhost:${port}/api/lessons/process-file`
+      );
       console.log("--------------------------------------");
     });
-
   } catch (error) {
     console.error("--------------------------------------");
     console.error("SERVER FAILED TO START");

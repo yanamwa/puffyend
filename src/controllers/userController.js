@@ -196,8 +196,12 @@ function rowToUser(user) {
     email: user.email,
     role: user.role,
     name: user.name,
-    displayName,
-    display_name: displayName,
+
+      profileImage: user.profile_image || "",
+      profile_image: user.profile_image || "",
+
+      displayName,
+      display_name: displayName,
     yearLevel: user.year_level || "",
     year_level: user.year_level || "",
     sectionName: user.section_name || "",
@@ -240,7 +244,8 @@ function rowToUser(user) {
 
 async function getUserByEmail(email) {
   const [rows] = await db.execute(
-    `SELECT userId, email, role, name, display_name, year_level, section_name,
+    `SELECT userId, email, role, name, display_name, profile_image,
+       year_level, section_name,
             onboarding_completed, is_verified, verification_id, student_id,
             professor_id, professor_faculty_id, professor_department,
             professor_employment_proof, verification_status, is_archived,
@@ -889,14 +894,28 @@ export async function permanentlyRemoveArchivedAccount(req, res) {
 }
 
 export async function changeUserPassword(req, res) {
-  const email = cleanEmail(req.body.email);
-  const currentPassword = cleanText(req.body.currentPassword || req.body.current_password);
-  const newPassword = cleanText(req.body.newPassword || req.body.new_password);
+  const currentPassword = String(
+    req.body.currentPassword || req.body.current_password || ""
+  );
 
-  if (!email || !currentPassword || !newPassword) {
+  const newPassword = String(
+    req.body.newPassword || req.body.new_password || ""
+  );
+
+  const authenticatedUserId = req.user?.id || req.user?.userId;
+  const authenticatedEmail = cleanEmail(req.user?.email);
+
+  if (!authenticatedUserId && !authenticatedEmail) {
+    return res.status(401).json({
+      success: false,
+      message: "You are not authenticated.",
+    });
+  }
+
+  if (!currentPassword || !newPassword) {
     return res.status(400).json({
       success: false,
-      message: "Email, current password, and new password are required.",
+      message: "Current password and new password are required.",
     });
   }
 
@@ -914,40 +933,89 @@ export async function changeUserPassword(req, res) {
     });
   }
 
+  if (currentPassword === newPassword) {
+    return res.status(400).json({
+      success: false,
+      message: "Your new password must be different from your current password.",
+    });
+  }
+
   try {
-    const [rows] = await db.execute(
-      "SELECT userId, password FROM users WHERE email = ? LIMIT 1",
-      [email]
-    );
+    let rows = [];
+
+    if (authenticatedUserId) {
+      [rows] = await db.execute(
+        `SELECT userId, email, password, is_archived
+         FROM users
+         WHERE userId = ?
+         LIMIT 1`,
+        [authenticatedUserId]
+      );
+    } else {
+      [rows] = await db.execute(
+        `SELECT userId, email, password, is_archived
+         FROM users
+         WHERE email = ?
+         LIMIT 1`,
+        [authenticatedEmail]
+      );
+    }
 
     const user = rows[0];
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "User not found.",
+        message: "User account was not found.",
       });
     }
 
-    const validPassword = await bcrypt.compare(currentPassword, user.password);
+    if (Number(user.is_archived) === 1) {
+      return res.status(403).json({
+        success: false,
+        message: "This account has been archived.",
+      });
+    }
 
-    if (!validPassword) {
+    const currentPasswordIsValid = await bcrypt.compare(
+      currentPassword,
+      user.password
+    );
+
+    if (!currentPasswordIsValid) {
       return res.status(401).json({
         success: false,
         message: "Current password is incorrect.",
       });
     }
 
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const newPasswordMatchesOldPassword = await bcrypt.compare(
+      newPassword,
+      user.password
+    );
+
+    if (newPasswordMatchesOldPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Your new password must be different from your current password.",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
 
     await db.execute(
-      "UPDATE users SET password = ?, must_change_password = 0 WHERE userId = ?",
+      `UPDATE users
+       SET password = ?,
+           must_change_password = 0,
+           password_reset_token = NULL,
+           password_reset_expires = NULL
+       WHERE userId = ?`,
       [hashedPassword, user.userId]
     );
 
-    return res.json({
+    return res.status(200).json({
       success: true,
-      message: "Successfully changed password.",
+      message: "Password changed successfully.",
     });
   } catch (error) {
     console.error("Change password error:", error);
@@ -990,7 +1058,8 @@ export async function getCurrentUser(req, res) {
 
     if (authenticatedUserId) {
       [rows] = await db.execute(
-        `SELECT userId, email, role, name, display_name, year_level,
+        `SELECT userId, email, role, name, display_name, profile_image,
+       year_level,
                 section_name, onboarding_completed, is_verified,
                 verification_id, student_id, professor_id,
                 professor_faculty_id, professor_department,
@@ -1250,6 +1319,172 @@ export async function completeOnboarding(req, res) {
     return res.status(500).json({
       success: false,
       message: "Could not complete onboarding.",
+    });
+  }
+}
+export async function updateProfileImage(req, res) {
+  try {
+    const authenticatedUserId =
+      req.user?.id ||
+      req.user?.userId ||
+      req.user?.user_id;
+
+    const authenticatedEmail =
+      cleanEmail(req.user?.email);
+
+    if (
+      !authenticatedUserId &&
+      !authenticatedEmail
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "You are not authenticated.",
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Please select a profile picture.",
+      });
+    }
+
+    const profileImage =
+      `/uploads/profile-images/${req.file.filename}`;
+
+    let result;
+
+    if (authenticatedUserId) {
+      [result] = await db.execute(
+        `
+          UPDATE users
+          SET profile_image = ?
+          WHERE userId = ?
+        `,
+        [
+          profileImage,
+          authenticatedUserId,
+        ]
+      );
+    } else {
+      [result] = await db.execute(
+        `
+          UPDATE users
+          SET profile_image = ?
+          WHERE email = ?
+        `,
+        [
+          profileImage,
+          authenticatedEmail,
+        ]
+      );
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "User account was not found.",
+      });
+    }
+
+    let rows = [];
+
+    if (authenticatedUserId) {
+      [rows] = await db.execute(
+        `
+          SELECT
+            userId,
+            email,
+            role,
+            name,
+            display_name,
+            profile_image,
+            year_level,
+            section_name,
+            onboarding_completed,
+            is_verified,
+            verification_id,
+            student_id,
+            professor_id,
+            professor_faculty_id,
+            professor_department,
+            professor_employment_proof,
+            verification_status,
+            is_archived,
+            archived_at,
+            must_change_password,
+            is_temporary,
+            temporary_expires_at,
+            created_at
+          FROM users
+          WHERE userId = ?
+          LIMIT 1
+        `,
+        [authenticatedUserId]
+      );
+    } else {
+      [rows] = await db.execute(
+        `
+          SELECT
+            userId,
+            email,
+            role,
+            name,
+            display_name,
+            profile_image,
+            year_level,
+            section_name,
+            onboarding_completed,
+            is_verified,
+            verification_id,
+            student_id,
+            professor_id,
+            professor_faculty_id,
+            professor_department,
+            professor_employment_proof,
+            verification_status,
+            is_archived,
+            archived_at,
+            must_change_password,
+            is_temporary,
+            temporary_expires_at,
+            created_at
+          FROM users
+          WHERE email = ?
+          LIMIT 1
+        `,
+        [authenticatedEmail]
+      );
+    }
+
+    const updatedUser = rows[0];
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Updated user account could not be loaded.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Profile picture updated successfully.",
+      user: rowToUser(updatedUser),
+    });
+  } catch (error) {
+    console.error(
+      "Update profile image error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Failed to update profile picture.",
     });
   }
 }
