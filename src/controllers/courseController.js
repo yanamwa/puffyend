@@ -9,6 +9,10 @@ function cleanText(value) {
   return String(value || "").trim();
 }
 
+function isTruthy(value) {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
 function generateCourseCode() {
   return `PB-${crypto.randomBytes(3).toString("hex").toUpperCase()}-${crypto
     .randomBytes(2)
@@ -369,6 +373,10 @@ function rowToCourse(row, learningModules = []) {
     professor_email: row.professor_email || row.database_professor_email || "",
     professorDepartment: row.professor_department || row.database_professor_department || "",
     professor_department: row.professor_department || row.database_professor_department || "",
+    professorProfileImage:
+      row.professor_profile_image || row.database_professor_profile_image || "",
+    professor_profile_image:
+      row.professor_profile_image || row.database_professor_profile_image || "",
     createdAt: formatDate(row.created_at),
     updatedAt: formatDate(row.updated_at || row.created_at),
   };
@@ -427,6 +435,10 @@ function rowToModule(row) {
     professor_email: row.professor_email || row.database_professor_email || "",
     professorDepartment: row.professor_department || row.database_professor_department || "",
     professor_department: row.professor_department || row.database_professor_department || "",
+    professorProfileImage:
+      row.professor_profile_image || row.database_professor_profile_image || "",
+    professor_profile_image:
+      row.professor_profile_image || row.database_professor_profile_image || "",
     createdAt: formatDate(row.created_at),
     updatedAt,
   };
@@ -457,6 +469,10 @@ function payloadToModuleFields(body) {
     professorId: body.professorId || body.professor_id || null,
     professorName: cleanText(body.professorName || body.professor_name),
     professorEmail: cleanText(body.professorEmail || body.professor_email),
+    professorDepartment: cleanText(body.professorDepartment || body.professor_department),
+    professorProfileImage: cleanText(
+      body.professorProfileImage || body.professor_profile_image
+    ),
     title: cleanText(body.title),
     description: cleanText(body.description || body.module_description || body.summary),
     subject: cleanText(body.subject || courseName),
@@ -522,6 +538,10 @@ function payloadToCourseFields(body) {
     professorId: body.professorId || body.professor_id || null,
     professorName: cleanText(body.professorName || body.professor_name),
     professorEmail: cleanText(body.professorEmail || body.professor_email),
+    professorDepartment: cleanText(body.professorDepartment || body.professor_department),
+    professorProfileImage: cleanText(
+      body.professorProfileImage || body.professor_profile_image
+    ),
     contentModules,
     lessonPages,
     quizItems,
@@ -618,6 +638,8 @@ async function getOrCreateCourse(fields) {
            professor_id = ?,
            professor_name = ?,
            professor_email = ?,
+           professor_department = ?,
+           professor_profile_image = ?,
            join_link = ?
        WHERE ${idColumn} = ?`,
       [
@@ -631,6 +653,8 @@ async function getOrCreateCourse(fields) {
         fields.professorId,
         fields.professorName,
         fields.professorEmail,
+        fields.professorDepartment,
+        fields.professorProfileImage,
         `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`,
         getCourseId(existing[0]),
       ]
@@ -646,8 +670,8 @@ async function getOrCreateCourse(fields) {
     `INSERT INTO courses
      (title, code, summary, subject, professor_id, course_name, description,
       course_code, status, visibility, join_link, archived, professor_name,
-      professor_email)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+      professor_email, professor_department, professor_profile_image)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
     [
       fields.courseName,
       fields.courseCode,
@@ -662,6 +686,8 @@ async function getOrCreateCourse(fields) {
       `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`,
       fields.professorName,
       fields.professorEmail,
+      fields.professorDepartment,
+      fields.professorProfileImage,
     ]
   );
 
@@ -707,10 +733,13 @@ async function getModuleRows(where = "", params = []) {
        c.students,
        c.professor_name,
        c.professor_email,
+       c.professor_department,
+       c.professor_profile_image,
        u.display_name AS database_professor_display_name,
        u.name AS database_professor_name,
        u.email AS database_professor_email,
-       u.professor_department AS database_professor_department
+       u.professor_department AS database_professor_department,
+       u.profile_image AS database_professor_profile_image
      FROM learning_modules lm
      INNER JOIN courses c ON c.${idColumn} = lm.course_id
      LEFT JOIN users u ON u.userId = c.professor_id
@@ -749,7 +778,8 @@ export async function getCourses(req, res) {
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
-         u.professor_department AS database_professor_department
+         u.professor_department AS database_professor_department,
+         u.profile_image AS database_professor_profile_image
        FROM courses c
        LEFT JOIN users u ON u.userId = c.professor_id
        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
@@ -789,20 +819,32 @@ export async function getEnrolledCourses(req, res) {
 
   try {
     const idColumn = await getCourseIdColumn();
+    const includeArchived = isTruthy(req.query.includeArchived);
+    const archivedOnly =
+      isTruthy(req.query.archived) || isTruthy(req.query.archivedOnly);
+    const where = ["ce.user_id = ?"];
+    const params = [userId];
+
+    if (archivedOnly) {
+      where.push("c.archived = 1");
+    } else if (!includeArchived) {
+      where.push("c.archived = 0");
+    }
+
     const [courseRows] = await db.execute(
       `SELECT
          c.*,
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
-         u.professor_department AS database_professor_department
+         u.professor_department AS database_professor_department,
+         u.profile_image AS database_professor_profile_image
        FROM course_enrollments ce
        INNER JOIN courses c ON c.${idColumn} = ce.course_id
        LEFT JOIN users u ON u.userId = c.professor_id
-       WHERE ce.user_id = ?
-         AND c.archived = 0
+       WHERE ${where.join(" AND ")}
        ORDER BY ce.created_at DESC, c.updated_at DESC, c.${idColumn} DESC`,
-      [userId]
+      params
     );
 
     const modulesByCourse = await getCourseLearningModules(courseRows.map(getCourseId));
@@ -879,7 +921,8 @@ export async function enrollCourse(req, res) {
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
-         u.professor_department AS database_professor_department
+         u.professor_department AS database_professor_department,
+         u.profile_image AS database_professor_profile_image
        FROM courses c
        LEFT JOIN users u ON u.userId = c.professor_id
        WHERE ${where.slice(0, 2).join(" AND ")}
@@ -944,7 +987,8 @@ export async function getCourseById(req, res) {
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
-         u.professor_department AS database_professor_department
+         u.professor_department AS database_professor_department,
+         u.profile_image AS database_professor_profile_image
        FROM courses c
        LEFT JOIN users u ON u.userId = c.professor_id
        WHERE c.${idColumn} = ?
@@ -1001,7 +1045,8 @@ export async function joinCourseByCode(req, res) {
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
-         u.professor_department AS database_professor_department
+         u.professor_department AS database_professor_department,
+         u.profile_image AS database_professor_profile_image
        FROM courses c
        LEFT JOIN users u ON u.userId = c.professor_id
        WHERE c.archived = 0
@@ -1053,7 +1098,8 @@ export async function joinCourseByCode(req, res) {
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
-         u.professor_department AS database_professor_department
+         u.professor_department AS database_professor_department,
+         u.profile_image AS database_professor_profile_image
        FROM courses c
        LEFT JOIN users u ON u.userId = c.professor_id
        WHERE c.${idColumn} = ?
@@ -1170,8 +1216,9 @@ export async function createCourse(req, res) {
        (title, code, summary, subject, professor_id, course_name, description,
         course_code, learning_objectives, status, visibility, lesson_pages,
         quiz_items, students, modules, quizzes, join_link, archived,
-        professor_name, professor_email)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        professor_name, professor_email, professor_department,
+        professor_profile_image)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         fields.title,
         fields.courseCode,
@@ -1193,6 +1240,8 @@ export async function createCourse(req, res) {
         fields.archived ? 1 : 0,
         fields.professorName,
         fields.professorEmail,
+        fields.professorDepartment,
+        fields.professorProfileImage,
       ]
     );
 
@@ -1311,7 +1360,9 @@ export async function updateCourse(req, res) {
            join_link = ?,
            archived = ?,
            professor_name = ?,
-           professor_email = ?
+           professor_email = ?,
+           professor_department = ?,
+           professor_profile_image = ?
        WHERE ${idColumn} = ?`,
       [
         fields.title,
@@ -1334,6 +1385,8 @@ export async function updateCourse(req, res) {
         fields.archived ? 1 : 0,
         fields.professorName,
         fields.professorEmail,
+        fields.professorDepartment,
+        fields.professorProfileImage,
         id,
       ]
     );
@@ -1430,6 +1483,69 @@ export async function updateLearningModule(req, res) {
     return res.status(500).json({
       success: false,
       message: "Failed to update learning module.",
+    });
+  }
+}
+
+export async function archiveCourse(req, res) {
+  const id = req.params.id || req.body.id || req.body.course_id;
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      message: "Course ID is required.",
+    });
+  }
+
+  const requestedArchived = req.body?.archived ?? req.body?.archive;
+  const archived = requestedArchived === undefined ? true : isTruthy(requestedArchived);
+
+  try {
+    const idColumn = await getCourseIdColumn();
+    const [result] = await db.execute(
+      `UPDATE courses
+       SET archived = ?
+       WHERE ${idColumn} = ?`,
+      [archived ? 1 : 0, id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found.",
+      });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT
+         c.*,
+         u.display_name AS database_professor_display_name,
+         u.name AS database_professor_name,
+         u.email AS database_professor_email,
+         u.professor_department AS database_professor_department,
+         u.profile_image AS database_professor_profile_image
+       FROM courses c
+       LEFT JOIN users u ON u.userId = c.professor_id
+       WHERE c.${idColumn} = ?
+       LIMIT 1`,
+      [id]
+    );
+
+    const courseId = getCourseId(rows[0]);
+    const modulesByCourse = await getCourseLearningModules([courseId]);
+    const course = rowToCourse(rows[0], modulesByCourse.get(String(courseId)) || []);
+
+    return res.json({
+      success: true,
+      message: archived ? "Course archived successfully." : "Course restored successfully.",
+      course,
+    });
+  } catch (error) {
+    console.error("Archive course error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update course archive status.",
     });
   }
 }

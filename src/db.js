@@ -96,6 +96,8 @@ async function initCourseTables() {
       archived TINYINT(1) NOT NULL DEFAULT 0,
       professor_name VARCHAR(255) NULL,
       professor_email VARCHAR(255) NULL,
+      professor_department VARCHAR(255) NULL,
+      professor_profile_image VARCHAR(500) NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       UNIQUE KEY courses_code_unique (code)
@@ -145,6 +147,16 @@ async function initCourseTables() {
     "courses",
     "professor_email",
     "professor_email VARCHAR(255) NULL"
+  );
+  await ensureTableColumn(
+    "courses",
+    "professor_department",
+    "professor_department VARCHAR(255) NULL"
+  );
+  await ensureTableColumn(
+    "courses",
+    "professor_profile_image",
+    "professor_profile_image VARCHAR(500) NULL"
   );
 
   const [courseIdColumns] = await db.execute(
@@ -290,11 +302,11 @@ async function initQuizModeTables() {
       "/timedquiz-tutorial",
     ],
     [
-      "Survival Mode",
-      "Survival Mode",
-      "Practice with three lives. Each missed answer costs a life, so students stay focused while reviewing.",
+      "Mixed Mode",
+      "Mixed Mode",
+      "Practice with matching type, multiple choice, and Q&A all at once.",
       "/images/needpractice.png",
-      "/survival-tutorial",
+      "/random-modes-tutorial",
     ],
   ];
 
@@ -500,6 +512,7 @@ export async function initDb() {
       password VARCHAR(255) NOT NULL,
       role VARCHAR(50) NOT NULL DEFAULT 'student',
       display_name VARCHAR(255) NULL,
+      profile_image VARCHAR(500) NULL,
       year_level VARCHAR(50) NULL,
       section_name VARCHAR(20) NULL,
       onboarding_completed TINYINT(1) NOT NULL DEFAULT 0,
@@ -539,6 +552,7 @@ export async function initDb() {
     "is_verified TINYINT(1) NOT NULL DEFAULT 0"
   );
   await ensureColumn("display_name", "display_name VARCHAR(255) NULL");
+  await ensureColumn("profile_image", "profile_image VARCHAR(500) NULL");
   await ensureColumn("year_level", "year_level VARCHAR(50) NULL");
   await ensureColumn("section_name", "section_name VARCHAR(20) NULL");
   await ensureColumn(

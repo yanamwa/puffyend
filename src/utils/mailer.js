@@ -1,15 +1,56 @@
 import nodemailer from "nodemailer";
 
-function createSmtpTransporter() {
-  return nodemailer.createTransport({
+function getSmtpConfig() {
+  const port = Number(process.env.OTP_SMTP_PORT);
+  const config = {
     host: process.env.OTP_SMTP_HOST,
-    port: Number(process.env.OTP_SMTP_PORT),
-    secure: false,
-    auth: {
-      user: process.env.OTP_SMTP_USERNAME,
-      pass: process.env.OTP_SMTP_PASSWORD,
-    },
-  });
+    port,
+    username: process.env.OTP_SMTP_USERNAME,
+    password: process.env.OTP_SMTP_PASSWORD,
+    fromEmail: process.env.OTP_SMTP_FROM_EMAIL,
+    fromName: process.env.OTP_SMTP_FROM_NAME || "PuffyBrain",
+  };
+
+  const missingKeys = [
+    ["OTP_SMTP_HOST", config.host],
+    ["OTP_SMTP_PORT", process.env.OTP_SMTP_PORT],
+    ["OTP_SMTP_USERNAME", config.username],
+    ["OTP_SMTP_PASSWORD", config.password],
+    ["OTP_SMTP_FROM_EMAIL", config.fromEmail],
+  ]
+    .filter(([, value]) => !String(value || "").trim())
+    .map(([key]) => key);
+
+  if (!Number.isFinite(port) || port <= 0) {
+    missingKeys.push("OTP_SMTP_PORT");
+  }
+
+  if (missingKeys.length > 0) {
+    const error = new Error(
+      `SMTP configuration is incomplete: ${missingKeys.join(", ")}`
+    );
+    error.code = "SMTP_CONFIG_MISSING";
+    throw error;
+  }
+
+  return config;
+}
+
+function createSmtpMailer() {
+  const config = getSmtpConfig();
+
+  return {
+    transporter: nodemailer.createTransport({
+      host: config.host,
+      port: config.port,
+      secure: config.port === 465,
+      auth: {
+        user: config.username,
+        pass: config.password,
+      },
+    }),
+    from: `"${config.fromName}" <${config.fromEmail}>`,
+  };
 }
 
 function escapeHtml(value) {
@@ -22,10 +63,10 @@ function escapeHtml(value) {
 }
 
 export async function sendOtpEmail(email, name, otp) {
-  const transporter = createSmtpTransporter();
+  const { transporter, from } = createSmtpMailer();
 
   await transporter.sendMail({
-    from: `"${process.env.OTP_SMTP_FROM_NAME}" <${process.env.OTP_SMTP_FROM_EMAIL}>`,
+    from,
     to: email,
     subject: "PuffyBrain Verification Code",
     html: `
@@ -41,12 +82,12 @@ export async function sendOtpEmail(email, name, otp) {
 }
 
 export async function sendPasswordResetEmail(email, name, resetLink) {
-  const transporter = createSmtpTransporter();
+  const { transporter, from } = createSmtpMailer();
   const nameHtml = escapeHtml(name || "there");
   const resetLinkHtml = escapeHtml(resetLink);
 
   await transporter.sendMail({
-    from: `"${process.env.OTP_SMTP_FROM_NAME}" <${process.env.OTP_SMTP_FROM_EMAIL}>`,
+    from,
     to: email,
     subject: "Reset your PuffyBrain password",
     html: `
@@ -89,11 +130,11 @@ If you did not request a password reset, you can ignore this email.`,
 }
 
 export async function sendStudentTemporaryPasswordEmail(email, temporaryPassword) {
-  const transporter = createSmtpTransporter();
+  const { transporter, from } = createSmtpMailer();
   const passwordHtml = escapeHtml(temporaryPassword);
 
   await transporter.sendMail({
-    from: `"${process.env.OTP_SMTP_FROM_NAME}" <${process.env.OTP_SMTP_FROM_EMAIL}>`,
+    from,
     to: email,
     subject: "Your Puffybrain temporary password",
     html: `

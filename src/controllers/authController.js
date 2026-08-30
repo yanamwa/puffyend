@@ -194,6 +194,24 @@ export async function signup(req, res) {
     });
   }
 
+  if (!cleanFacultyId) {
+    await removeUploadedProof(req.file);
+
+    return res.status(400).json({
+      success: false,
+      message: "Employee or faculty ID is required.",
+    });
+  }
+
+  if (cleanFacultyId.length > 100) {
+    await removeUploadedProof(req.file);
+
+    return res.status(400).json({
+      success: false,
+      message: "Employee or faculty ID is too long.",
+    });
+  }
+
   if (!cleanEmploymentProof) {
     return res.status(400).json({
       success: false,
@@ -453,7 +471,35 @@ export async function forgotPassword(req, res) {
       req
     )}/change-password?token=${encodeURIComponent(token)}`;
 
-    await sendPasswordResetEmail(user.email, user.name || "there", resetLink);
+    try {
+      await sendPasswordResetEmail(user.email, user.name || "there", resetLink);
+    } catch (emailError) {
+      try {
+        await db.execute(
+          `UPDATE users
+           SET password_reset_token = NULL,
+               password_reset_expires = NULL
+           WHERE userId = ?`,
+          [user.userId]
+        );
+      } catch (cleanupError) {
+        console.error("Password reset token cleanup error:", cleanupError);
+      }
+
+      console.error("Password reset email error:", {
+        code: emailError.code,
+        command: emailError.command,
+        responseCode: emailError.responseCode,
+        message: emailError.message,
+      });
+
+      return res.status(503).json({
+        success: false,
+        code: "PASSWORD_RESET_EMAIL_FAILED",
+        message:
+          "Password reset email service is unavailable. Please try again later.",
+      });
+    }
 
     return res.json(genericResponse);
   } catch (error) {

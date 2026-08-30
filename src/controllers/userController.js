@@ -1073,7 +1073,7 @@ export async function getCurrentUser(req, res) {
       );
     } else if (authenticatedEmail) {
       [rows] = await db.execute(
-        `SELECT userId, email, role, name, display_name, year_level,
+        `SELECT userId, email, role, name, display_name, profile_image, year_level,
                 section_name, onboarding_completed, is_verified,
                 verification_id, student_id, professor_id,
                 professor_faculty_id, professor_department,

@@ -2,6 +2,7 @@ import express from "express";
 import {
   createCourse,
   createLearningModule,
+  archiveCourse,
   deleteCourse,
   deleteLearningModule,
   getCourseById,
@@ -83,6 +84,8 @@ router.get("/courses/join", joinCourseByCode);
 router.post("/courses/join", joinCourseByCode);
 router.get("/courses/:id", getCourseById);
 router.put("/courses/:id", updateCourse);
+router.patch("/courses/:id/archive", archiveCourse);
+router.post("/courses/:id/archive", archiveCourse);
 router.delete("/courses/:id", deleteCourse);
 
 router.get("/modules", getLearningModules);
