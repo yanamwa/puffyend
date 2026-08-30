@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import authRoutes from "./routes/authRoutes.js";
 import courseRoutes from "./routes/courseRoutes.js";
@@ -13,15 +14,50 @@ import { initDb } from "./db.js";
 dotenv.config();
 
 const app = express();
+
 const port = process.env.PORT || 5000;
+
+/* =========================================
+   GET SERVER DIRECTORY
+========================================= */
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/*
+  If index.js is located here:
+
+  C:\xampp\htdocs\server\index.js
+
+  this becomes:
+
+  C:\xampp\htdocs\server\uploads
+*/
+
+const profileUploadsDirectory = path.join(
+  __dirname,
+  "uploads"
+);
+
+console.log(
+  "Profile uploads directory:",
+  profileUploadsDirectory
+);
+
+/* =========================================
+   CORS
+========================================= */
 
 const allowedOrigins = [
   "http://localhost",
   "http://127.0.0.1",
+
   "http://localhost:3000",
   "http://127.0.0.1:3000",
+
   "http://localhost:5173",
   "http://127.0.0.1:5173",
+
   "https://puffybrain.fun",
   "https://www.puffybrain.fun",
 ];
@@ -29,15 +65,24 @@ const allowedOrigins = [
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (
+        !origin ||
+        allowedOrigins.includes(origin)
+      ) {
         callback(null, true);
+
         return;
       }
 
-      console.error("Blocked CORS Origin:", origin);
+      console.error(
+        "Blocked CORS Origin:",
+        origin
+      );
 
       callback(
-        new Error(`Origin not allowed: ${origin}`)
+        new Error(
+          `Origin not allowed: ${origin}`
+        )
       );
     },
 
@@ -60,41 +105,54 @@ app.use(
   })
 );
 
+/* =========================================
+   BODY PARSERS
+========================================= */
+
 app.use(express.json());
+
 app.use(
   express.urlencoded({
     extended: true,
   })
 );
 
-/*
-  Profile image uploads are saved here:
+/* =========================================
+   PROFILE IMAGE STATIC FOLDER
 
-  C:\xampp\htdocs\server\uploads\profile-images
+   DATABASE PATH EXAMPLE:
 
-  and are available through:
+   /uploads/profile-images/profile-23-xxx.jpg
 
-  http://localhost:5000/uploads/profile-images/filename.jpg
-*/
+   PUBLIC URL:
+
+   http://localhost:5000/uploads/profile-images/profile-23-xxx.jpg
+========================================= */
+
 app.use(
   "/uploads",
-  express.static(
-    path.join(process.cwd(), "uploads")
-  )
+  express.static(profileUploadsDirectory)
 );
 
-/*
-  Keep this because your lesson upload files
-  currently use src/uploads.
-*/
+/* =========================================
+   LESSON UPLOADS
+========================================= */
+
 app.use(
   "/api/uploads",
   express.static(
-    path.resolve("src/uploads")
+    path.resolve(
+      __dirname,
+      "src",
+      "uploads"
+    )
   )
 );
 
-// Request logger
+/* =========================================
+   REQUEST LOGGER
+========================================= */
+
 app.use((req, res, next) => {
   console.log(
     `${req.method} ${req.originalUrl}`
@@ -103,89 +161,201 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check
-app.get("/api/health", (req, res) => {
-  res.json({
-    success: true,
-    message: "PuffyBrain API is running.",
-  });
-});
+/* =========================================
+   HEALTH CHECK
+========================================= */
 
-// Routes
-app.use("/api", authRoutes);
-app.use("/api/auth", authRoutes);
-app.use("/api", courseRoutes);
-app.use("/api", userRoutes);
-app.use("/api/lessons", lessonRoutes);
+app.get(
+  "/api/health",
+  (req, res) => {
+    res.json({
+      success: true,
+      message:
+        "PuffyBrain API is running.",
+    });
+  }
+);
 
-// 404
+/* =========================================
+   TEST PROFILE UPLOAD STATIC FOLDER
+========================================= */
+
+app.get(
+  "/api/debug/uploads",
+  (req, res) => {
+    res.json({
+      success: true,
+
+      uploadsDirectory:
+        profileUploadsDirectory,
+
+      example:
+        "http://localhost:5000/uploads/profile-images/filename.jpg",
+    });
+  }
+);
+
+/* =========================================
+   ROUTES
+========================================= */
+
+app.use(
+  "/api",
+  authRoutes
+);
+
+app.use(
+  "/api/auth",
+  authRoutes
+);
+
+app.use(
+  "/api",
+  courseRoutes
+);
+
+app.use(
+  "/api",
+  userRoutes
+);
+
+app.use(
+  "/api/lessons",
+  lessonRoutes
+);
+
+/* =========================================
+   404
+========================================= */
+
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message: "Route not found.",
-  });
-});
-
-// Invalid JSON
-app.use((error, req, res, next) => {
-  if (
-    error instanceof SyntaxError &&
-    "body" in error
-  ) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid JSON request body.",
-    });
-  }
-
-  next(error);
-});
-
-// General error handler
-app.use((error, req, res, next) => {
-  console.error("Unhandled Server Error:");
-  console.error(error);
-
-  res.status(
-    error.statusCode || 500
-  ).json({
-    success: false,
     message:
-      error.message ||
-      "Internal Server Error",
+      "Route not found.",
   });
 });
+
+/* =========================================
+   INVALID JSON
+========================================= */
+
+app.use(
+  (error, req, res, next) => {
+    if (
+      error instanceof SyntaxError &&
+      "body" in error
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid JSON request body.",
+      });
+    }
+
+    next(error);
+  }
+);
+
+/* =========================================
+   GENERAL ERROR HANDLER
+========================================= */
+
+app.use(
+  (error, req, res, next) => {
+    console.error(
+      "Unhandled Server Error:"
+    );
+
+    console.error(error);
+
+    res
+      .status(
+        error.statusCode || 500
+      )
+      .json({
+        success: false,
+
+        message:
+          error.message ||
+          "Internal Server Error",
+      });
+  }
+);
+
+/* =========================================
+   START SERVER
+========================================= */
 
 async function startServer() {
   try {
-    console.log("--------------------------------------");
-    console.log("Starting PuffyBrain Backend...");
-    console.log("--------------------------------------");
+    console.log(
+      "--------------------------------------"
+    );
 
-    console.log("Connecting to MySQL...");
+    console.log(
+      "Starting PuffyBrain Backend..."
+    );
+
+    console.log(
+      "--------------------------------------"
+    );
+
+    console.log(
+      "Connecting to MySQL..."
+    );
+
     await initDb();
 
     console.log(
       "MySQL Connected Successfully."
     );
 
-    app.listen(port, () => {
-      console.log("--------------------------------------");
-      console.log(
-        `Server running on http://localhost:${port}`
-      );
-      console.log(
-        `Health Check: http://localhost:${port}/api/health`
-      );
-      console.log(
-        `Lesson Upload: http://localhost:${port}/api/lessons/process-file`
-      );
-      console.log("--------------------------------------");
-    });
+    app.listen(
+      port,
+      () => {
+        console.log(
+          "--------------------------------------"
+        );
+
+        console.log(
+          `Server running on http://localhost:${port}`
+        );
+
+        console.log(
+          `Health Check: http://localhost:${port}/api/health`
+        );
+
+        console.log(
+          `Uploads folder: ${profileUploadsDirectory}`
+        );
+
+        console.log(
+          `Upload Debug: http://localhost:${port}/api/debug/uploads`
+        );
+
+        console.log(
+          `Lesson Upload: http://localhost:${port}/api/lessons/process-file`
+        );
+
+        console.log(
+          "--------------------------------------"
+        );
+      }
+    );
   } catch (error) {
-    console.error("--------------------------------------");
-    console.error("SERVER FAILED TO START");
-    console.error("--------------------------------------");
+    console.error(
+      "--------------------------------------"
+    );
+
+    console.error(
+      "SERVER FAILED TO START"
+    );
+
+    console.error(
+      "--------------------------------------"
+    );
+
     console.error(error);
   }
 }
