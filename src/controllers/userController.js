@@ -101,7 +101,7 @@ function getTemporaryAccountSettings(body = {}) {
       durationDays > MAX_TEMPORARY_ACCOUNT_DAYS
     ) {
       return {
-        error: `Temporary accounts must expire in 1 to ${MAX_TEMPORARY_ACCOUNT_DAYS} days.`,
+        error: Temporary accounts must expire in 1 to ${MAX_TEMPORARY_ACCOUNT_DAYS} days.,
       };
     }
 
@@ -216,10 +216,19 @@ function rowToUser(user) {
     student_id: user.student_id,
     professorId: user.professor_id,
     professor_id: user.professor_id,
+
     professorFacultyId: user.professor_faculty_id,
     professor_faculty_id: user.professor_faculty_id,
+
     professorDepartment: user.professor_department,
     professor_department: user.professor_department,
+
+    professorPosition: user.professor_position,
+    professor_position: user.professor_position,
+
+    professorSpecialization: user.professor_specialization,
+    professor_specialization: user.professor_specialization,
+
     professorEmploymentProof: user.professor_employment_proof,
     professor_employment_proof: user.professor_employment_proof,
     verificationStatus: user.verification_status,
@@ -244,13 +253,32 @@ function rowToUser(user) {
 
 async function getUserByEmail(email) {
   const [rows] = await db.execute(
-    `SELECT userId, email, role, name, display_name, profile_image,
-       year_level, section_name,
-            onboarding_completed, is_verified, verification_id, student_id,
-            professor_id, professor_faculty_id, professor_department,
-            professor_employment_proof, verification_status, is_archived,
-            archived_at, must_change_password, is_temporary,
-            temporary_expires_at, created_at
+    `SELECT
+       userId,
+       email,
+       role,
+       name,
+       display_name,
+       profile_image,
+       year_level,
+       section_name,
+       onboarding_completed,
+       is_verified,
+       verification_id,
+       student_id,
+       professor_id,
+       professor_faculty_id,
+       professor_department,
+       professor_position,
+       professor_specialization,
+       professor_employment_proof,
+       verification_status,
+       is_archived,
+       archived_at,
+       must_change_password,
+       is_temporary,
+       temporary_expires_at,
+       created_at
      FROM users
      WHERE email = ?
      LIMIT 1`,
@@ -559,27 +587,52 @@ export async function createAdminAccount(req, res) {
 
 export async function createProfessorAccount(req, res) {
   const email = cleanEmail(req.body.email);
-  const name = cleanText(req.body.name || req.body.displayName);
+
+  const name = cleanText(
+    req.body.name ||
+    req.body.displayName
+  );
+
   const facultyId = cleanText(
     req.body.facultyId ||
-      req.body.faculty_id ||
-      req.body.employeeId ||
-      req.body.employee_id
+    req.body.faculty_id ||
+    req.body.employeeId ||
+    req.body.employee_id
   );
+
   const department = cleanText(
-    req.body.department || req.body.professorDepartment
+    req.body.department ||
+    req.body.professorDepartment ||
+    req.body.professor_department
   );
+
+  const position = cleanText(
+    req.body.position ||
+    req.body.professorPosition ||
+    req.body.professor_position
+  );
+
+  const specialization = cleanText(
+    req.body.specialization ||
+    req.body.professorSpecialization ||
+    req.body.professor_specialization
+  );
+
   const employmentProof = cleanText(
     req.body.employmentProof ||
-      req.body.proofOfEmployment ||
-      req.body.professorEmploymentProof
+    req.body.proofOfEmployment ||
+    req.body.professorEmploymentProof ||
+    req.body.professor_employment_proof
   );
-  const temporaryAccount = getTemporaryAccountSettings(req.body);
+
+  const temporaryAccount =
+    getTemporaryAccountSettings(req.body);
 
   if (!email || !name) {
     return res.status(400).json({
       success: false,
-      message: "Professor name and email are required.",
+      message:
+        "Professor name and email are required.",
     });
   }
 
@@ -599,66 +652,146 @@ export async function createProfessorAccount(req, res) {
 
   try {
     const [existingEmail] = await db.execute(
-      "SELECT userId FROM users WHERE email = ? LIMIT 1",
+      `SELECT userId
+       FROM users
+       WHERE email = ?
+       LIMIT 1`,
       [email]
     );
 
     if (existingEmail.length > 0) {
       return res.status(409).json({
         success: false,
-        message: "Email is already registered.",
+        message:
+          "Email is already registered.",
       });
     }
 
-    const temporaryPassword = generateTemporaryPassword();
-    const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+    const temporaryPassword =
+      generateTemporaryPassword();
+
+    const hashedPassword =
+      await bcrypt.hash(
+        temporaryPassword,
+        10
+      );
 
     const [result] = await db.execute(
-      `INSERT INTO users
-       (email, password, role, name, display_name, professor_id,
-        professor_faculty_id, professor_department, professor_employment_proof,
-        verification_status, is_verified, onboarding_completed,
-        must_change_password, is_archived, is_temporary, temporary_expires_at)
-       VALUES (?, ?, 'professor', ?, ?, ?, ?, ?, ?, 'approved', 1, 1, 1, 0, ?, ?)`,
+      `INSERT INTO users (
+        email,
+        password,
+        role,
+        name,
+        display_name,
+
+        professor_id,
+        professor_faculty_id,
+        professor_department,
+        professor_position,
+        professor_specialization,
+        professor_employment_proof,
+
+        verification_status,
+        is_verified,
+        onboarding_completed,
+        must_change_password,
+        is_archived,
+        is_temporary,
+        temporary_expires_at
+      )
+      VALUES (
+        ?,
+        ?,
+        'professor',
+        ?,
+        ?,
+
+        ?,
+        ?,
+        ?,
+        ?,
+        ?,
+        ?,
+
+        'approved',
+        1,
+        1,
+        1,
+        0,
+        ?,
+        ?
+      )`,
       [
         email,
         hashedPassword,
         name,
         name,
+
         facultyId || null,
         facultyId || null,
         department || null,
+        position || null,
+        specialization || null,
         employmentProof || null,
+
         temporaryAccount.isTemporary,
         temporaryAccount.temporaryExpiresAt,
       ]
     );
 
     const [rows] = await db.execute(
-      `SELECT userId AS id, email, role, name, display_name, year_level,
-       section_name, onboarding_completed, is_verified, verification_id,
-       student_id, professor_id, professor_faculty_id, professor_department,
-       professor_employment_proof, verification_status, is_archived,
-       archived_at, must_change_password, is_temporary, temporary_expires_at,
-       created_at
-       FROM users
-       WHERE userId = ?
-       LIMIT 1`,
+      `SELECT
+        userId AS id,
+        email,
+        role,
+        name,
+        display_name,
+        profile_image,
+        year_level,
+        section_name,
+        onboarding_completed,
+        is_verified,
+        verification_id,
+        student_id,
+
+        professor_id,
+        professor_faculty_id,
+        professor_department,
+        professor_position,
+        professor_specialization,
+        professor_employment_proof,
+
+        verification_status,
+        is_archived,
+        archived_at,
+        must_change_password,
+        is_temporary,
+        temporary_expires_at,
+        created_at
+
+      FROM users
+      WHERE userId = ?
+      LIMIT 1`,
       [result.insertId]
     );
 
     return res.status(201).json({
       success: true,
-      message: "Professor account created.",
+      message:
+        "Professor account created.",
       temporaryPassword,
       user: rowToUser(rows[0]),
     });
   } catch (error) {
-    console.error("Create professor error:", error);
+    console.error(
+      "Create professor error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Failed to create professor account.",
+      message:
+        "Failed to create professor account.",
     });
   }
 }
@@ -1051,38 +1184,84 @@ export async function getProfile(req, res) {
 
 export async function getCurrentUser(req, res) {
   try {
-    const authenticatedUserId = req.user?.id || req.user?.userId;
-    const authenticatedEmail = cleanEmail(req.user?.email);
+    const authenticatedUserId =
+      req.user?.id || req.user?.userId;
+
+    const authenticatedEmail =
+      cleanEmail(req.user?.email);
 
     let rows = [];
 
     if (authenticatedUserId) {
       [rows] = await db.execute(
-        `SELECT userId, email, role, name, display_name, profile_image,
-       year_level,
-                section_name, onboarding_completed, is_verified,
-                verification_id, student_id, professor_id,
-                professor_faculty_id, professor_department,
-                professor_employment_proof, verification_status,
-                is_archived, archived_at, must_change_password,
-                is_temporary, temporary_expires_at, created_at
-         FROM users
-         WHERE userId = ?
-         LIMIT 1`,
+        `SELECT
+          userId,
+          email,
+          role,
+          name,
+          display_name,
+          profile_image,
+          year_level,
+          section_name,
+          onboarding_completed,
+          is_verified,
+          verification_id,
+          student_id,
+
+          professor_id,
+          professor_faculty_id,
+          professor_department,
+          professor_position,
+          professor_specialization,
+          professor_employment_proof,
+
+          verification_status,
+          is_archived,
+          archived_at,
+          must_change_password,
+          is_temporary,
+          temporary_expires_at,
+          created_at
+
+        FROM users
+        WHERE userId = ?
+        LIMIT 1`,
         [authenticatedUserId]
       );
     } else if (authenticatedEmail) {
       [rows] = await db.execute(
-        `SELECT userId, email, role, name, display_name, profile_image, year_level,
-                section_name, onboarding_completed, is_verified,
-                verification_id, student_id, professor_id,
-                professor_faculty_id, professor_department,
-                professor_employment_proof, verification_status,
-                is_archived, archived_at, must_change_password,
-                is_temporary, temporary_expires_at, created_at
-         FROM users
-         WHERE email = ?
-         LIMIT 1`,
+        `SELECT
+          userId,
+          email,
+          role,
+          name,
+          display_name,
+          profile_image,
+          year_level,
+          section_name,
+          onboarding_completed,
+          is_verified,
+          verification_id,
+          student_id,
+
+          professor_id,
+          professor_faculty_id,
+          professor_department,
+          professor_position,
+          professor_specialization,
+          professor_employment_proof,
+
+          verification_status,
+          is_archived,
+          archived_at,
+          must_change_password,
+          is_temporary,
+          temporary_expires_at,
+          created_at
+
+        FROM users
+        WHERE email = ?
+        LIMIT 1`,
         [authenticatedEmail]
       );
     } else {
@@ -1240,7 +1419,7 @@ export async function updateOnboardingSection(req, res) {
     if (sectionName.charAt(0) !== yearNumber) {
       return res.status(400).json({
         success: false,
-        message: `Please choose a ${yearNumber}A-${yearNumber}F section for ${yearLevel}.`,
+        message: Please choose a ${yearNumber}A-${yearNumber}F section for ${yearLevel}.,
       });
     }
 
@@ -1351,7 +1530,7 @@ export async function updateProfileImage(req, res) {
     }
 
     const profileImage =
-      `/uploads/profile-images/${req.file.filename}`;
+      /uploads/profile-images/${req.file.filename};
 
     let result;
 
