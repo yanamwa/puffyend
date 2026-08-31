@@ -7,11 +7,13 @@ import {
   deleteLearningModule,
   getCourseById,
   getEnrolledCourses,
+  getArchivedCourses,
   getCourses,
   getLearningModuleById,
   getLearningModules,
   handleLegacyLearningModule,
   enrollCourse,
+  unenrollCourse,
   joinCourseByCode,
   updateCourse,
   updateLearningModule,
@@ -82,6 +84,7 @@ router.get("/courses/enrolled", getEnrolledCourses);
 router.post("/courses/enroll", enrollCourse);
 router.get("/courses/join", joinCourseByCode);
 router.post("/courses/join", joinCourseByCode);
+router.get("/courses/archived",getArchivedCourses);
 router.get("/courses/:id", getCourseById);
 router.put("/courses/:id", updateCourse);
 router.patch("/courses/:id/archive", archiveCourse);
@@ -105,6 +108,8 @@ router.post("/saveLessonProgress.php", saveLessonProgress);
 router.post("/saveQuizAttempt.php", saveQuizAttempt);
 router.get("/getQuizAttempts.php", getQuizAttempts);
 router.post("/generateAdaptiveFeedback.php", generateAdaptiveFeedback);
+
+router.put("/courses/:id/unenroll", unenrollCourse);
 
 router.get("/getModes.php", getModes);
 router.post("/addMode.php", parseLegacyModeBody, createMode);

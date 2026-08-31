@@ -832,6 +832,7 @@ export async function getEnrolledCourses(req, res) {
     }
 
     const [courseRows] = await db.execute(
+<<<<<<< HEAD
       `SELECT
          c.*,
          u.display_name AS database_professor_display_name,
@@ -846,6 +847,23 @@ export async function getEnrolledCourses(req, res) {
        ORDER BY ce.created_at DESC, c.updated_at DESC, c.${idColumn} DESC`,
       params
     );
+=======
+  `SELECT
+     c.*,
+     u.display_name AS database_professor_display_name,
+     u.name AS database_professor_name,
+     u.email AS database_professor_email,
+     u.professor_department AS database_professor_department
+   FROM course_enrollments ce
+   INNER JOIN courses c ON c.${idColumn} = ce.course_id
+   LEFT JOIN users u ON u.userId = c.professor_id
+   WHERE ce.user_id = ?
+     AND ce.archived = 0
+     AND c.archived = 0
+   ORDER BY ce.created_at DESC, c.updated_at DESC, c.${idColumn} DESC`,
+  [userId]
+);
+>>>>>>> 9641d32a23621b2c5d7cce27cf2176f9f63378f5
 
     const modulesByCourse = await getCourseLearningModules(courseRows.map(getCourseId));
     const courses = courseRows.map((course) =>
@@ -862,6 +880,70 @@ export async function getEnrolledCourses(req, res) {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch enrolled courses.",
+    });
+  }
+}
+
+export async function getArchivedCourses(req, res) {
+  const userId = getRequestUserId(req);
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Student account is required.",
+    });
+  }
+
+  try {
+    const idColumn = await getCourseIdColumn();
+
+    const [courseRows] = await db.execute(
+      `SELECT
+         c.*,
+         u.display_name AS database_professor_display_name,
+         u.name AS database_professor_name,
+         u.email AS database_professor_email,
+         u.professor_department AS database_professor_department
+       FROM course_enrollments ce
+       INNER JOIN courses c
+         ON c.${idColumn} = ce.course_id
+       LEFT JOIN users u
+         ON u.userId = c.professor_id
+       WHERE ce.user_id = ?
+         AND ce.archived = 1
+       ORDER BY ce.created_at DESC,
+                c.updated_at DESC,
+                c.${idColumn} DESC`,
+      [userId]
+    );
+
+    const modulesByCourse =
+      await getCourseLearningModules(
+        courseRows.map(getCourseId)
+      );
+
+    const courses = courseRows.map((course) =>
+      rowToCourse(
+        course,
+        modulesByCourse.get(
+          String(getCourseId(course))
+        ) || []
+      )
+    );
+
+    return res.json({
+      success: true,
+      courses,
+    });
+  } catch (error) {
+    console.error(
+      "Get archived courses error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch archived courses.",
     });
   }
 }
@@ -940,22 +1022,28 @@ export async function enrollCourse(req, res) {
 
     const enrolledCourseId = getCourseId(rows[0]);
     const [enrollmentResult] = await db.execute(
-      `INSERT IGNORE INTO course_enrollments (course_id, user_id)
-       VALUES (?, ?)`,
-      [enrolledCourseId, userId]
-    );
+          `INSERT INTO course_enrollments (
+            course_id,
+            user_id,
+            archived
+          )
+          VALUES (?, ?, 0)
+          ON DUPLICATE KEY UPDATE
+            archived = 0`,
+          [enrolledCourseId, userId]
+        );
 
     await db.execute(
-      `UPDATE courses
-       SET students = (
-         SELECT COUNT(*)
-         FROM course_enrollments
-         WHERE course_id = ?
-       )
-       WHERE ${idColumn} = ?`,
-      [enrolledCourseId, enrolledCourseId]
-    );
-
+        `UPDATE courses
+        SET students = (
+          SELECT COUNT(*)
+          FROM course_enrollments
+          WHERE course_id = ?
+            AND archived = 0
+        )
+        WHERE ${idColumn} = ?`,
+        [enrolledCourseId, enrolledCourseId]
+      );
     const modulesByCourse = await getCourseLearningModules([enrolledCourseId]);
     const course = rowToCourse(
       rows[0],
@@ -974,6 +1062,92 @@ export async function enrollCourse(req, res) {
     return res.status(500).json({
       success: false,
       message: "Failed to enroll in course.",
+    });
+  }
+}
+
+export async function unenrollCourse(req, res) {
+  const userId = getRequestUserId(req);
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Student account is required.",
+    });
+  }
+
+  const courseId = cleanText(
+    req.params.id ||
+      req.body?.courseId ||
+      req.body?.course_id ||
+      req.query?.courseId ||
+      req.query?.course_id
+  );
+
+  if (!courseId) {
+    return res.status(400).json({
+      success: false,
+      message: "Course ID is required.",
+    });
+  }
+
+  try {
+    const idColumn = await getCourseIdColumn();
+
+    const [courseRows] = await db.execute(
+      `SELECT *
+       FROM courses
+       WHERE ${idColumn} = ?
+       LIMIT 1`,
+      [courseId]
+    );
+
+    if (courseRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found.",
+      });
+    }
+
+    const [result] = await db.execute(
+      `UPDATE course_enrollments
+       SET archived = 1
+       WHERE course_id = ?
+         AND user_id = ?
+         AND archived = 0`,
+      [courseId, userId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "You are not actively enrolled in this course.",
+      });
+    }
+
+    await db.execute(
+      `UPDATE courses
+       SET students = (
+         SELECT COUNT(*)
+         FROM course_enrollments
+         WHERE course_id = ?
+           AND archived = 0
+       )
+       WHERE ${idColumn} = ?`,
+      [courseId, courseId]
+    );
+
+    return res.json({
+      success: true,
+      message: "Course moved to Archived Classes.",
+      courseId,
+    });
+  } catch (error) {
+    console.error("Unenroll course error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to unenroll from course.",
     });
   }
 }
@@ -1039,6 +1213,7 @@ export async function joinCourseByCode(req, res) {
 
   try {
     const idColumn = await getCourseIdColumn();
+
     const [rows] = await db.execute(
       `SELECT
          c.*,
@@ -1048,10 +1223,14 @@ export async function joinCourseByCode(req, res) {
          u.professor_department AS database_professor_department,
          u.profile_image AS database_professor_profile_image
        FROM courses c
-       LEFT JOIN users u ON u.userId = c.professor_id
+       LEFT JOIN users u
+         ON u.userId = c.professor_id
        WHERE c.archived = 0
          AND c.status = 'published'
-         AND (c.course_code = ? OR c.code = ?)
+         AND (
+           c.course_code = ?
+           OR c.code = ?
+         )
        LIMIT 1`,
       [courseCode, courseCode]
     );
@@ -1059,7 +1238,8 @@ export async function joinCourseByCode(req, res) {
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "Course code not found. Please check the code from your professor.",
+        message:
+          "Course code not found. Please check the code from your professor.",
       });
     }
 
@@ -1071,13 +1251,20 @@ export async function joinCourseByCode(req, res) {
 
     if (userId) {
       const [enrollmentResult] = await db.execute(
-        `INSERT IGNORE INTO course_enrollments (course_id, user_id)
-         VALUES (?, ?)`,
+        `INSERT INTO course_enrollments (
+           course_id,
+           user_id,
+           archived
+         )
+         VALUES (?, ?, 0)
+         ON DUPLICATE KEY UPDATE
+           archived = 0`,
         [courseId, userId]
       );
 
       enrolled = true;
-      enrollmentCreated = enrollmentResult.affectedRows > 0;
+      enrollmentCreated =
+        enrollmentResult.affectedRows > 0;
 
       await db.execute(
         `UPDATE courses
@@ -1085,28 +1272,40 @@ export async function joinCourseByCode(req, res) {
            SELECT COUNT(*)
            FROM course_enrollments
            WHERE course_id = ?
+             AND archived = 0
          )
          WHERE ${idColumn} = ?`,
         [courseId, courseId]
       );
     }
 
-    const modulesByCourse = await getCourseLearningModules([courseId]);
-    const [updatedRows] = await db.execute(
-      `SELECT
-         c.*,
-         u.display_name AS database_professor_display_name,
-         u.name AS database_professor_name,
-         u.email AS database_professor_email,
-         u.professor_department AS database_professor_department,
-         u.profile_image AS database_professor_profile_image
-       FROM courses c
-       LEFT JOIN users u ON u.userId = c.professor_id
-       WHERE c.${idColumn} = ?
-       LIMIT 1`,
-      [courseId]
+    const modulesByCourse =
+      await getCourseLearningModules([
+        courseId,
+      ]);
+
+    const [updatedRows] =
+      await db.execute(
+        `SELECT
+           c.*,
+           u.display_name AS database_professor_display_name,
+           u.name AS database_professor_name,
+           u.email AS database_professor_email,
+           u.professor_department AS database_professor_department
+         FROM courses c
+         LEFT JOIN users u
+           ON u.userId = c.professor_id
+         WHERE c.${idColumn} = ?
+         LIMIT 1`,
+        [courseId]
+      );
+
+    const course = rowToCourse(
+      updatedRows[0] || rows[0],
+      modulesByCourse.get(
+        String(courseId)
+      ) || []
     );
-    const course = rowToCourse(updatedRows[0] || rows[0], modulesByCourse.get(String(courseId)) || []);
 
     return res.json({
       success: true,
@@ -1115,7 +1314,10 @@ export async function joinCourseByCode(req, res) {
       course,
     });
   } catch (error) {
-    console.error("Join course by code error:", error);
+    console.error(
+      "Join course by code error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
