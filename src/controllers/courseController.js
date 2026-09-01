@@ -13,6 +13,43 @@ function isTruthy(value) {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
+function wantsCourseSummary(req) {
+  return (
+    isTruthy(req.query?.summaryOnly) ||
+    isTruthy(req.query?.compact) ||
+    isTruthy(req.body?.summaryOnly) ||
+    isTruthy(req.body?.compact)
+  );
+}
+
+function getCourseSelect(idColumn, summaryOnly = false) {
+  if (!summaryOnly) return "c.*";
+
+  return `c.${idColumn} AS course_pk,
+         c.title,
+         c.code,
+         c.summary,
+         c.subject,
+         c.professor_id,
+         c.course_name,
+         c.description,
+         c.course_code,
+         c.learning_objectives,
+         c.status,
+         c.visibility,
+         c.students,
+         c.modules,
+         c.quizzes,
+         c.join_link,
+         c.archived,
+         c.professor_name,
+         c.professor_email,
+         c.professor_department,
+         c.professor_profile_image,
+         c.created_at,
+         c.updated_at`;
+}
+
 function generateCourseCode() {
   return `PB-${crypto.randomBytes(3).toString("hex").toUpperCase()}-${crypto
     .randomBytes(2)
@@ -30,12 +67,9 @@ function getBearerToken(req) {
   return authHeader.slice("Bearer ".length).trim();
 }
 
-function getRequestUserId(req) {
-  const explicitId =
-    req.body?.userId || req.body?.user_id || req.query.userId || req.query.user_id;
-
-  if (explicitId) {
-    return explicitId;
+function getTokenUser(req) {
+  if (req.user) {
+    return req.user;
   }
 
   const token = getBearerToken(req);
@@ -45,11 +79,166 @@ function getRequestUserId(req) {
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    return decoded.id || decoded.userId || null;
+    return jwt.verify(token, JWT_SECRET);
   } catch {
     return null;
   }
+}
+
+function getRequestUserId(req) {
+  const explicitId =
+    req.body?.userId || req.body?.user_id || req.query.userId || req.query.user_id;
+
+  if (explicitId) {
+    return explicitId;
+  }
+
+  const decoded = getTokenUser(req);
+
+  return decoded?.id || decoded?.userId || decoded?.user_id || null;
+}
+
+function normalizeRole(role) {
+  const value = cleanText(role).toLowerCase().replace(/[\s-]+/g, "_");
+
+  if (value === "instructor") return "professor";
+
+  return value;
+}
+
+async function getRequestUserProfile(req) {
+  const tokenUser = getTokenUser(req);
+
+  if (!tokenUser) {
+    return null;
+  }
+
+  const userId = tokenUser.id || tokenUser.userId || tokenUser.user_id;
+  const email = cleanText(tokenUser.email).toLowerCase();
+
+  try {
+    let rows = [];
+
+    if (userId) {
+      [rows] = await db.execute(
+        `SELECT userId, email, role, name, display_name,
+                professor_department, profile_image
+         FROM users
+         WHERE userId = ?
+         LIMIT 1`,
+        [userId]
+      );
+    } else if (email) {
+      [rows] = await db.execute(
+        `SELECT userId, email, role, name, display_name,
+                professor_department, profile_image
+         FROM users
+         WHERE LOWER(email) = ?
+         LIMIT 1`,
+        [email]
+      );
+    }
+
+    if (rows.length) {
+      const user = rows[0];
+
+      return {
+        ...tokenUser,
+        id: user.userId,
+        userId: user.userId,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        displayName: user.display_name || user.name || "",
+        display_name: user.display_name || user.name || "",
+        professorDepartment: user.professor_department || "",
+        professor_department: user.professor_department || "",
+        profileImage: user.profile_image || "",
+        profile_image: user.profile_image || "",
+      };
+    }
+  } catch (error) {
+    console.warn("Could not load authenticated course owner profile:", error);
+  }
+
+  return tokenUser;
+}
+
+function isProfessorUser(user) {
+  return normalizeRole(user?.role) === "professor";
+}
+
+function getProfessorOwnerCondition(tableAlias, user) {
+  const prefix = tableAlias ? `${tableAlias}.` : "";
+  const userId = user?.id || user?.userId || user?.user_id;
+  const email = cleanText(user?.email).toLowerCase();
+  const clauses = [];
+  const params = [];
+
+  if (userId) {
+    clauses.push(`${prefix}professor_id = ?`);
+    params.push(userId);
+  }
+
+  if (email) {
+    clauses.push(`LOWER(${prefix}professor_email) = ?`);
+    params.push(email);
+  }
+
+  return {
+    sql: clauses.length ? `(${clauses.join(" OR ")})` : "0 = 1",
+    params,
+  };
+}
+
+function courseMatchesProfessorFields(course, fields) {
+  const professorId = cleanText(fields.professorId || fields.professor_id);
+  const professorEmail = cleanText(fields.professorEmail || fields.professor_email).toLowerCase();
+  const courseProfessorId = cleanText(course?.professor_id || course?.professorId);
+  const courseProfessorEmail = cleanText(
+    course?.professor_email || course?.professorEmail
+  ).toLowerCase();
+
+  if (professorId && courseProfessorId && professorId === courseProfessorId) {
+    return true;
+  }
+
+  if (professorEmail && courseProfessorEmail && professorEmail === courseProfessorEmail) {
+    return true;
+  }
+
+  return false;
+}
+
+async function applyAuthenticatedProfessorFields(req, fields) {
+  const currentUser = await getRequestUserProfile(req);
+
+  if (!isProfessorUser(currentUser)) {
+    return fields;
+  }
+
+  const professorId = currentUser.id || currentUser.userId || currentUser.user_id || null;
+  const professorName =
+    cleanText(currentUser.displayName || currentUser.display_name || currentUser.name) ||
+    fields.professorName ||
+    "Professor";
+
+  return {
+    ...fields,
+    professorId,
+    professorName,
+    professorEmail: cleanText(currentUser.email || fields.professorEmail),
+    professorDepartment: cleanText(
+      currentUser.professorDepartment ||
+        currentUser.professor_department ||
+        fields.professorDepartment
+    ),
+    professorProfileImage: cleanText(
+      currentUser.profileImage ||
+        currentUser.profile_image ||
+        fields.professorProfileImage
+    ),
+  };
 }
 
 function parseJsonList(value) {
@@ -423,6 +612,8 @@ function rowToModule(row) {
     joinLink: row.join_link || "",
     join_link: row.join_link || "",
     archived: row.archived === 1 || row.archived === true,
+    professorId: row.professor_id || null,
+    professor_id: row.professor_id || null,
     professorDisplayName:
       row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
     professor_display_name:
@@ -493,7 +684,9 @@ function payloadToCourseFields(body) {
   const courseCode =
     cleanText(body.courseCode || body.course_code || body.code).toUpperCase() ||
     generateCourseCode();
-  const title = cleanText(body.title || body.courseName || body.course_name || courseCode);
+  const title = cleanText(
+    body.title || body.courseTitle || body.course_title || body.courseName || body.course_name
+  );
   const summary = cleanText(
     body.summary || body.description || body.courseDescription || body.course_description
   );
@@ -626,6 +819,15 @@ async function getOrCreateCourse(fields) {
   );
 
   if (existing.length > 0) {
+    if (
+      (fields.professorId || fields.professorEmail) &&
+      !courseMatchesProfessorFields(existing[0], fields)
+    ) {
+      const error = new Error("A course with that code already exists.");
+      error.code = "ER_DUP_ENTRY";
+      throw error;
+    }
+
     await db.execute(
       `UPDATE courses
        SET course_name = ?,
@@ -731,6 +933,7 @@ async function getModuleRows(where = "", params = []) {
        c.join_link,
        c.archived,
        c.students,
+       c.professor_id,
        c.professor_name,
        c.professor_email,
        c.professor_department,
@@ -754,11 +957,13 @@ async function getModuleRows(where = "", params = []) {
 export async function getCourses(req, res) {
   try {
     const idColumn = await getCourseIdColumn();
+    const currentUser = await getRequestUserProfile(req);
     const includeArchived =
       req.query.includeArchived === "1" || req.query.includeArchived === "true";
     const publicOnly = req.query.public === "1" || req.query.public === "true";
     const publishedOnly =
       req.query.published === "1" || req.query.published === "true";
+    const summaryOnly = wantsCourseSummary(req);
     const where = [];
     const params = [];
 
@@ -771,10 +976,17 @@ export async function getCourses(req, res) {
       where.push("c.status = ?");
       params.push("published");
     }
+    if (isProfessorUser(currentUser) && !publicOnly) {
+      const owner = getProfessorOwnerCondition("c", currentUser);
+      where.push(owner.sql);
+      params.push(...owner.params);
+    }
+
+    const courseSelect = getCourseSelect(idColumn, summaryOnly);
 
     const [courseRows] = await db.execute(
       `SELECT
-         c.*,
+         ${courseSelect},
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
@@ -787,7 +999,9 @@ export async function getCourses(req, res) {
       params
     );
 
-    const modulesByCourse = await getCourseLearningModules(courseRows.map(getCourseId));
+    const modulesByCourse = summaryOnly
+      ? new Map()
+      : await getCourseLearningModules(courseRows.map(getCourseId));
 
     const courses = courseRows.map((course) =>
       rowToCourse(course, modulesByCourse.get(String(getCourseId(course))) || [])
@@ -822,19 +1036,21 @@ export async function getEnrolledCourses(req, res) {
     const includeArchived = isTruthy(req.query.includeArchived);
     const archivedOnly =
       isTruthy(req.query.archived) || isTruthy(req.query.archivedOnly);
+    const summaryOnly = wantsCourseSummary(req);
+    const courseSelect = getCourseSelect(idColumn, summaryOnly);
     const where = ["ce.user_id = ?"];
     const params = [userId];
 
     if (archivedOnly) {
-      where.push("c.archived = 1");
+      where.push("(ce.archived = 1 OR c.archived = 1)");
     } else if (!includeArchived) {
+      where.push("ce.archived = 0");
       where.push("c.archived = 0");
     }
 
     const [courseRows] = await db.execute(
-<<<<<<< HEAD
       `SELECT
-         c.*,
+         ${courseSelect},
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
@@ -847,25 +1063,10 @@ export async function getEnrolledCourses(req, res) {
        ORDER BY ce.created_at DESC, c.updated_at DESC, c.${idColumn} DESC`,
       params
     );
-=======
-  `SELECT
-     c.*,
-     u.display_name AS database_professor_display_name,
-     u.name AS database_professor_name,
-     u.email AS database_professor_email,
-     u.professor_department AS database_professor_department
-   FROM course_enrollments ce
-   INNER JOIN courses c ON c.${idColumn} = ce.course_id
-   LEFT JOIN users u ON u.userId = c.professor_id
-   WHERE ce.user_id = ?
-     AND ce.archived = 0
-     AND c.archived = 0
-   ORDER BY ce.created_at DESC, c.updated_at DESC, c.${idColumn} DESC`,
-  [userId]
-);
->>>>>>> 9641d32a23621b2c5d7cce27cf2176f9f63378f5
 
-    const modulesByCourse = await getCourseLearningModules(courseRows.map(getCourseId));
+    const modulesByCourse = summaryOnly
+      ? new Map()
+      : await getCourseLearningModules(courseRows.map(getCourseId));
     const courses = courseRows.map((course) =>
       rowToCourse(course, modulesByCourse.get(String(getCourseId(course))) || [])
     );
@@ -896,31 +1097,35 @@ export async function getArchivedCourses(req, res) {
 
   try {
     const idColumn = await getCourseIdColumn();
+    const summaryOnly = wantsCourseSummary(req);
+    const courseSelect = getCourseSelect(idColumn, summaryOnly);
 
     const [courseRows] = await db.execute(
       `SELECT
-         c.*,
+         ${courseSelect},
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
-         u.professor_department AS database_professor_department
+         u.professor_department AS database_professor_department,
+         u.profile_image AS database_professor_profile_image
        FROM course_enrollments ce
        INNER JOIN courses c
          ON c.${idColumn} = ce.course_id
        LEFT JOIN users u
          ON u.userId = c.professor_id
        WHERE ce.user_id = ?
-         AND ce.archived = 1
+         AND (ce.archived = 1 OR c.archived = 1)
        ORDER BY ce.created_at DESC,
                 c.updated_at DESC,
                 c.${idColumn} DESC`,
       [userId]
     );
 
-    const modulesByCourse =
-      await getCourseLearningModules(
-        courseRows.map(getCourseId)
-      );
+    const modulesByCourse = summaryOnly
+      ? new Map()
+      : await getCourseLearningModules(
+          courseRows.map(getCourseId)
+        );
 
     const courses = courseRows.map((course) =>
       rowToCourse(
@@ -984,6 +1189,8 @@ export async function enrollCourse(req, res) {
 
   try {
     const idColumn = await getCourseIdColumn();
+    const summaryOnly = wantsCourseSummary(req);
+    const courseSelect = getCourseSelect(idColumn, summaryOnly);
     const where = ["c.archived = 0", "c.status = 'published'"];
     const params = [];
 
@@ -999,7 +1206,7 @@ export async function enrollCourse(req, res) {
 
     const [rows] = await db.execute(
       `SELECT
-         c.*,
+         ${courseSelect},
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
@@ -1044,9 +1251,26 @@ export async function enrollCourse(req, res) {
         WHERE ${idColumn} = ?`,
         [enrolledCourseId, enrolledCourseId]
       );
-    const modulesByCourse = await getCourseLearningModules([enrolledCourseId]);
+
+    const [updatedRows] = await db.execute(
+      `SELECT
+         ${courseSelect},
+         u.display_name AS database_professor_display_name,
+         u.name AS database_professor_name,
+         u.email AS database_professor_email,
+         u.professor_department AS database_professor_department,
+         u.profile_image AS database_professor_profile_image
+       FROM courses c
+       LEFT JOIN users u ON u.userId = c.professor_id
+       WHERE c.${idColumn} = ?
+       LIMIT 1`,
+      [enrolledCourseId]
+    );
+    const modulesByCourse = summaryOnly
+      ? new Map()
+      : await getCourseLearningModules([enrolledCourseId]);
     const course = rowToCourse(
-      rows[0],
+      updatedRows[0] || rows[0],
       modulesByCourse.get(String(enrolledCourseId)) || []
     );
 
@@ -1155,6 +1379,16 @@ export async function unenrollCourse(req, res) {
 export async function getCourseById(req, res) {
   try {
     const idColumn = await getCourseIdColumn();
+    const currentUser = await getRequestUserProfile(req);
+    const where = [`c.${idColumn} = ?`];
+    const params = [req.params.id];
+
+    if (isProfessorUser(currentUser)) {
+      const owner = getProfessorOwnerCondition("c", currentUser);
+      where.push(owner.sql);
+      params.push(...owner.params);
+    }
+
     const [rows] = await db.execute(
       `SELECT
          c.*,
@@ -1165,9 +1399,9 @@ export async function getCourseById(req, res) {
          u.profile_image AS database_professor_profile_image
        FROM courses c
        LEFT JOIN users u ON u.userId = c.professor_id
-       WHERE c.${idColumn} = ?
+       WHERE ${where.join(" AND ")}
        LIMIT 1`,
-      [req.params.id]
+      params
     );
 
     if (rows.length === 0) {
@@ -1213,10 +1447,12 @@ export async function joinCourseByCode(req, res) {
 
   try {
     const idColumn = await getCourseIdColumn();
+    const summaryOnly = wantsCourseSummary(req);
+    const courseSelect = getCourseSelect(idColumn, summaryOnly);
 
     const [rows] = await db.execute(
       `SELECT
-         c.*,
+         ${courseSelect},
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
@@ -1279,19 +1515,21 @@ export async function joinCourseByCode(req, res) {
       );
     }
 
-    const modulesByCourse =
-      await getCourseLearningModules([
-        courseId,
-      ]);
+    const modulesByCourse = summaryOnly
+      ? new Map()
+      : await getCourseLearningModules([
+          courseId,
+        ]);
 
     const [updatedRows] =
       await db.execute(
         `SELECT
-           c.*,
+           ${courseSelect},
            u.display_name AS database_professor_display_name,
            u.name AS database_professor_name,
            u.email AS database_professor_email,
-           u.professor_department AS database_professor_department
+           u.professor_department AS database_professor_department,
+           u.profile_image AS database_professor_profile_image
          FROM courses c
          LEFT JOIN users u
            ON u.userId = c.professor_id
@@ -1328,6 +1566,7 @@ export async function joinCourseByCode(req, res) {
 
 export async function getLearningModules(req, res) {
   try {
+    const currentUser = await getRequestUserProfile(req);
     const includeArchived =
       req.query.includeArchived === "1" || req.query.includeArchived === "true";
     const publicOnly = req.query.public === "1" || req.query.public === "true";
@@ -1345,6 +1584,11 @@ export async function getLearningModules(req, res) {
     if (publishedOnly) {
       where.push("lm.status = ?");
       params.push("published");
+    }
+    if (isProfessorUser(currentUser) && !publicOnly) {
+      const owner = getProfessorOwnerCondition("c", currentUser);
+      where.push(owner.sql);
+      params.push(...owner.params);
     }
 
     const rows = await getModuleRows(
@@ -1370,7 +1614,17 @@ export async function getLearningModules(req, res) {
 
 export async function getLearningModuleById(req, res) {
   try {
-    const rows = await getModuleRows("WHERE lm.lesson_id = ?", [req.params.id]);
+    const currentUser = await getRequestUserProfile(req);
+    const where = ["lm.lesson_id = ?"];
+    const params = [req.params.id];
+
+    if (isProfessorUser(currentUser)) {
+      const owner = getProfessorOwnerCondition("c", currentUser);
+      where.push(owner.sql);
+      params.push(...owner.params);
+    }
+
+    const rows = await getModuleRows(`WHERE ${where.join(" AND ")}`, params);
 
     if (rows.length === 0) {
       return res.status(404).json({
@@ -1397,7 +1651,7 @@ export async function getLearningModuleById(req, res) {
 }
 
 export async function createCourse(req, res) {
-  const fields = payloadToCourseFields(req.body);
+  let fields = payloadToCourseFields(req.body);
   const validationMessage = validateCourse(fields);
 
   if (validationMessage) {
@@ -1408,6 +1662,8 @@ export async function createCourse(req, res) {
   }
 
   try {
+    fields = await applyAuthenticatedProfessorFields(req, fields);
+
     const idColumn = await getCourseIdColumn();
     const lessonPages = toJsonList(fields.lessonPages);
     const quizItems = toJsonList(fields.quizItems);
@@ -1464,7 +1720,7 @@ export async function createCourse(req, res) {
 }
 
 export async function createLearningModule(req, res) {
-  const fields = payloadToModuleFields(req.body);
+  let fields = payloadToModuleFields(req.body);
   const validationMessage = validateModule(fields);
 
   if (validationMessage) {
@@ -1475,6 +1731,8 @@ export async function createLearningModule(req, res) {
   }
 
   try {
+    fields = await applyAuthenticatedProfessorFields(req, fields);
+
     const course = await getOrCreateCourse(fields);
     const quizContents = toJsonList(fields.quizItems);
     const lessonContents = toJsonList(fields.lessonPages);
@@ -1509,15 +1767,12 @@ export async function createLearningModule(req, res) {
   } catch (error) {
     console.error("Create learning module error:", error);
 
-    return res.status(500).json({
-      success: false,
-      message: "Failed to add learning module.",
-    });
+    return sendCourseWriteError(res, error, "Failed to add learning module.");
   }
 }
 
 export async function updateCourse(req, res) {
-  const fields = payloadToCourseFields(req.body);
+  let fields = payloadToCourseFields(req.body);
   const validationMessage = validateCourse(fields);
   const id = req.params.id || req.body.id || req.body.course_id;
 
@@ -1536,10 +1791,21 @@ export async function updateCourse(req, res) {
   }
 
   try {
+    fields = await applyAuthenticatedProfessorFields(req, fields);
+
     const idColumn = await getCourseIdColumn();
     const lessonPages = toJsonList(fields.lessonPages);
     const quizItems = toJsonList(fields.quizItems);
     const joinLink = `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`;
+    const currentUser = await getRequestUserProfile(req);
+    const where = [`${idColumn} = ?`];
+    const whereParams = [id];
+
+    if (isProfessorUser(currentUser)) {
+      const owner = getProfessorOwnerCondition("", currentUser);
+      where.push(owner.sql);
+      whereParams.push(...owner.params);
+    }
 
     const [result] = await db.execute(
       `UPDATE courses
@@ -1565,7 +1831,7 @@ export async function updateCourse(req, res) {
            professor_email = ?,
            professor_department = ?,
            professor_profile_image = ?
-       WHERE ${idColumn} = ?`,
+       WHERE ${where.join(" AND ")}`,
       [
         fields.title,
         fields.courseCode,
@@ -1589,7 +1855,7 @@ export async function updateCourse(req, res) {
         fields.professorEmail,
         fields.professorDepartment,
         fields.professorProfileImage,
-        id,
+        ...whereParams,
       ]
     );
 
@@ -1617,7 +1883,7 @@ export async function updateCourse(req, res) {
 }
 
 export async function updateLearningModule(req, res) {
-  const fields = payloadToModuleFields(req.body);
+  let fields = payloadToModuleFields(req.body);
   const validationMessage = validateModule(fields);
   const id = req.params.id || req.body.id || req.body.lesson_id;
 
@@ -1636,7 +1902,27 @@ export async function updateLearningModule(req, res) {
   }
 
   try {
+    fields = await applyAuthenticatedProfessorFields(req, fields);
+
     const course = await getOrCreateCourse(fields);
+    const currentUser = await getRequestUserProfile(req);
+    const where = ["lesson_id = ?"];
+    const whereParams = [id];
+
+    if (isProfessorUser(currentUser)) {
+      const idColumn = await getCourseIdColumn();
+      const owner = getProfessorOwnerCondition("c", currentUser);
+      where.push(
+        `EXISTS (
+           SELECT 1
+           FROM courses c
+           WHERE c.${idColumn} = learning_modules.course_id
+             AND ${owner.sql}
+         )`
+      );
+      whereParams.push(...owner.params);
+    }
+
     const [result] = await db.execute(
       `UPDATE learning_modules
        SET course_id = ?,
@@ -1648,7 +1934,7 @@ export async function updateLearningModule(req, res) {
            learning_objectives = ?,
            lesson_contents = ?,
            has_quiz = ?
-       WHERE lesson_id = ?`,
+       WHERE ${where.join(" AND ")}`,
       [
         getCourseId(course),
         fields.title,
@@ -1659,7 +1945,7 @@ export async function updateLearningModule(req, res) {
         fields.learningObjectives,
         toJsonList(fields.lessonPages),
         fields.quizItems.length > 0 ? 1 : 0,
-        id,
+        ...whereParams,
       ]
     );
 
@@ -1682,10 +1968,7 @@ export async function updateLearningModule(req, res) {
   } catch (error) {
     console.error("Update learning module error:", error);
 
-    return res.status(500).json({
-      success: false,
-      message: "Failed to update learning module.",
-    });
+    return sendCourseWriteError(res, error, "Failed to update learning module.");
   }
 }
 
@@ -1704,11 +1987,21 @@ export async function archiveCourse(req, res) {
 
   try {
     const idColumn = await getCourseIdColumn();
+    const currentUser = await getRequestUserProfile(req);
+    const where = [`${idColumn} = ?`];
+    const params = [id];
+
+    if (isProfessorUser(currentUser)) {
+      const owner = getProfessorOwnerCondition("", currentUser);
+      where.push(owner.sql);
+      params.push(...owner.params);
+    }
+
     const [result] = await db.execute(
       `UPDATE courses
        SET archived = ?
-       WHERE ${idColumn} = ?`,
-      [archived ? 1 : 0, id]
+       WHERE ${where.join(" AND ")}`,
+      [archived ? 1 : 0, ...params]
     );
 
     if (result.affectedRows === 0) {
@@ -1764,7 +2057,20 @@ export async function deleteCourse(req, res) {
 
   try {
     const idColumn = await getCourseIdColumn();
-    const [result] = await db.execute(`DELETE FROM courses WHERE ${idColumn} = ?`, [id]);
+    const currentUser = await getRequestUserProfile(req);
+    const where = [`${idColumn} = ?`];
+    const params = [id];
+
+    if (isProfessorUser(currentUser)) {
+      const owner = getProfessorOwnerCondition("", currentUser);
+      where.push(owner.sql);
+      params.push(...owner.params);
+    }
+
+    const [result] = await db.execute(
+      `DELETE FROM courses WHERE ${where.join(" AND ")}`,
+      params
+    );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({

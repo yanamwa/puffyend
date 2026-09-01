@@ -1,5 +1,6 @@
 import express from "express";
 import authenticateUser from "../middleware/authMiddleware.js";
+import professorProofUpload from "../middleware/professorProofUpload.js";
 import uploadProfileImage from "../middleware/profileImageUpload.js";
 
 import {
@@ -21,8 +22,33 @@ import {
   updateProfessorRegistration,
   updateProfileImage,
 } from "../controllers/userController.js";
+import {
+  createNotification,
+  deleteNotification,
+  getNotifications,
+} from "../controllers/notificationController.js";
 
 const router = express.Router();
+
+function handleProfessorProofUpload(req, res, next) {
+  professorProofUpload.single("employmentProof")(req, res, (error) => {
+    if (!error) {
+      next();
+      return;
+    }
+
+    let message = error.message || "ID photo upload failed.";
+
+    if (error.code === "LIMIT_FILE_SIZE") {
+      message = "The uploaded ID photo must not exceed 5 MB.";
+    }
+
+    res.status(error.statusCode || 400).json({
+      success: false,
+      message,
+    });
+  });
+}
 
 /* =========================
    USER MANAGEMENT
@@ -37,6 +63,7 @@ router.post(
 
 router.post(
   "/users/professor",
+  handleProfessorProofUpload,
   createProfessorAccount
 );
 
@@ -95,6 +122,28 @@ router.post(
 router.delete(
   "/users/:id/archived",
   permanentlyRemoveArchivedAccount
+);
+
+/* =========================
+   NOTIFICATIONS
+========================= */
+
+router.get(
+  "/notifications",
+  authenticateUser,
+  getNotifications
+);
+
+router.post(
+  "/notifications",
+  authenticateUser,
+  createNotification
+);
+
+router.delete(
+  "/notifications/:id",
+  authenticateUser,
+  deleteNotification
 );
 
 /* =========================

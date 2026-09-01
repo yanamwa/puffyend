@@ -344,12 +344,18 @@ async function initMonitoringTables() {
       enrollment_id INT AUTO_INCREMENT PRIMARY KEY,
       course_id INT NOT NULL,
       user_id INT NOT NULL,
+      archived TINYINT(1) NOT NULL DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE KEY course_enrollments_unique (course_id, user_id),
       INDEX course_enrollments_course_idx (course_id),
       INDEX course_enrollments_user_idx (user_id)
     )
   `);
+  await ensureTableColumn(
+    "course_enrollments",
+    "archived",
+    "archived TINYINT(1) NOT NULL DEFAULT 0"
+  );
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS saved_courses (
@@ -427,6 +433,82 @@ async function initMonitoringTables() {
       INDEX adaptive_feedback_attempt_idx (attempts_id),
       INDEX adaptive_feedback_user_idx (user_id)
     )
+  `);
+}
+
+async function initNotificationTables() {
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS managed_notifications (
+      notification_id INT AUTO_INCREMENT PRIMARY KEY,
+      title VARCHAR(255) NOT NULL,
+      message TEXT NOT NULL,
+      target VARCHAR(50) NOT NULL DEFAULT 'all',
+      type VARCHAR(50) NOT NULL DEFAULT 'announcement',
+      created_by_user_id INT NULL,
+      created_by_name VARCHAR(255) NULL,
+      created_by_role VARCHAR(50) NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX managed_notifications_created_at_idx (created_at),
+      INDEX managed_notifications_target_idx (target)
+    )
+  `);
+
+  await ensureTableColumn(
+    "managed_notifications",
+    "title",
+    "title VARCHAR(255) NOT NULL"
+  );
+  await ensureTableColumn(
+    "managed_notifications",
+    "message",
+    "message TEXT NOT NULL"
+  );
+  await ensureTableColumn(
+    "managed_notifications",
+    "target",
+    "target VARCHAR(50) NOT NULL DEFAULT 'all'"
+  );
+  await ensureTableColumn(
+    "managed_notifications",
+    "type",
+    "type VARCHAR(50) NOT NULL DEFAULT 'announcement'"
+  );
+  await ensureTableColumn(
+    "managed_notifications",
+    "created_by_user_id",
+    "created_by_user_id INT NULL"
+  );
+  await ensureTableColumn(
+    "managed_notifications",
+    "created_by_name",
+    "created_by_name VARCHAR(255) NULL"
+  );
+  await ensureTableColumn(
+    "managed_notifications",
+    "created_by_role",
+    "created_by_role VARCHAR(50) NULL"
+  );
+  await ensureTableColumn(
+    "managed_notifications",
+    "created_at",
+    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+  );
+  await ensureTableColumn(
+    "managed_notifications",
+    "updated_at",
+    "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+  );
+
+  await db.execute(`
+    DELETE older
+    FROM managed_notifications older
+    INNER JOIN managed_notifications newer
+      ON newer.created_at > older.created_at
+      OR (
+        newer.created_at = older.created_at
+        AND newer.notification_id > older.notification_id
+      )
   `);
 }
 
@@ -521,6 +603,8 @@ export async function initDb() {
       professor_id VARCHAR(100) NULL,
       professor_faculty_id VARCHAR(100) NULL,
       professor_department VARCHAR(255) NULL,
+      professor_position VARCHAR(255) NULL,
+      professor_specialization VARCHAR(255) NULL,
       professor_employment_proof TEXT NULL,
       verification_status VARCHAR(50) NOT NULL DEFAULT 'pending',
       is_archived TINYINT(1) NOT NULL DEFAULT 0,
@@ -571,6 +655,14 @@ export async function initDb() {
     "professor_department VARCHAR(255) NULL"
   );
   await ensureColumn(
+    "professor_position",
+    "professor_position VARCHAR(255) NULL"
+  );
+  await ensureColumn(
+    "professor_specialization",
+    "professor_specialization VARCHAR(255) NULL"
+  );
+  await ensureColumn(
     "professor_employment_proof",
     "professor_employment_proof TEXT NULL"
   );
@@ -601,6 +693,7 @@ export async function initDb() {
   await initCourseTables();
   await initQuizModeTables();
   await initMonitoringTables();
+  await initNotificationTables();
 
   return db;
 }

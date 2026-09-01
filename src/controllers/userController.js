@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
+import fs from "node:fs/promises";
 import authenticateUser from "../middleware/authMiddleware.js";
 import { sendStudentTemporaryPasswordEmail } from "../utils/mailer.js";
 
@@ -37,6 +38,23 @@ function cleanText(value) {
 
 function cleanEmail(value) {
   return cleanText(value).toLowerCase();
+}
+
+function getUploadedProfessorProofUrl(file) {
+  if (!file?.filename) return "";
+  return `/api/uploads/professor-ids/${file.filename}`;
+}
+
+async function removeUploadedProfessorProof(file) {
+  if (!file?.path) return;
+
+  try {
+    await fs.unlink(file.path);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.error("Could not remove professor proof upload:", error);
+    }
+  }
 }
 
 function normalizeYearLevel(value) {
@@ -101,7 +119,7 @@ function getTemporaryAccountSettings(body = {}) {
       durationDays > MAX_TEMPORARY_ACCOUNT_DAYS
     ) {
       return {
-        error: Temporary accounts must expire in 1 to ${MAX_TEMPORARY_ACCOUNT_DAYS} days.,
+        error: `Temporary accounts must expire in 1 to ${MAX_TEMPORARY_ACCOUNT_DAYS} days.`,
       };
     }
 
@@ -310,6 +328,7 @@ export async function getUsers(_req, res) {
       `SELECT userId AS id, email, role, name, display_name, year_level,
        section_name, onboarding_completed, is_verified, verification_id,
        student_id, professor_id, professor_faculty_id, professor_department,
+       professor_position, professor_specialization,
        professor_employment_proof, verification_status, is_archived,
        archived_at, must_change_password, is_temporary, temporary_expires_at,
        created_at
@@ -339,6 +358,7 @@ export async function getUserById(req, res) {
       `SELECT userId AS id, email, role, name, display_name, year_level,
        section_name, onboarding_completed, is_verified, verification_id,
        student_id, professor_id, professor_faculty_id, professor_department,
+       professor_position, professor_specialization,
        professor_employment_proof, verification_status, is_archived,
        archived_at, must_change_password, is_temporary, temporary_expires_at,
        created_at
@@ -468,6 +488,7 @@ export async function createStudentAccount(req, res) {
       `SELECT userId AS id, email, role, name, display_name, year_level,
        section_name, onboarding_completed, is_verified, verification_id,
        student_id, professor_id, professor_faculty_id, professor_department,
+       professor_position, professor_specialization,
        professor_employment_proof, verification_status, is_archived,
        archived_at, must_change_password, is_temporary, temporary_expires_at,
        created_at
@@ -560,6 +581,7 @@ export async function createAdminAccount(req, res) {
       `SELECT userId AS id, email, role, name, display_name, year_level,
        section_name, onboarding_completed, is_verified, verification_id,
        student_id, professor_id, professor_faculty_id, professor_department,
+       professor_position, professor_specialization,
        professor_employment_proof, verification_status, is_archived,
        archived_at, must_change_password, is_temporary, temporary_expires_at,
        created_at
@@ -618,7 +640,9 @@ export async function createProfessorAccount(req, res) {
     req.body.professor_specialization
   );
 
+  const uploadedProofUrl = getUploadedProfessorProofUrl(req.file);
   const employmentProof = cleanText(
+    uploadedProofUrl ||
     req.body.employmentProof ||
     req.body.proofOfEmployment ||
     req.body.professorEmploymentProof ||
@@ -629,6 +653,8 @@ export async function createProfessorAccount(req, res) {
     getTemporaryAccountSettings(req.body);
 
   if (!email || !name) {
+    await removeUploadedProfessorProof(req.file);
+
     return res.status(400).json({
       success: false,
       message:
@@ -636,14 +662,45 @@ export async function createProfessorAccount(req, res) {
     });
   }
 
-  if (facultyId.length > 100) {
+  if (!facultyId) {
+    await removeUploadedProfessorProof(req.file);
+
     return res.status(400).json({
       success: false,
-      message: "Faculty ID is too long.",
+      message: "Employee or faculty ID is required.",
+    });
+  }
+
+  if (facultyId.length > 100) {
+    await removeUploadedProfessorProof(req.file);
+
+    return res.status(400).json({
+      success: false,
+      message: "Employee or faculty ID must be 100 characters or fewer.",
+    });
+  }
+
+  if (!department) {
+    await removeUploadedProfessorProof(req.file);
+
+    return res.status(400).json({
+      success: false,
+      message: "Department is required.",
+    });
+  }
+
+  if (!employmentProof) {
+    await removeUploadedProfessorProof(req.file);
+
+    return res.status(400).json({
+      success: false,
+      message: "Faculty or employee ID photo is required.",
     });
   }
 
   if (temporaryAccount.error) {
+    await removeUploadedProfessorProof(req.file);
+
     return res.status(400).json({
       success: false,
       message: temporaryAccount.error,
@@ -660,6 +717,8 @@ export async function createProfessorAccount(req, res) {
     );
 
     if (existingEmail.length > 0) {
+      await removeUploadedProfessorProof(req.file);
+
       return res.status(409).json({
         success: false,
         message:
@@ -838,6 +897,7 @@ export async function updateProfessorRegistration(req, res) {
       `SELECT userId AS id, email, role, name, display_name, year_level,
        section_name, onboarding_completed, is_verified, verification_id,
        student_id, professor_id, professor_faculty_id, professor_department,
+       professor_position, professor_specialization,
        professor_employment_proof, verification_status, is_archived,
        archived_at, must_change_password, is_temporary, temporary_expires_at,
        created_at
@@ -902,6 +962,7 @@ export async function updateAccountArchive(req, res) {
       `SELECT userId AS id, email, role, name, display_name, year_level,
        section_name, onboarding_completed, is_verified, verification_id,
        student_id, professor_id, professor_faculty_id, professor_department,
+       professor_position, professor_specialization,
        professor_employment_proof, verification_status, is_archived,
        archived_at, must_change_password, is_temporary, temporary_expires_at,
        created_at
@@ -1419,7 +1480,7 @@ export async function updateOnboardingSection(req, res) {
     if (sectionName.charAt(0) !== yearNumber) {
       return res.status(400).json({
         success: false,
-        message: Please choose a ${yearNumber}A-${yearNumber}F section for ${yearLevel}.,
+        message: `Please choose a ${yearNumber}A-${yearNumber}F section for ${yearLevel}.`,
       });
     }
 
@@ -1530,7 +1591,7 @@ export async function updateProfileImage(req, res) {
     }
 
     const profileImage =
-      /uploads/profile-images/${req.file.filename};
+      `/uploads/profile-images/${req.file.filename}`;
 
     let result;
 
@@ -1589,6 +1650,8 @@ export async function updateProfileImage(req, res) {
             professor_id,
             professor_faculty_id,
             professor_department,
+            professor_position,
+            professor_specialization,
             professor_employment_proof,
             verification_status,
             is_archived,
@@ -1622,6 +1685,8 @@ export async function updateProfileImage(req, res) {
             professor_id,
             professor_faculty_id,
             professor_department,
+            professor_position,
+            professor_specialization,
             professor_employment_proof,
             verification_status,
             is_archived,
