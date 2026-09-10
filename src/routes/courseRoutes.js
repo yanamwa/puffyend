@@ -1,4 +1,5 @@
 import express from "express";
+
 import {
   createCourse,
   createLearningModule,
@@ -12,18 +13,26 @@ import {
   getLearningModuleById,
   getLearningModules,
   handleLegacyLearningModule,
+
+  // ENROLLMENT
   enrollCourse,
+  getCourseEnrollments,
+  approveEnrollment,
+  declineEnrollment,
   unenrollCourse,
+
   joinCourseByCode,
   updateCourse,
   updateLearningModule,
 } from "../controllers/courseController.js";
+
 import {
   createMode,
   deleteMode,
   getModes,
   updateMode,
 } from "../controllers/modeController.js";
+
 import {
   generateAdaptiveFeedback,
   getCourseMonitoring,
@@ -35,88 +44,435 @@ import {
 
 const router = express.Router();
 
+
+/* =====================================================
+   LEGACY MULTIPART PARSER
+===================================================== */
+
 function parseMultipartText(body, boundary) {
   const result = {};
-  const parts = body.split(`--${boundary}`);
+
+  const parts = body.split(
+    `--${boundary}`
+  );
 
   parts.forEach((part) => {
-    const nameMatch = part.match(/name="([^"]+)"/);
-    if (!nameMatch) return;
+    const nameMatch = part.match(
+      /name="([^"]+)"/
+    );
 
-    const filenameMatch = part.match(/filename="([^"]*)"/);
-    const valueStart = part.indexOf("\r\n\r\n");
-    if (valueStart === -1) return;
+    if (!nameMatch) {
+      return;
+    }
 
-    const rawValue = part.slice(valueStart + 4).replace(/\r\n$/, "").trim();
-    result[nameMatch[1]] = filenameMatch ? filenameMatch[1] : rawValue;
+    const filenameMatch = part.match(
+      /filename="([^"]*)"/
+    );
+
+    const valueStart =
+      part.indexOf("\r\n\r\n");
+
+    if (valueStart === -1) {
+      return;
+    }
+
+    const rawValue = part
+      .slice(valueStart + 4)
+      .replace(/\r\n$/, "")
+      .trim();
+
+    result[nameMatch[1]] =
+      filenameMatch
+        ? filenameMatch[1]
+        : rawValue;
   });
 
   return result;
 }
 
-function parseLegacyModeBody(req, _res, next) {
-  if (req.body && Object.keys(req.body).length > 0) {
+
+/* =====================================================
+   LEGACY MODE BODY PARSER
+===================================================== */
+
+function parseLegacyModeBody(
+  req,
+  _res,
+  next
+) {
+  if (
+    req.body &&
+    Object.keys(req.body).length > 0
+  ) {
     return next();
   }
 
-  const contentType = req.headers["content-type"] || "";
-  const boundary = contentType.match(/boundary=(.+)$/)?.[1];
+  const contentType =
+    req.headers["content-type"] || "";
 
-  if (!contentType.includes("multipart/form-data") || !boundary) {
+  const boundary =
+    contentType.match(
+      /boundary=(.+)$/
+    )?.[1];
+
+  if (
+    !contentType.includes(
+      "multipart/form-data"
+    ) ||
+    !boundary
+  ) {
     return next();
   }
 
   let body = "";
+
   req.setEncoding("binary");
+
   req.on("data", (chunk) => {
     body += chunk;
   });
+
   req.on("end", () => {
-    req.body = parseMultipartText(body, boundary);
+    req.body = parseMultipartText(
+      body,
+      boundary
+    );
+
     next();
   });
+
   req.on("error", next);
 }
 
-router.get("/courses", getCourses);
-router.post("/courses", createCourse);
-router.get("/courses/enrolled", getEnrolledCourses);
-router.post("/courses/enroll", enrollCourse);
-router.get("/courses/join", joinCourseByCode);
-router.post("/courses/join", joinCourseByCode);
-router.get("/courses/archived",getArchivedCourses);
-router.get("/courses/:id", getCourseById);
-router.put("/courses/:id", updateCourse);
-router.patch("/courses/:id/archive", archiveCourse);
-router.post("/courses/:id/archive", archiveCourse);
-router.delete("/courses/:id", deleteCourse);
 
-router.get("/modules", getLearningModules);
-router.post("/modules", createLearningModule);
-router.get("/modules/:id", getLearningModuleById);
-router.put("/modules/:id", updateLearningModule);
-router.delete("/modules/:id", deleteLearningModule);
+/* =====================================================
+   COURSES
+===================================================== */
 
-router.get("/modes", getModes);
-router.post("/modes", createMode);
-router.put("/modes/:id", updateMode);
-router.delete("/modes/:id", deleteMode);
+/*
+ * Get all courses
+ */
+router.get(
+  "/courses",
+  getCourses
+);
 
-router.get("/monitoring/:courseId", getCourseMonitoring);
-router.get("/getLessonProgress.php", getLessonProgress);
-router.post("/saveLessonProgress.php", saveLessonProgress);
-router.post("/saveQuizAttempt.php", saveQuizAttempt);
-router.get("/getQuizAttempts.php", getQuizAttempts);
-router.post("/generateAdaptiveFeedback.php", generateAdaptiveFeedback);
 
-router.put("/courses/:id/unenroll", unenrollCourse);
+/*
+ * Create course
+ */
+router.post(
+  "/courses",
+  createCourse
+);
 
-router.get("/getModes.php", getModes);
-router.post("/addMode.php", parseLegacyModeBody, createMode);
-router.post("/updateMode.php", parseLegacyModeBody, updateMode);
-router.post("/deleteMode.php", parseLegacyModeBody, deleteMode);
 
-router.get("/adminLearningModule.php", handleLegacyLearningModule);
-router.post("/adminLearningModule.php", handleLegacyLearningModule);
+/* =====================================================
+   COURSE ENROLLMENT
+===================================================== */
+
+/*
+ * Get all courses where the current
+ * student is already approved/enrolled.
+ *
+ * Example:
+ * GET /api/courses/enrolled
+ */
+router.get(
+  "/courses/enrolled",
+  getEnrolledCourses
+);
+
+
+/*
+ * Student sends an enrollment request.
+ *
+ * This should create/update:
+ *
+ * course_enrollments
+ * status = "pending"
+ *
+ * Example:
+ * POST /api/courses/enroll
+ *
+ * Body:
+ * {
+ *   "courseId": 7
+ * }
+ */
+router.post(
+  "/courses/enroll",
+  enrollCourse
+);
+
+
+/*
+ * Professor gets all enrollment records
+ * belonging to one specific course.
+ *
+ * The controller should return:
+ *
+ * {
+ *   pending: [],
+ *   enrolled: []
+ * }
+ *
+ * Example:
+ * GET /api/courses/7/enrollments
+ */
+router.get(
+  "/courses/:courseId/enrollments",
+  getCourseEnrollments
+);
+
+
+/*
+ * Professor approves a student's
+ * pending enrollment request.
+ *
+ * Example:
+ * PATCH /api/enrollments/25/approve
+ */
+router.patch(
+  "/enrollments/:enrollmentId/approve",
+  approveEnrollment
+);
+
+
+/*
+ * Professor declines a student's
+ * pending enrollment request.
+ *
+ * Example:
+ * PATCH /api/enrollments/25/decline
+ */
+router.patch(
+  "/enrollments/:enrollmentId/decline",
+  declineEnrollment
+);
+
+
+/*
+ * Professor removes a student
+ * from a course.
+ *
+ * Existing route kept for compatibility.
+ *
+ * Example:
+ * PUT /api/courses/7/unenroll
+ */
+router.put(
+  "/courses/:id/unenroll",
+  unenrollCourse
+);
+
+
+/* =====================================================
+   COURSE JOINING
+===================================================== */
+
+/*
+ * Find/join course using course code
+ */
+router.get(
+  "/courses/join",
+  joinCourseByCode
+);
+
+router.post(
+  "/courses/join",
+  joinCourseByCode
+);
+
+
+/* =====================================================
+   ARCHIVED COURSES
+===================================================== */
+
+router.get(
+  "/courses/archived",
+  getArchivedCourses
+);
+
+
+/* =====================================================
+   SINGLE COURSE
+===================================================== */
+
+/*
+ * IMPORTANT:
+ *
+ * Keep these AFTER routes such as:
+ *
+ * /courses/enrolled
+ * /courses/join
+ * /courses/archived
+ *
+ * so Express does not treat words like
+ * "enrolled" as the :id parameter.
+ */
+
+router.get(
+  "/courses/:id",
+  getCourseById
+);
+
+router.put(
+  "/courses/:id",
+  updateCourse
+);
+
+router.patch(
+  "/courses/:id/archive",
+  archiveCourse
+);
+
+router.post(
+  "/courses/:id/archive",
+  archiveCourse
+);
+
+router.delete(
+  "/courses/:id",
+  deleteCourse
+);
+
+
+/* =====================================================
+   LEARNING MODULES
+===================================================== */
+
+router.get(
+  "/modules",
+  getLearningModules
+);
+
+router.post(
+  "/modules",
+  createLearningModule
+);
+
+router.get(
+  "/modules/:id",
+  getLearningModuleById
+);
+
+router.put(
+  "/modules/:id",
+  updateLearningModule
+);
+
+router.delete(
+  "/modules/:id",
+  deleteLearningModule
+);
+
+
+/* =====================================================
+   QUIZ MODES
+===================================================== */
+
+router.get(
+  "/modes",
+  getModes
+);
+
+router.post(
+  "/modes",
+  createMode
+);
+
+router.put(
+  "/modes/:id",
+  updateMode
+);
+
+router.delete(
+  "/modes/:id",
+  deleteMode
+);
+
+
+/* =====================================================
+   MONITORING
+===================================================== */
+
+router.get(
+  "/monitoring/:courseId",
+  getCourseMonitoring
+);
+
+router.get(
+  "/getLessonProgress.php",
+  getLessonProgress
+);
+
+router.post(
+  "/saveLessonProgress.php",
+  saveLessonProgress
+);
+
+router.post(
+  "/saveQuizAttempt.php",
+  saveQuizAttempt
+);
+
+router.get(
+  "/getQuizAttempts.php",
+  getQuizAttempts
+);
+
+router.post(
+  "/generateAdaptiveFeedback.php",
+  generateAdaptiveFeedback
+);
+
+
+/* =====================================================
+   LEGACY MODE ROUTES
+===================================================== */
+
+router.get(
+  "/getModes.php",
+  getModes
+);
+
+router.post(
+  "/addMode.php",
+  parseLegacyModeBody,
+  createMode
+);
+
+router.post(
+  "/updateMode.php",
+  parseLegacyModeBody,
+  updateMode
+);
+
+router.post(
+  "/deleteMode.php",
+  parseLegacyModeBody,
+  deleteMode
+);
+
+
+/* =====================================================
+   LEGACY LEARNING MODULE ROUTES
+===================================================== */
+
+router.get(
+  "/adminLearningModule.php",
+  handleLegacyLearningModule
+);
+
+router.post(
+  "/adminLearningModule.php",
+  handleLegacyLearningModule
+);
+
+
+/* =====================================================
+   EXPORT
+===================================================== */
 
 export default router;

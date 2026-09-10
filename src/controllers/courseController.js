@@ -1036,9 +1036,15 @@ export async function getEnrolledCourses(req, res) {
     const includeArchived = isTruthy(req.query.includeArchived);
     const archivedOnly =
       isTruthy(req.query.archived) || isTruthy(req.query.archivedOnly);
+
     const summaryOnly = wantsCourseSummary(req);
     const courseSelect = getCourseSelect(idColumn, summaryOnly);
-    const where = ["ce.user_id = ?"];
+
+    const where = [
+      "ce.user_id = ?",
+      "ce.status = 'approved'",
+    ];
+
     const params = [userId];
 
     if (archivedOnly) {
@@ -1051,25 +1057,50 @@ export async function getEnrolledCourses(req, res) {
     const [courseRows] = await db.execute(
       `SELECT
          ${courseSelect},
+         ce.enrollment_id,
+         ce.status AS enrollment_status,
+         ce.approved_at,
          u.display_name AS database_professor_display_name,
          u.name AS database_professor_name,
          u.email AS database_professor_email,
          u.professor_department AS database_professor_department,
          u.profile_image AS database_professor_profile_image
+
        FROM course_enrollments ce
-       INNER JOIN courses c ON c.${idColumn} = ce.course_id
-       LEFT JOIN users u ON u.userId = c.professor_id
+
+       INNER JOIN courses c
+         ON c.${idColumn} = ce.course_id
+
+       LEFT JOIN users u
+         ON u.userId = c.professor_id
+
        WHERE ${where.join(" AND ")}
-       ORDER BY ce.created_at DESC, c.updated_at DESC, c.${idColumn} DESC`,
+
+       ORDER BY
+         ce.created_at DESC,
+         c.updated_at DESC,
+         c.${idColumn} DESC`,
       params
     );
 
     const modulesByCourse = summaryOnly
       ? new Map()
-      : await getCourseLearningModules(courseRows.map(getCourseId));
-    const courses = courseRows.map((course) =>
-      rowToCourse(course, modulesByCourse.get(String(getCourseId(course))) || [])
-    );
+      : await getCourseLearningModules(
+          courseRows.map(getCourseId)
+        );
+
+    const courses = courseRows.map((course) => ({
+      ...rowToCourse(
+        course,
+        modulesByCourse.get(
+          String(getCourseId(course))
+        ) || []
+      ),
+
+      enrollmentId: course.enrollment_id,
+      enrollmentStatus: course.enrollment_status,
+      approvedAt: course.approved_at,
+    }));
 
     return res.json({
       success: true,
@@ -1167,17 +1198,18 @@ export async function enrollCourse(req, res) {
     req.body?.courseId ||
       req.body?.course_id ||
       req.body?.id ||
-      req.query.courseId ||
-      req.query.course_id ||
-      req.query.id
+      req.query?.courseId ||
+      req.query?.course_id ||
+      req.query?.id
   );
+
   const courseCode = cleanText(
     req.body?.courseCode ||
       req.body?.course_code ||
       req.body?.code ||
-      req.query.courseCode ||
-      req.query.course_code ||
-      req.query.code
+      req.query?.courseCode ||
+      req.query?.course_code ||
+      req.query?.code
   ).toUpperCase();
 
   if (!courseId && !courseCode) {
@@ -1189,33 +1221,26 @@ export async function enrollCourse(req, res) {
 
   try {
     const idColumn = await getCourseIdColumn();
-    const summaryOnly = wantsCourseSummary(req);
-    const courseSelect = getCourseSelect(idColumn, summaryOnly);
-    const where = ["c.archived = 0", "c.status = 'published'"];
+
+    const conditions = [
+      "c.archived = 0",
+      "c.status = 'published'",
+    ];
+
     const params = [];
 
     if (courseId) {
-      where.push(`c.${idColumn} = ?`);
+      conditions.push(`c.${idColumn} = ?`);
       params.push(courseId);
-    }
-
-    if (courseCode) {
-      where.push("(c.course_code = ? OR c.code = ?)");
+    } else {
+      conditions.push("(c.course_code = ? OR c.code = ?)");
       params.push(courseCode, courseCode);
     }
 
     const [rows] = await db.execute(
-      `SELECT
-         ${courseSelect},
-         u.display_name AS database_professor_display_name,
-         u.name AS database_professor_name,
-         u.email AS database_professor_email,
-         u.professor_department AS database_professor_department,
-         u.profile_image AS database_professor_profile_image
+      `SELECT c.*
        FROM courses c
-       LEFT JOIN users u ON u.userId = c.professor_id
-       WHERE ${where.slice(0, 2).join(" AND ")}
-         AND (${where.slice(2).join(" OR ")})
+       WHERE ${conditions.join(" AND ")}
        LIMIT 1`,
       params
     );
@@ -1227,65 +1252,226 @@ export async function enrollCourse(req, res) {
       });
     }
 
-    const enrolledCourseId = getCourseId(rows[0]);
-    const [enrollmentResult] = await db.execute(
-          `INSERT INTO course_enrollments (
-            course_id,
-            user_id,
-            archived
-          )
-          VALUES (?, ?, 0)
-          ON DUPLICATE KEY UPDATE
-            archived = 0`,
-          [enrolledCourseId, userId]
-        );
+    const selectedCourseId = getCourseId(rows[0]);
 
-    await db.execute(
-        `UPDATE courses
-        SET students = (
-          SELECT COUNT(*)
-          FROM course_enrollments
-          WHERE course_id = ?
-            AND archived = 0
-        )
-        WHERE ${idColumn} = ?`,
-        [enrolledCourseId, enrolledCourseId]
+    /*
+     * Check whether the student already has
+     * an enrollment record.
+     */
+    const [existingRows] = await db.execute(
+      `SELECT *
+       FROM course_enrollments
+       WHERE course_id = ?
+         AND user_id = ?
+       LIMIT 1`,
+      [selectedCourseId, userId]
+    );
+
+    if (existingRows.length > 0) {
+      const existing = existingRows[0];
+
+      if (
+        existing.status === "approved" &&
+        !existing.archived
+      ) {
+        return res.status(409).json({
+          success: false,
+          status: "approved",
+          message: "You are already enrolled in this course.",
+        });
+      }
+
+      if (
+        existing.status === "pending" &&
+        !existing.archived
+      ) {
+        return res.status(409).json({
+          success: false,
+          status: "pending",
+          message: "Your enrollment request is already pending approval.",
+        });
+      }
+
+      /*
+       * Previously declined or archived.
+       * Allow student to request again.
+       */
+      await db.execute(
+        `UPDATE course_enrollments
+         SET
+           status = 'pending',
+           archived = 0,
+           approved_at = NULL,
+           created_at = CURRENT_TIMESTAMP
+         WHERE enrollment_id = ?`,
+        [existing.enrollment_id]
       );
 
-    const [updatedRows] = await db.execute(
-      `SELECT
-         ${courseSelect},
-         u.display_name AS database_professor_display_name,
-         u.name AS database_professor_name,
-         u.email AS database_professor_email,
-         u.professor_department AS database_professor_department,
-         u.profile_image AS database_professor_profile_image
-       FROM courses c
-       LEFT JOIN users u ON u.userId = c.professor_id
-       WHERE c.${idColumn} = ?
-       LIMIT 1`,
-      [enrolledCourseId]
+      return res.json({
+        success: true,
+        pending: true,
+        enrolled: false,
+        enrollmentId: existing.enrollment_id,
+        message: "Enrollment request sent. Waiting for professor approval.",
+      });
+    }
+
+    /*
+     * First enrollment request.
+     */
+    const [result] = await db.execute(
+      `INSERT INTO course_enrollments (
+         course_id,
+         user_id,
+         status,
+         approved_at,
+         archived
+       )
+       VALUES (?, ?, 'pending', NULL, 0)`,
+      [selectedCourseId, userId]
     );
-    const modulesByCourse = summaryOnly
-      ? new Map()
-      : await getCourseLearningModules([enrolledCourseId]);
-    const course = rowToCourse(
-      updatedRows[0] || rows[0],
-      modulesByCourse.get(String(enrolledCourseId)) || []
+
+    return res.status(201).json({
+      success: true,
+      pending: true,
+      enrolled: false,
+      enrollmentId: result.insertId,
+      message: "Enrollment request sent. Waiting for professor approval.",
+    });
+  } catch (error) {
+    console.error("Enrollment request error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to send enrollment request.",
+    });
+  }
+}
+
+export async function getCourseEnrollments(req, res) {
+  const courseId = cleanText(
+    req.params.courseId ||
+    req.params.id
+  );
+
+  if (!courseId) {
+    return res.status(400).json({
+      success: false,
+      message: "Course ID is required.",
+    });
+  }
+
+  try {
+    const currentUser = await getRequestUserProfile(req);
+
+    if (!currentUser) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    if (!isProfessorUser(currentUser)) {
+      return res.status(403).json({
+        success: false,
+        message: "Professor account is required.",
+      });
+    }
+
+    const idColumn = await getCourseIdColumn();
+
+    /*
+     * Make sure this course belongs
+     * to the logged-in professor.
+     */
+    const owner = getProfessorOwnerCondition(
+      "c",
+      currentUser
+    );
+
+    const [courseRows] = await db.execute(
+      `SELECT c.${idColumn} AS course_id
+       FROM courses c
+       WHERE c.${idColumn} = ?
+         AND ${owner.sql}
+       LIMIT 1`,
+      [
+        courseId,
+        ...owner.params,
+      ]
+    );
+
+    if (courseRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found or you do not have access to it.",
+      });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT
+         ce.enrollment_id AS enrollmentId,
+         ce.course_id AS courseId,
+         ce.user_id AS userId,
+         ce.status,
+         ce.created_at AS requestedAt,
+         ce.approved_at AS approvedAt,
+
+         u.student_id AS studentId,
+         u.name,
+         u.display_name AS displayName,
+         u.email,
+         u.year_level AS yearLevel,
+         u.section_name AS sectionName,
+         u.profile_image AS profileImage
+
+       FROM course_enrollments ce
+
+       INNER JOIN users u
+         ON u.userId = ce.user_id
+
+       WHERE ce.course_id = ?
+         AND ce.archived = 0
+         AND ce.status IN ('pending', 'approved')
+
+       ORDER BY
+         CASE
+           WHEN ce.status = 'pending' THEN 0
+           ELSE 1
+         END,
+         ce.created_at DESC`,
+      [courseId]
+    );
+
+    const pending = rows.filter(
+      (row) => row.status === "pending"
+    );
+
+    const enrolled = rows.filter(
+      (row) => row.status === "approved"
     );
 
     return res.json({
       success: true,
-      enrolled: true,
-      enrollmentCreated: enrollmentResult.affectedRows > 0,
-      course,
+
+      pending,
+      enrolled,
+
+      counts: {
+        pending: pending.length,
+        enrolled: enrolled.length,
+        total: rows.length,
+      },
     });
   } catch (error) {
-    console.error("Enroll course error:", error);
+    console.error(
+      "Get course enrollments error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Failed to enroll in course.",
+      message: "Failed to fetch course enrollments.",
     });
   }
 }
@@ -1318,26 +1504,12 @@ export async function unenrollCourse(req, res) {
   try {
     const idColumn = await getCourseIdColumn();
 
-    const [courseRows] = await db.execute(
-      `SELECT *
-       FROM courses
-       WHERE ${idColumn} = ?
-       LIMIT 1`,
-      [courseId]
-    );
-
-    if (courseRows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Course not found.",
-      });
-    }
-
     const [result] = await db.execute(
       `UPDATE course_enrollments
        SET archived = 1
        WHERE course_id = ?
          AND user_id = ?
+         AND status = 'approved'
          AND archived = 0`,
       [courseId, userId]
     );
@@ -1355,6 +1527,7 @@ export async function unenrollCourse(req, res) {
          SELECT COUNT(*)
          FROM course_enrollments
          WHERE course_id = ?
+           AND status = 'approved'
            AND archived = 0
        )
        WHERE ${idColumn} = ?`,
@@ -1367,7 +1540,10 @@ export async function unenrollCourse(req, res) {
       courseId,
     });
   } catch (error) {
-    console.error("Unenroll course error:", error);
+    console.error(
+      "Unenroll course error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -1479,41 +1655,66 @@ export async function joinCourseByCode(req, res) {
       });
     }
 
-    const courseId = getCourseId(rows[0]);
     const userId = getRequestUserId(req);
 
-    let enrolled = false;
-    let enrollmentCreated = false;
+let enrolled = false;
+let pending = false;
+let enrollmentCreated = false;
 
-    if (userId) {
-      const [enrollmentResult] = await db.execute(
-        `INSERT INTO course_enrollments (
-           course_id,
-           user_id,
-           archived
-         )
-         VALUES (?, ?, 0)
-         ON DUPLICATE KEY UPDATE
-           archived = 0`,
-        [courseId, userId]
-      );
+if (userId) {
+  const [existingRows] = await db.execute(
+    `SELECT *
+     FROM course_enrollments
+     WHERE course_id = ?
+       AND user_id = ?
+     LIMIT 1`,
+    [courseId, userId]
+  );
 
+  if (existingRows.length > 0) {
+    const existing = existingRows[0];
+
+    if (
+      existing.status === "approved" &&
+      !existing.archived
+    ) {
       enrolled = true;
-      enrollmentCreated =
-        enrollmentResult.affectedRows > 0;
-
+    } else if (
+      existing.status === "pending" &&
+      !existing.archived
+    ) {
+      pending = true;
+    } else {
       await db.execute(
-        `UPDATE courses
-         SET students = (
-           SELECT COUNT(*)
-           FROM course_enrollments
-           WHERE course_id = ?
-             AND archived = 0
-         )
-         WHERE ${idColumn} = ?`,
-        [courseId, courseId]
+        `UPDATE course_enrollments
+         SET
+           status = 'pending',
+           approved_at = NULL,
+           archived = 0,
+           created_at = CURRENT_TIMESTAMP
+         WHERE enrollment_id = ?`,
+        [existing.enrollment_id]
       );
+
+      pending = true;
     }
+  } else {
+    await db.execute(
+      `INSERT INTO course_enrollments (
+         course_id,
+         user_id,
+         status,
+         approved_at,
+         archived
+       )
+       VALUES (?, ?, 'pending', NULL, 0)`,
+      [courseId, userId]
+    );
+
+    pending = true;
+    enrollmentCreated = true;
+  }
+}
 
     const modulesByCourse = summaryOnly
       ? new Map()
@@ -1546,11 +1747,19 @@ export async function joinCourseByCode(req, res) {
     );
 
     return res.json({
-      success: true,
-      enrolled,
-      enrollmentCreated,
-      course,
-    });
+        success: true,
+        enrolled,
+        pending,
+        enrollmentCreated,
+
+        message: enrolled
+          ? "You are already enrolled in this course."
+          : pending
+            ? "Enrollment request sent. Waiting for professor approval."
+            : "Course found.",
+
+        course,
+      });
   } catch (error) {
     console.error(
       "Join course by code error:",
@@ -2147,4 +2356,245 @@ export async function handleLegacyLearningModule(req, res) {
   }
 
   return createLearningModule(req, res);
+}
+
+export async function approveEnrollment(req, res) {
+  const enrollmentId = cleanText(
+    req.params.enrollmentId
+  );
+
+  if (!enrollmentId) {
+    return res.status(400).json({
+      success: false,
+      message: "Enrollment ID is required.",
+    });
+  }
+
+  try {
+    const currentUser = await getRequestUserProfile(req);
+
+    if (!currentUser) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    if (!isProfessorUser(currentUser)) {
+      return res.status(403).json({
+        success: false,
+        message: "Professor account is required.",
+      });
+    }
+
+    const idColumn = await getCourseIdColumn();
+
+    const owner = getProfessorOwnerCondition(
+      "c",
+      currentUser
+    );
+
+    /*
+     * Find request and verify that the
+     * professor owns the course.
+     */
+    const [rows] = await db.execute(
+      `SELECT
+         ce.enrollment_id,
+         ce.course_id,
+         ce.user_id,
+         ce.status
+
+       FROM course_enrollments ce
+
+       INNER JOIN courses c
+         ON c.${idColumn} = ce.course_id
+
+       WHERE ce.enrollment_id = ?
+         AND ce.archived = 0
+         AND ${owner.sql}
+
+       LIMIT 1`,
+      [
+        enrollmentId,
+        ...owner.params,
+      ]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Enrollment request not found.",
+      });
+    }
+
+    const enrollment = rows[0];
+
+    if (enrollment.status === "approved") {
+      return res.status(409).json({
+        success: false,
+        message: "Student is already approved.",
+      });
+    }
+
+    if (enrollment.status !== "pending") {
+      return res.status(409).json({
+        success: false,
+        message: "Only pending enrollment requests can be approved.",
+      });
+    }
+
+    await db.execute(
+      `UPDATE course_enrollments
+       SET
+         status = 'approved',
+         approved_at = CURRENT_TIMESTAMP,
+         archived = 0
+       WHERE enrollment_id = ?`,
+      [enrollmentId]
+    );
+
+    /*
+     * Recalculate approved student count.
+     */
+    await db.execute(
+      `UPDATE courses
+       SET students = (
+         SELECT COUNT(*)
+         FROM course_enrollments
+         WHERE course_id = ?
+           AND status = 'approved'
+           AND archived = 0
+       )
+       WHERE ${idColumn} = ?`,
+      [
+        enrollment.course_id,
+        enrollment.course_id,
+      ]
+    );
+
+    return res.json({
+      success: true,
+      message: "Student enrollment approved.",
+      enrollmentId: Number(enrollmentId),
+      courseId: enrollment.course_id,
+      userId: enrollment.user_id,
+      status: "approved",
+    });
+  } catch (error) {
+    console.error(
+      "Approve enrollment error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to approve enrollment.",
+    });
+  }
+}
+
+export async function declineEnrollment(req, res) {
+  const enrollmentId = cleanText(
+    req.params.enrollmentId
+  );
+
+  if (!enrollmentId) {
+    return res.status(400).json({
+      success: false,
+      message: "Enrollment ID is required.",
+    });
+  }
+
+  try {
+    const currentUser = await getRequestUserProfile(req);
+
+    if (!currentUser) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    if (!isProfessorUser(currentUser)) {
+      return res.status(403).json({
+        success: false,
+        message: "Professor account is required.",
+      });
+    }
+
+    const idColumn = await getCourseIdColumn();
+
+    const owner = getProfessorOwnerCondition(
+      "c",
+      currentUser
+    );
+
+    const [rows] = await db.execute(
+      `SELECT
+         ce.enrollment_id,
+         ce.course_id,
+         ce.user_id,
+         ce.status
+
+       FROM course_enrollments ce
+
+       INNER JOIN courses c
+         ON c.${idColumn} = ce.course_id
+
+       WHERE ce.enrollment_id = ?
+         AND ce.archived = 0
+         AND ${owner.sql}
+
+       LIMIT 1`,
+      [
+        enrollmentId,
+        ...owner.params,
+      ]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Enrollment request not found.",
+      });
+    }
+
+    const enrollment = rows[0];
+
+    if (enrollment.status !== "pending") {
+      return res.status(409).json({
+        success: false,
+        message: "Only pending enrollment requests can be declined.",
+      });
+    }
+
+    await db.execute(
+      `UPDATE course_enrollments
+       SET
+         status = 'declined',
+         approved_at = NULL
+       WHERE enrollment_id = ?`,
+      [enrollmentId]
+    );
+
+    return res.json({
+      success: true,
+      message: "Enrollment request declined.",
+      enrollmentId: Number(enrollmentId),
+      courseId: enrollment.course_id,
+      userId: enrollment.user_id,
+      status: "declined",
+    });
+  } catch (error) {
+    console.error(
+      "Decline enrollment error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to decline enrollment.",
+    });
+  }
 }
