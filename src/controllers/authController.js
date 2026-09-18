@@ -20,6 +20,20 @@ function cleanEmailValue(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function normalizeRoleValue(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function normalizeVerificationStatusValue(value) {
+  return String(value || "pending")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
 function hashPasswordResetToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
@@ -642,11 +656,12 @@ export async function login(req, res) {
       });
     }
 
-    const verificationStatus = String(
-      user.verification_status || "pending"
-    ).toLowerCase();
+    const role = normalizeRoleValue(user.role);
+    const verificationStatus = normalizeVerificationStatusValue(
+      user.verification_status
+    );
 
-    if (user.role === "professor" && verificationStatus !== "approved") {
+    if (role === "professor" && verificationStatus !== "approved") {
       const isDeclined = verificationStatus === "declined";
 
       return res.status(403).json({
@@ -679,10 +694,10 @@ export async function login(req, res) {
         id: user.userId,
         userId: user.userId,
         email: user.email,
-        role: user.role,
+        role,
         name: user.name,
-        verificationStatus: user.verification_status,
-        verification_status: user.verification_status,
+        verificationStatus,
+        verification_status: verificationStatus,
       },
       JWT_SECRET,
       { expiresIn: Math.min(tokenMaxAgeSeconds, temporaryRemainingSeconds) }
@@ -695,9 +710,13 @@ export async function login(req, res) {
       email: user.email,
       username: user.name,
       isNewUser:
-        user.role === "student" &&
+        role === "student" &&
         Number(user.onboarding_completed) !== 1,
-      user: authUserPayload(user),
+      user: authUserPayload({
+        ...user,
+        role,
+        verification_status: verificationStatus,
+      }),
     });
   } catch (error) {
     console.error("Login error:", error);

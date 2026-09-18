@@ -1302,6 +1302,7 @@ export async function enrollCourse(req, res) {
            status = 'pending',
            archived = 0,
            approved_at = NULL,
+           rejection_reason = NULL,
            created_at = CURRENT_TIMESTAMP
          WHERE enrollment_id = ?`,
         [existing.enrollment_id]
@@ -1416,11 +1417,13 @@ export async function getCourseEnrollments(req, res) {
          ce.status,
          ce.created_at AS requestedAt,
          ce.approved_at AS approvedAt,
+         ce.rejection_reason AS rejectionReason,
 
          u.student_id AS studentId,
          u.name,
          u.display_name AS displayName,
          u.email,
+         u.gender,
          u.year_level AS yearLevel,
          u.section_name AS sectionName,
          u.profile_image AS profileImage
@@ -1432,7 +1435,7 @@ export async function getCourseEnrollments(req, res) {
 
        WHERE ce.course_id = ?
          AND ce.archived = 0
-         AND ce.status IN ('pending', 'approved')
+         AND ce.status IN ('pending', 'approved', 'declined')
 
        ORDER BY
          CASE
@@ -1451,15 +1454,21 @@ export async function getCourseEnrollments(req, res) {
       (row) => row.status === "approved"
     );
 
+    const declined = rows.filter(
+      (row) => row.status === "declined"
+    );
+
     return res.json({
       success: true,
 
       pending,
       enrolled,
+      declined,
 
       counts: {
         pending: pending.length,
         enrolled: enrolled.length,
+        declined: declined.length,
         total: rows.length,
       },
     });
@@ -1688,11 +1697,12 @@ if (userId) {
       await db.execute(
         `UPDATE course_enrollments
          SET
-           status = 'pending',
-           approved_at = NULL,
-           archived = 0,
-           created_at = CURRENT_TIMESTAMP
-         WHERE enrollment_id = ?`,
+         status = 'pending',
+         approved_at = NULL,
+         rejection_reason = NULL,
+         archived = 0,
+         created_at = CURRENT_TIMESTAMP
+       WHERE enrollment_id = ?`,
         [existing.enrollment_id]
       );
 
@@ -2449,6 +2459,7 @@ export async function approveEnrollment(req, res) {
        SET
          status = 'approved',
          approved_at = CURRENT_TIMESTAMP,
+         rejection_reason = NULL,
          archived = 0
        WHERE enrollment_id = ?`,
       [enrollmentId]
@@ -2498,11 +2509,30 @@ export async function declineEnrollment(req, res) {
   const enrollmentId = cleanText(
     req.params.enrollmentId
   );
+  const rejectionReason = cleanText(
+    req.body?.reason ||
+    req.body?.rejectionReason ||
+    req.body?.rejection_reason
+  );
 
   if (!enrollmentId) {
     return res.status(400).json({
       success: false,
       message: "Enrollment ID is required.",
+    });
+  }
+
+  if (!rejectionReason) {
+    return res.status(400).json({
+      success: false,
+      message: "Please provide a reason for rejecting this enrollment request.",
+    });
+  }
+
+  if (rejectionReason.length > 500) {
+    return res.status(400).json({
+      success: false,
+      message: "Reject reason must be 500 characters or fewer.",
     });
   }
 
@@ -2573,9 +2603,10 @@ export async function declineEnrollment(req, res) {
       `UPDATE course_enrollments
        SET
          status = 'declined',
-         approved_at = NULL
+         approved_at = NULL,
+         rejection_reason = ?
        WHERE enrollment_id = ?`,
-      [enrollmentId]
+      [rejectionReason, enrollmentId]
     );
 
     return res.json({
@@ -2585,6 +2616,7 @@ export async function declineEnrollment(req, res) {
       courseId: enrollment.course_id,
       userId: enrollment.user_id,
       status: "declined",
+      rejectionReason,
     });
   } catch (error) {
     console.error(

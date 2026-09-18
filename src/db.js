@@ -344,6 +344,9 @@ async function initMonitoringTables() {
       enrollment_id INT AUTO_INCREMENT PRIMARY KEY,
       course_id INT NOT NULL,
       user_id INT NOT NULL,
+      status VARCHAR(50) NOT NULL DEFAULT 'pending',
+      approved_at DATETIME NULL,
+      rejection_reason TEXT NULL,
       archived TINYINT(1) NOT NULL DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE KEY course_enrollments_unique (course_id, user_id),
@@ -356,6 +359,27 @@ async function initMonitoringTables() {
     "archived",
     "archived TINYINT(1) NOT NULL DEFAULT 0"
   );
+  await ensureTableColumn(
+    "course_enrollments",
+    "status",
+    "status VARCHAR(50) NOT NULL DEFAULT 'pending'"
+  );
+  await ensureTableColumn(
+    "course_enrollments",
+    "approved_at",
+    "approved_at DATETIME NULL"
+  );
+  await ensureTableColumn(
+    "course_enrollments",
+    "rejection_reason",
+    "rejection_reason TEXT NULL"
+  );
+
+  await db.execute(`
+    UPDATE course_enrollments
+    SET status = 'pending'
+    WHERE status IS NULL OR status = ''
+  `);
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS saved_courses (
@@ -593,6 +617,7 @@ export async function initDb() {
       email VARCHAR(255) UNIQUE NOT NULL,
       password VARCHAR(255) NOT NULL,
       role VARCHAR(50) NOT NULL DEFAULT 'student',
+      gender VARCHAR(50) NULL,
       display_name VARCHAR(255) NULL,
       profile_image VARCHAR(500) NULL,
       year_level VARCHAR(50) NULL,
@@ -636,6 +661,7 @@ export async function initDb() {
     "is_verified TINYINT(1) NOT NULL DEFAULT 0"
   );
   await ensureColumn("display_name", "display_name VARCHAR(255) NULL");
+  await ensureColumn("gender", "gender VARCHAR(50) NULL");
   await ensureColumn("profile_image", "profile_image VARCHAR(500) NULL");
   await ensureColumn("year_level", "year_level VARCHAR(50) NULL");
   await ensureColumn("section_name", "section_name VARCHAR(20) NULL");
