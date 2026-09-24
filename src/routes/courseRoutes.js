@@ -19,6 +19,7 @@ import {
   getCourseEnrollments,
   approveEnrollment,
   declineEnrollment,
+  unenrollStudentFromCourse,
   unenrollCourse,
 
   joinCourseByCode,
@@ -249,6 +250,18 @@ router.patch(
 router.patch(
   "/enrollments/:enrollmentId/decline",
   declineEnrollment
+);
+
+/*
+ * Professor removes an enrolled student
+ * from this course.
+ *
+ * Example:
+ * PATCH /api/enrollments/25/unenroll
+ */
+router.patch(
+  "/enrollments/:enrollmentId/unenroll",
+  unenrollStudentFromCourse
 );
 
 

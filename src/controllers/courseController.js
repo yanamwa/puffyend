@@ -1003,9 +1003,51 @@ export async function getCourses(req, res) {
       ? new Map()
       : await getCourseLearningModules(courseRows.map(getCourseId));
 
-    const courses = courseRows.map((course) =>
-      rowToCourse(course, modulesByCourse.get(String(getCourseId(course))) || [])
-    );
+    const enrollmentByCourseId = new Map();
+    const requestUserId = getRequestUserId(req);
+    const courseIds = [...new Set(courseRows.map(getCourseId).filter(Boolean))];
+
+    if (requestUserId && courseIds.length) {
+      const placeholders = courseIds.map(() => "?").join(", ");
+      const [enrollmentRows] = await db.execute(
+        `SELECT enrollment_id, course_id, status, approved_at
+         FROM course_enrollments
+         WHERE user_id = ?
+           AND course_id IN (${placeholders})
+           AND archived = 0
+           AND status IN ('pending', 'approved')`,
+        [requestUserId, ...courseIds]
+      );
+
+      enrollmentRows.forEach((enrollment) => {
+        enrollmentByCourseId.set(String(enrollment.course_id), enrollment);
+      });
+    }
+
+    const courses = courseRows.map((courseRow) => {
+      const courseId = getCourseId(courseRow);
+      const course = rowToCourse(
+        courseRow,
+        modulesByCourse.get(String(courseId)) || []
+      );
+      const enrollment = enrollmentByCourseId.get(String(courseId));
+
+      if (!enrollment) {
+        return course;
+      }
+
+      return {
+        ...course,
+        enrollmentId: enrollment.enrollment_id,
+        enrollmentStatus: enrollment.status,
+        enrollment_status: enrollment.status,
+        enrollmentRequested: enrollment.status === "pending",
+        enrollment_requested: enrollment.status === "pending",
+        requestedEnrollment: enrollment.status === "pending",
+        requested_enrollment: enrollment.status === "pending",
+        approvedAt: enrollment.approved_at,
+      };
+    });
 
     return res.json({
       success: true,
@@ -1481,6 +1523,124 @@ export async function getCourseEnrollments(req, res) {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch course enrollments.",
+    });
+  }
+}
+
+export async function unenrollStudentFromCourse(req, res) {
+  const enrollmentId = cleanText(
+    req.params.enrollmentId
+  );
+
+  if (!enrollmentId) {
+    return res.status(400).json({
+      success: false,
+      message: "Enrollment ID is required.",
+    });
+  }
+
+  try {
+    const currentUser = await getRequestUserProfile(req);
+
+    if (!currentUser) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    if (!isProfessorUser(currentUser)) {
+      return res.status(403).json({
+        success: false,
+        message: "Professor account is required.",
+      });
+    }
+
+    const idColumn = await getCourseIdColumn();
+    const owner = getProfessorOwnerCondition(
+      "c",
+      currentUser
+    );
+
+    const [rows] = await db.execute(
+      `SELECT
+         ce.enrollment_id,
+         ce.course_id,
+         ce.user_id,
+         ce.status
+
+       FROM course_enrollments ce
+
+       INNER JOIN courses c
+         ON c.${idColumn} = ce.course_id
+
+       WHERE ce.enrollment_id = ?
+         AND ce.archived = 0
+         AND ${owner.sql}
+
+       LIMIT 1`,
+      [
+        enrollmentId,
+        ...owner.params,
+      ]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Student enrollment not found.",
+      });
+    }
+
+    const enrollment = rows[0];
+
+    if (enrollment.status !== "approved") {
+      return res.status(409).json({
+        success: false,
+        message: "Only enrolled students can be unenrolled.",
+      });
+    }
+
+    await db.execute(
+      `UPDATE course_enrollments
+       SET archived = 1
+       WHERE enrollment_id = ?`,
+      [enrollmentId]
+    );
+
+    await db.execute(
+      `UPDATE courses
+       SET students = (
+         SELECT COUNT(*)
+         FROM course_enrollments
+         WHERE course_id = ?
+           AND status = 'approved'
+           AND archived = 0
+       )
+       WHERE ${idColumn} = ?`,
+      [
+        enrollment.course_id,
+        enrollment.course_id,
+      ]
+    );
+
+    return res.json({
+      success: true,
+      message: "Student unenrolled from course.",
+      enrollmentId: Number(enrollmentId),
+      courseId: enrollment.course_id,
+      userId: enrollment.user_id,
+      status: "archived",
+    });
+  } catch (error) {
+    console.error(
+      "Professor unenroll student error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to unenroll student.",
     });
   }
 }
