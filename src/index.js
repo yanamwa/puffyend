@@ -8,6 +8,7 @@ import authRoutes from "./routes/authRoutes.js";
 import courseRoutes from "./routes/courseRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import lessonRoutes from "./routes/lessonRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
 
 import { initDb } from "./db.js";
 
@@ -215,11 +216,27 @@ app.get(
    ROUTES
 ========================================= */
 
+/*
+  Dedicated notification routes first.
+  This prevents broad /api routers from
+  intercepting /api/notifications.
+*/
 app.use(
-  "/api",
-  authRoutes
+  "/api/notifications",
+  notificationRoutes
 );
 
+/*
+  Lesson routes
+*/
+app.use(
+  "/api/lessons",
+  lessonRoutes
+);
+
+/*
+  Authentication routes
+*/
 app.use(
   "/api/auth",
   authRoutes
@@ -227,17 +244,23 @@ app.use(
 
 app.use(
   "/api",
+  authRoutes
+);
+
+/*
+  Course routes
+*/
+app.use(
+  "/api",
   courseRoutes
 );
 
+/*
+  User routes
+*/
 app.use(
   "/api",
   userRoutes
-);
-
-app.use(
-  "/api/lessons",
-  lessonRoutes
 );
 
 /* =========================================

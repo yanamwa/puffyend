@@ -22,11 +22,6 @@ import {
   updateProfessorRegistration,
   updateProfileImage,
 } from "../controllers/userController.js";
-import {
-  createNotification,
-  deleteNotification,
-  getNotifications,
-} from "../controllers/notificationController.js";
 
 const router = express.Router();
 
@@ -124,27 +119,7 @@ router.delete(
   permanentlyRemoveArchivedAccount
 );
 
-/* =========================
-   NOTIFICATIONS
-========================= */
 
-router.get(
-  "/notifications",
-  authenticateUser,
-  getNotifications
-);
-
-router.post(
-  "/notifications",
-  authenticateUser,
-  createNotification
-);
-
-router.delete(
-  "/notifications/:id",
-  authenticateUser,
-  deleteNotification
-);
 
 /* =========================
    LEGACY / GENERAL ROUTES

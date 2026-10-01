@@ -394,3 +394,201 @@ Please log in to your PuffyBrain professor account to review the enrollment requ
 PuffyBrain`,
   });
 }
+export async function sendStudentUnenrolledEmail(
+  email,
+  studentName,
+  courseName,
+  reason,
+  professorName
+) {
+  const { transporter, from } = createSmtpMailer();
+
+  const nameHtml = escapeHtml(
+    studentName || "Student"
+  );
+
+  const courseNameHtml = escapeHtml(
+    courseName || "your course"
+  );
+
+  const reasonHtml = escapeHtml(
+    reason || "No reason provided."
+  );
+
+  const professorNameHtml = escapeHtml(
+    professorName || "Professor"
+  );
+
+  await transporter.sendMail({
+    from,
+    to: email,
+
+    subject: `Course Unenrollment - ${courseName}`,
+
+    html: `
+      <div
+        style="
+          margin:0;
+          padding:32px 16px;
+          background:#f6f7fb;
+          font-family:Arial,Helvetica,sans-serif;
+          color:#1f2937;
+        "
+      >
+        <div
+          style="
+            max-width:560px;
+            margin:0 auto;
+            background:#ffffff;
+            border:1px solid #e4e7ec;
+            border-radius:8px;
+            padding:24px;
+            box-sizing:border-box;
+          "
+        >
+
+          <div
+            style="
+              font-size:18px;
+              font-weight:800;
+              color:#111827;
+              line-height:1.2;
+            "
+          >
+            PuffyBrain
+          </div>
+
+          <div
+            style="
+              height:1px;
+              background:#e5e7eb;
+              margin:22px 0 18px;
+            "
+          ></div>
+
+          <h1
+            style="
+              margin:0 0 18px;
+              color:#111827;
+              font-size:20px;
+              line-height:1.3;
+              font-weight:800;
+            "
+          >
+            Course Unenrollment Notice
+          </h1>
+
+          <p
+            style="
+              margin:0 0 18px;
+              color:#111827;
+              font-size:14px;
+              line-height:1.6;
+            "
+          >
+            Hi ${nameHtml},
+          </p>
+
+          <p
+            style="
+              margin:0 0 18px;
+              color:#111827;
+              font-size:14px;
+              line-height:1.6;
+            "
+          >
+            You have been unenrolled from
+            <strong>${courseNameHtml}</strong>
+            by your professor.
+          </p>
+
+          <div
+            style="
+              margin:22px 0;
+              padding:16px;
+              background:#f9fafb;
+              border:1px solid #e5e7eb;
+              border-radius:6px;
+            "
+          >
+            <div
+              style="
+                margin-bottom:8px;
+                font-size:13px;
+                font-weight:800;
+                color:#374151;
+              "
+            >
+              Reason for unenrollment:
+            </div>
+
+            <div
+              style="
+                font-size:14px;
+                line-height:1.6;
+                color:#111827;
+                white-space:pre-wrap;
+              "
+            >
+              ${reasonHtml}
+            </div>
+          </div>
+
+          <p
+            style="
+              margin:0 0 18px;
+              color:#4b5563;
+              font-size:13px;
+              line-height:1.6;
+            "
+          >
+            If you have questions regarding this
+            action, please contact
+            ${professorNameHtml}.
+          </p>
+
+          <div
+            style="
+              height:1px;
+              background:#e5e7eb;
+              margin:22px 0 18px;
+            "
+          ></div>
+
+          <p
+            style="
+              margin:0;
+              color:#6b7280;
+              font-size:12px;
+              line-height:1.6;
+            "
+          >
+            This email was sent because your
+            enrollment status in PuffyBrain was
+            updated by your professor.
+          </p>
+
+        </div>
+      </div>
+    `,
+
+    text: `PuffyBrain
+
+Course Unenrollment Notice
+
+Hi ${studentName || "Student"},
+
+You have been unenrolled from ${
+      courseName || "your course"
+    } by your professor.
+
+Reason for unenrollment:
+${reason || "No reason provided."}
+
+If you have questions regarding this action, please contact ${
+      professorName || "your professor"
+    }.
+
+PuffyBrain`,
+  });
+}
