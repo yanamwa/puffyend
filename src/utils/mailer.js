@@ -173,3 +173,224 @@ ${temporaryPassword}
 This email was sent because a temporary password was generated for your account. If you did not expect this, please contact your administrator.`,
   });
 }
+
+export async function sendEnrollmentDeclinedEmail(
+  email,
+  studentName,
+  courseName,
+  courseCode,
+  reason
+) {
+  const { transporter, from } = createSmtpMailer();
+
+  const nameHtml = escapeHtml(studentName || "Student");
+  const courseNameHtml = escapeHtml(courseName || "your course");
+  const courseCodeHtml = escapeHtml(courseCode || "");
+  const reasonHtml = escapeHtml(reason);
+
+  await transporter.sendMail({
+    from,
+    to: email,
+    subject: `Enrollment Request Declined - ${courseName}`,
+
+    html: `
+      <div style="margin:0;padding:32px 16px;background:#f6f7fb;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e4e7ec;border-radius:8px;padding:24px;box-sizing:border-box;">
+
+          <div style="font-size:18px;font-weight:800;color:#111827;line-height:1.2;">
+            PuffyBrain
+          </div>
+
+          <div style="height:1px;background:#e5e7eb;margin:22px 0 18px;"></div>
+
+          <h1 style="margin:0 0 18px;color:#111827;font-size:20px;line-height:1.3;font-weight:800;">
+            Enrollment Request Declined
+          </h1>
+
+          <p style="margin:0 0 18px;color:#111827;font-size:14px;line-height:1.6;">
+            Hi ${nameHtml},
+          </p>
+
+          <p style="margin:0 0 18px;color:#111827;font-size:14px;line-height:1.6;">
+            Your enrollment request for
+            <strong>${courseNameHtml}</strong>
+            has been declined by the professor.
+          </p>
+
+          ${
+            courseCodeHtml
+              ? `
+                <p style="margin:0 0 18px;color:#4b5563;font-size:14px;line-height:1.6;">
+                  <strong>Course Code:</strong> ${courseCodeHtml}
+                </p>
+              `
+              : ""
+          }
+
+          <div style="margin:22px 0;padding:16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;">
+            <div style="margin-bottom:8px;font-size:13px;font-weight:800;color:#374151;">
+              Reason for declining:
+            </div>
+
+            <div style="font-size:14px;line-height:1.6;color:#111827;white-space:pre-wrap;">
+              ${reasonHtml}
+            </div>
+          </div>
+
+          <div style="height:1px;background:#e5e7eb;margin:22px 0 18px;"></div>
+
+          <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+            This email was sent because your enrollment request in PuffyBrain was reviewed by the professor.
+          </p>
+
+        </div>
+      </div>
+    `,
+
+    text: `PuffyBrain
+
+Enrollment Request Declined
+
+Hi ${studentName || "Student"},
+
+Your enrollment request for ${courseName || "your course"} has been declined by the professor.
+
+${courseCode ? `Course Code: ${courseCode}\n` : ""}
+Reason for declining:
+${reason}
+
+PuffyBrain`,
+  });
+}
+
+export async function sendEnrollmentRequestEmail(
+  professorEmail,
+  professorName,
+  studentName,
+  courseName
+) {
+  const { transporter, from } = createSmtpMailer();
+
+  const professorNameHtml = escapeHtml(professorName || "Professor");
+  const studentNameHtml = escapeHtml(studentName || "A student");
+  const courseNameHtml = escapeHtml(courseName || "your course");
+
+  await transporter.sendMail({
+    from,
+    to: professorEmail,
+    subject: `New Enrollment Request - ${courseName}`,
+
+    html: `
+      <div style="
+        margin:0;
+        padding:32px 16px;
+        background:#f6f7fb;
+        font-family:Arial,Helvetica,sans-serif;
+        color:#1f2937;
+      ">
+        <div style="
+          max-width:560px;
+          margin:0 auto;
+          background:#ffffff;
+          border:1px solid #e4e7ec;
+          border-radius:8px;
+          padding:24px;
+          box-sizing:border-box;
+        ">
+
+          <div style="
+            font-size:18px;
+            font-weight:800;
+            color:#111827;
+          ">
+            PuffyBrain
+          </div>
+
+          <div style="
+            height:1px;
+            background:#e5e7eb;
+            margin:22px 0 18px;
+          "></div>
+
+          <h1 style="
+            margin:0 0 18px;
+            color:#111827;
+            font-size:20px;
+            font-weight:800;
+          ">
+            New Enrollment Request
+          </h1>
+
+          <p style="
+            margin:0 0 16px;
+            color:#111827;
+            font-size:14px;
+            line-height:1.6;
+          ">
+            Hi ${professorNameHtml},
+          </p>
+
+          <p style="
+            margin:0 0 16px;
+            color:#111827;
+            font-size:14px;
+            line-height:1.6;
+          ">
+            <strong>${studentNameHtml}</strong> is requesting to enroll
+            in your course:
+          </p>
+
+          <div style="
+            margin:20px 0;
+            padding:16px;
+            background:#f9fafb;
+            border:1px solid #e5e7eb;
+            border-radius:6px;
+          ">
+            <strong>${courseNameHtml}</strong>
+          </div>
+
+          <p style="
+            margin:0;
+            color:#4b5563;
+            font-size:13px;
+            line-height:1.6;
+          ">
+            Please log in to your PuffyBrain professor account to review
+            the enrollment request. You may approve or decline the request
+            from your course enrollment management page.
+          </p>
+
+          <div style="
+            height:1px;
+            background:#e5e7eb;
+            margin:22px 0 18px;
+          "></div>
+
+          <p style="
+            margin:0;
+            color:#6b7280;
+            font-size:12px;
+          ">
+            PuffyBrain Enrollment Notification
+          </p>
+
+        </div>
+      </div>
+    `,
+
+    text: `PuffyBrain
+
+New Enrollment Request
+
+Hi ${professorName || "Professor"},
+
+${studentName || "A student"} is requesting to enroll in:
+
+${courseName || "your course"}
+
+Please log in to your PuffyBrain professor account to review the enrollment request.
+
+PuffyBrain`,
+  });
+}
