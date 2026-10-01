@@ -403,160 +403,243 @@ async function getAuthenticatedUser(req) {
 
 
 /* =====================================================
-   GET LATEST MANAGED NOTIFICATION
+   GET MANAGED NOTIFICATIONS
 ===================================================== */
 
-async function getLatestNotification() {
-  const [rows] =
-    await db.execute(
-      `SELECT
-         notification_id,
-         title,
-         message,
-         target,
-         type,
-         created_by_user_id,
-         created_by_name,
-         created_by_role,
-         created_at
-       FROM managed_notifications
-       ORDER BY
-         created_at DESC,
-         notification_id DESC
-       LIMIT 1`
-    );
+async function getManagedNotifications() {
+  const [rows] = await db.execute(
+    `SELECT
+       notification_id,
+       title,
+       message,
+       target,
+       type,
+       created_by_user_id,
+       created_by_name,
+       created_by_role,
+       created_at
+     FROM managed_notifications
+     ORDER BY
+       created_at DESC,
+       notification_id DESC
+     LIMIT 100`
+  );
 
-  return rows[0] || null;
+  return rows;
 }
-
 
 /* =====================================================
    GET NOTIFICATIONS
 ===================================================== */
 
-export async function getNotifications(
-  req,
-  res
-) {
+export async function getNotifications(req, res) {
   try {
-    const currentUser =
-      await getAuthenticatedUser(req);
+    const currentUser = await getAuthenticatedUser(req);
 
     if (!currentUser) {
       return res.status(401).json({
         success: false,
-        message:
-          "You are not authenticated.",
+        message: "You are not authenticated.",
       });
     }
 
-    const notifications = [];
+    const userId = Number(currentUser.userId);
+    const role = normalizeRole(currentUser.role);
 
     /*
-     * ===============================================
-     * ADMIN / GENERAL ANNOUNCEMENT
-     * ===============================================
-     */
-
-    const latestNotification =
-      await getLatestNotification();
-
-    const isOwnAnnouncement =
-        latestNotification &&
-        Number(
-          latestNotification.created_by_user_id
-        ) === Number(currentUser.userId);
-
-      if (
-        latestNotification &&
-        !isOwnAnnouncement &&
-        (
-          isNotificationManager(
-            currentUser.role
-          ) ||
-          targetMatchesRole(
-            latestNotification.target,
-            currentUser.role
-          )
-        )
-      ) {
-        notifications.push(
-          rowToManagedNotification(
-            latestNotification
-          )
-        );
-      }
-
-    /*
-     * ===============================================
-     * USER-SPECIFIC NOTIFICATIONS
+     * A notification is visible when:
      *
-     * Enrollment request
-     * Approval
-     * Decline
-     * Unenrollment
-     * ===============================================
+     * 1. It was sent directly to this user
+     * OR
+     * 2. It is a broadcast announcement whose target
+     *    matches this user's role.
      */
 
-    const [userRows] =
-      await db.execute(
-        `SELECT
-           notification_id,
-           recipient_user_id,
-           course_id,
-           enrollment_id,
-           title,
-           message,
-           target,
-           type,
-           is_read,
-           read_at,
-           created_by_user_id,
-           created_by_name,
-           created_by_role,
-           created_at
+    const [rows] = await db.execute(
+      `
+      SELECT
+        n.notification_id,
+        n.recipient_user_id,
+        n.course_id,
+        n.enrollment_id,
+        n.title,
+        n.message,
+        n.target,
+        n.type,
+        n.is_read,
+        n.read_at,
+        n.created_by_user_id,
+        n.created_by_name,
+        n.created_by_role,
+        n.created_at,
 
-         FROM notifications
+        nr.notification_read_id AS broadcast_read_id,
+        nr.read_at AS broadcast_read_at
 
-         WHERE recipient_user_id = ?
+      FROM notifications n
 
-         ORDER BY
-           created_at DESC,
-           notification_id DESC
+      LEFT JOIN notification_reads nr
+        ON nr.notification_id = n.notification_id
+       AND nr.user_id = ?
 
-         LIMIT 100`,
-        [currentUser.userId]
-      );
+      WHERE
+          n.recipient_user_id = ?
 
-    for (
-      const row of userRows
-    ) {
-      notifications.push(
-        rowToUserNotification(row)
-      );
-    }
+        OR (
+            n.recipient_user_id IS NULL
 
-    /*
-     * Sort everything together,
-     * newest first.
-     */
+            AND (
+              n.created_by_user_id IS NULL
+              OR n.created_by_user_id <> ?
+            )
 
-    notifications.sort(
-      (a, b) =>
-        new Date(b.createdAt) -
-        new Date(a.createdAt)
+            AND (
+              n.target = 'all'
+
+              OR (
+                n.target = 'user'
+                AND ? IN ('student', 'professor')
+              )
+
+              OR (
+                n.target = 'admin'
+                AND ? IN ('admin', 'super_admin')
+              )
+
+              OR n.target = ?
+            )
+          )
+      ORDER BY
+        n.created_at DESC,
+        n.notification_id DESC
+
+      LIMIT 100
+      `,
+      [
+        userId,
+        userId,
+        userId,
+        role,
+        role,
+        role,
+      ]
     );
 
-    /*
-     * Only user-specific notifications
-     * have a persistent read state.
-     */
+    const notifications = rows.map((row) => {
+      /*
+       * Direct notification:
+       * use notifications.is_read
+       *
+       * Broadcast notification:
+       * use notification_reads
+       */
+      const isBroadcast =
+        row.recipient_user_id === null;
+
+      const isRead = isBroadcast
+        ? Boolean(row.broadcast_read_id)
+        : Boolean(Number(row.is_read));
+
+      return {
+        id: String(row.notification_id),
+
+        notificationId:
+          row.notification_id,
+
+        notification_id:
+          row.notification_id,
+
+        recipientUserId:
+          row.recipient_user_id,
+
+        recipient_user_id:
+          row.recipient_user_id,
+
+        courseId:
+          row.course_id,
+
+        course_id:
+          row.course_id,
+
+        enrollmentId:
+          row.enrollment_id,
+
+        enrollment_id:
+          row.enrollment_id,
+
+        title:
+          row.title || "Notification",
+
+        message:
+          row.message || "",
+
+        target:
+          normalizeTarget(
+            row.target || "all"
+          ),
+
+        type:
+          cleanText(row.type) ||
+          "announcement",
+
+        isRead,
+
+        is_read:
+          isRead,
+
+        unread:
+          !isRead,
+
+        readAt: isBroadcast
+          ? row.broadcast_read_at
+          : row.read_at,
+
+        read_at: isBroadcast
+          ? row.broadcast_read_at
+          : row.read_at,
+
+        createdByUserId:
+          row.created_by_user_id,
+
+        created_by_user_id:
+          row.created_by_user_id,
+
+        createdByName:
+          row.created_by_name || "",
+
+        created_by_name:
+          row.created_by_name || "",
+
+        createdByRole:
+          normalizeRole(
+            row.created_by_role
+          ),
+
+        created_by_role:
+          normalizeRole(
+            row.created_by_role
+          ),
+
+        createdAt:
+          row.created_at,
+
+        created_at:
+          row.created_at,
+
+        source: isBroadcast
+          ? "managed"
+          : "user",
+
+        icon:
+          row.type === "announcement"
+            ? "announcement"
+            : "course",
+      };
+    });
 
     const unreadCount =
       notifications.filter(
         (notification) =>
-          notification.source ===
-            "user" &&
           !notification.isRead
       ).length;
 
@@ -581,7 +664,7 @@ export async function getNotifications(
 
 
 /* =====================================================
-   GET UNREAD COUNT
+   GET UNREAD NOTIFICATION COUNT
 ===================================================== */
 
 export async function getUnreadNotificationCount(
@@ -600,23 +683,76 @@ export async function getUnreadNotificationCount(
       });
     }
 
-    const [rows] =
-      await db.execute(
-        `SELECT
-           COUNT(*) AS unread_count
-         FROM notifications
-         WHERE recipient_user_id = ?
-           AND is_read = 0`,
-        [currentUser.userId]
+    const userId =
+      Number(currentUser.userId);
+
+    const role =
+      normalizeRole(currentUser.role);
+
+    const [rows] = await db.execute(
+      `
+      SELECT COUNT(*) AS unreadCount
+
+      FROM notifications n
+
+      LEFT JOIN notification_reads nr
+        ON nr.notification_id =
+           n.notification_id
+       AND nr.user_id = ?
+
+      WHERE
+        (
+          n.recipient_user_id = ?
+
+          AND n.is_read = 0
+        )
+
+        OR (
+          n.recipient_user_id IS NULL
+
+          AND nr.notification_read_id
+              IS NULL
+
+          AND (
+            n.target = 'all'
+
+            OR (
+              n.target = 'user'
+              AND ? IN (
+                'student',
+                'professor'
+              )
+            )
+
+            OR (
+              n.target = 'admin'
+              AND ? IN (
+                'admin',
+                'super_admin'
+              )
+            )
+
+            OR n.target = ?
+          )
+        )
+      `,
+      [
+        userId,
+        userId,
+        role,
+        role,
+        role,
+      ]
+    );
+
+    const unreadCount =
+      Number(
+        rows[0]?.unreadCount || 0
       );
 
     return res.json({
       success: true,
-
-      unreadCount:
-        Number(
-          rows[0]?.unread_count || 0
-        ),
+      unreadCount,
     });
   } catch (error) {
     console.error(
@@ -653,19 +789,23 @@ export async function markNotificationAsRead(
       });
     }
 
+    const userId =
+      Number(currentUser.userId);
+
+    const role =
+      normalizeRole(currentUser.role);
+
     const notificationId =
       Number(
         String(
-          req.params.id ||
           req.params.notificationId ||
+          req.params.id ||
           ""
         ).replace(/^managed-/, "")
       );
 
     if (
-      !Number.isFinite(
-        notificationId
-      ) ||
+      !Number.isFinite(notificationId) ||
       notificationId <= 0
     ) {
       return res.status(400).json({
@@ -675,28 +815,107 @@ export async function markNotificationAsRead(
       });
     }
 
-    const [result] =
-      await db.execute(
-        `UPDATE notifications
-         SET
-           is_read = 1,
-           read_at = CURRENT_TIMESTAMP
-         WHERE notification_id = ?
-           AND recipient_user_id = ?`,
-        [
-          notificationId,
-          currentUser.userId,
-        ]
-      );
+    const [rows] = await db.execute(
+      `
+      SELECT
+        notification_id,
+        recipient_user_id,
+        target
 
-    if (
-      result.affectedRows === 0
-    ) {
+      FROM notifications
+
+      WHERE notification_id = ?
+
+      LIMIT 1
+      `,
+      [notificationId]
+    );
+
+    const notification = rows[0];
+
+    if (!notification) {
       return res.status(404).json({
         success: false,
         message:
           "Notification not found.",
       });
+    }
+
+    /*
+     * DIRECT NOTIFICATION
+     */
+    if (
+      notification.recipient_user_id !==
+      null
+    ) {
+      if (
+        Number(
+          notification.recipient_user_id
+        ) !== userId
+      ) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "You cannot update this notification.",
+        });
+      }
+
+      await db.execute(
+        `
+        UPDATE notifications
+
+        SET
+          is_read = 1,
+          read_at = COALESCE(
+            read_at,
+            NOW()
+          )
+
+        WHERE notification_id = ?
+          AND recipient_user_id = ?
+        `,
+        [
+          notificationId,
+          userId,
+        ]
+      );
+    }
+
+    /*
+     * BROADCAST / ANNOUNCEMENT
+     */
+    else {
+      if (
+        !targetMatchesRole(
+          notification.target,
+          role
+        )
+      ) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "You cannot update this notification.",
+        });
+      }
+
+      await db.execute(
+        `
+        INSERT INTO notification_reads (
+          notification_id,
+          user_id,
+          read_at
+        )
+
+        VALUES (?, ?, NOW())
+
+        ON DUPLICATE KEY UPDATE
+          read_at = VALUES(read_at)
+        `,
+        [
+          notificationId,
+          userId,
+        ]
+      );
     }
 
     return res.json({
@@ -713,25 +932,30 @@ export async function markNotificationAsRead(
     return res.status(500).json({
       success: false,
       message:
-        "Failed to update notification.",
+        "Failed to mark notification as read.",
     });
   }
 }
 
 
 /* =====================================================
-   MARK ALL USER NOTIFICATIONS AS READ
+   MARK ALL NOTIFICATIONS AS READ
 ===================================================== */
 
 export async function markAllNotificationsAsRead(
   req,
   res
 ) {
+  const connection =
+    await db.getConnection();
+
   try {
     const currentUser =
       await getAuthenticatedUser(req);
 
     if (!currentUser) {
+      connection.release();
+
       return res.status(401).json({
         success: false,
         message:
@@ -739,22 +963,112 @@ export async function markAllNotificationsAsRead(
       });
     }
 
-    await db.execute(
-      `UPDATE notifications
-       SET
-         is_read = 1,
-         read_at = CURRENT_TIMESTAMP
-       WHERE recipient_user_id = ?
-         AND is_read = 0`,
-      [currentUser.userId]
+    const userId =
+      Number(currentUser.userId);
+
+    const role =
+      normalizeRole(currentUser.role);
+
+    await connection.beginTransaction();
+
+    /*
+     * Mark direct notifications read.
+     */
+    await connection.execute(
+      `
+      UPDATE notifications
+
+      SET
+        is_read = 1,
+        read_at = COALESCE(
+          read_at,
+          NOW()
+        )
+
+      WHERE recipient_user_id = ?
+        AND is_read = 0
+      `,
+      [userId]
     );
+
+    /*
+     * Find broadcasts visible to this role.
+     */
+    const [broadcastRows] =
+      await connection.execute(
+        `
+        SELECT notification_id
+
+        FROM notifications
+
+        WHERE recipient_user_id IS NULL
+
+          AND (
+            target = 'all'
+
+            OR (
+              target = 'user'
+              AND ? IN (
+                'student',
+                'professor'
+              )
+            )
+
+            OR (
+              target = 'admin'
+              AND ? IN (
+                'admin',
+                'super_admin'
+              )
+            )
+
+            OR target = ?
+          )
+        `,
+        [
+          role,
+          role,
+          role,
+        ]
+      );
+
+    for (
+      const notification
+      of broadcastRows
+    ) {
+      await connection.execute(
+        `
+        INSERT IGNORE INTO
+          notification_reads (
+            notification_id,
+            user_id,
+            read_at
+          )
+
+        VALUES (?, ?, NOW())
+        `,
+        [
+          notification.notification_id,
+          userId,
+        ]
+      );
+    }
+
+    await connection.commit();
 
     return res.json({
       success: true,
       message:
         "All notifications marked as read.",
+      unreadCount: 0,
     });
   } catch (error) {
+    try {
+      await connection.rollback();
+    } catch {
+      // Ignore rollback errors.
+    }
+
     console.error(
       "Mark all notifications as read error:",
       error
@@ -763,8 +1077,10 @@ export async function markAllNotificationsAsRead(
     return res.status(500).json({
       success: false,
       message:
-        "Failed to update notifications.",
+        "Failed to mark notifications as read.",
     });
+  } finally {
+    connection.release();
   }
 }
 
@@ -805,8 +1121,7 @@ export async function createNotification(
 
     const target =
       normalizeTarget(
-        req.body?.target ||
-        "all"
+        req.body?.target || "all"
       );
 
     const createdByName =
@@ -829,77 +1144,186 @@ export async function createNotification(
       });
     }
 
-    const connection =
-      await db.getConnection();
+    const allowedTargets = [
+      "all",
+      "user",
+      "student",
+      "professor",
+      "admin",
+      "super_admin",
+    ];
 
-    try {
-      await connection.beginTransaction();
-
-      const [result] =
-        await connection.execute(
-          `INSERT INTO managed_notifications
-           (
-             title,
-             message,
-             target,
-             type,
-             created_by_user_id,
-             created_by_name,
-             created_by_role
-           )
-           VALUES (
-             ?,
-             ?,
-             ?,
-             'announcement',
-             ?,
-             ?,
-             ?
-           )`,
-          [
-            title,
-            message,
-            target,
-            currentUser.userId ||
-              null,
-            createdByName,
-            createdByRole,
-          ]
-        );
-
-      /*
-       * Keep only the latest managed
-       * announcement, preserving your
-       * current behavior.
-       */
-      await connection.execute(
-        `DELETE
-         FROM managed_notifications
-         WHERE notification_id <> ?`,
-        [result.insertId]
-      );
-
-      await connection.commit();
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    } finally {
-      connection.release();
+    if (
+      !allowedTargets.includes(target)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Notification target is invalid.",
+      });
     }
 
-    const latestNotification =
-      await getLatestNotification();
+    /*
+     * recipient_user_id = NULL means
+     * this is a broadcast announcement.
+     */
+    const [result] = await db.execute(
+      `
+      INSERT INTO notifications (
+        recipient_user_id,
+        course_id,
+        enrollment_id,
+        title,
+        message,
+        target,
+        type,
+        is_read,
+        read_at,
+        created_by_user_id,
+        created_by_name,
+        created_by_role
+      )
 
-    const notification =
-      rowToManagedNotification(
-        latestNotification
-      );
+      VALUES (
+        NULL,
+        NULL,
+        NULL,
+        ?,
+        ?,
+        ?,
+        'announcement',
+        0,
+        NULL,
+        ?,
+        ?,
+        ?
+      )
+      `,
+      [
+        title,
+        message,
+        target,
+        currentUser.userId || null,
+        createdByName,
+        createdByRole,
+      ]
+    );
+
+    /*
+     * Get the announcement we just created.
+     */
+    const [rows] = await db.execute(
+      `
+      SELECT
+        notification_id,
+        recipient_user_id,
+        course_id,
+        enrollment_id,
+        title,
+        message,
+        target,
+        type,
+        created_by_user_id,
+        created_by_name,
+        created_by_role,
+        created_at
+
+      FROM notifications
+
+      WHERE notification_id = ?
+
+      LIMIT 1
+      `,
+      [result.insertId]
+    );
+
+    const row = rows[0];
+
+    const notification = {
+      id: String(
+        row.notification_id
+      ),
+
+      notificationId:
+        row.notification_id,
+
+      notification_id:
+        row.notification_id,
+
+      recipientUserId: null,
+      recipient_user_id: null,
+
+      courseId:
+        row.course_id,
+
+      course_id:
+        row.course_id,
+
+      enrollmentId:
+        row.enrollment_id,
+
+      enrollment_id:
+        row.enrollment_id,
+
+      title:
+        row.title,
+
+      message:
+        row.message,
+
+      target:
+        normalizeTarget(row.target),
+
+      type:
+        row.type ||
+        "announcement",
+
+      isRead: false,
+      is_read: false,
+      unread: true,
+
+      createdByUserId:
+        row.created_by_user_id,
+
+      created_by_user_id:
+        row.created_by_user_id,
+
+      createdByName:
+        row.created_by_name || "",
+
+      created_by_name:
+        row.created_by_name || "",
+
+      createdByRole:
+        normalizeRole(
+          row.created_by_role
+        ),
+
+      created_by_role:
+        normalizeRole(
+          row.created_by_role
+        ),
+
+      createdAt:
+        row.created_at,
+
+      created_at:
+        row.created_at,
+
+      source: "managed",
+      icon: "announcement",
+    };
 
     return res.status(201).json({
       success: true,
       message:
         "Notification posted.",
       notification,
+
+      /*
+       * Keep this for compatibility
+       * with your existing React utility.
+       */
       notifications: [
         notification,
       ],
@@ -920,7 +1344,7 @@ export async function createNotification(
 
 
 /* =====================================================
-   DELETE MANAGED NOTIFICATION
+   DELETE ANNOUNCEMENT
 ===================================================== */
 
 export async function deleteNotification(
@@ -947,11 +1371,10 @@ export async function deleteNotification(
     const notificationId =
       Number(
         String(
-          req.params.id || ""
-        ).replace(
-          /^managed-/,
+          req.params.id ||
+          req.params.notificationId ||
           ""
-        )
+        ).replace(/^managed-/, "")
       );
 
     if (
@@ -967,18 +1390,44 @@ export async function deleteNotification(
       });
     }
 
-    await db.execute(
-      `DELETE
-       FROM managed_notifications
-       WHERE notification_id = ?`,
+    /*
+     * Only allow this endpoint to delete
+     * broadcast announcements.
+     *
+     * This prevents an admin from accidentally
+     * deleting enrollment notifications.
+     */
+    const [result] = await db.execute(
+      `
+      DELETE FROM notifications
+
+      WHERE notification_id = ?
+        AND recipient_user_id IS NULL
+        AND type = 'announcement'
+      `,
       [notificationId]
     );
+
+    if (
+      Number(result.affectedRows) === 0
+    ) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Announcement not found.",
+      });
+    }
+
+    /*
+     * notification_reads rows are automatically
+     * removed because you created the FK with
+     * ON DELETE CASCADE.
+     */
 
     return res.json({
       success: true,
       message:
         "Notification deleted.",
-      notifications: [],
     });
   } catch (error) {
     console.error(
