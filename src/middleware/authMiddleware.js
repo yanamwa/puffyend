@@ -120,6 +120,13 @@ export default async function authenticateUser(req, res, next) {
       verification_status: verificationStatus,
     };
 
+    await db.execute(
+        `UPDATE users
+        SET last_active = NOW()
+        WHERE userId = ?`,
+        [user.userId]
+      );
+
     next();
   } catch (error) {
     return res.status(401).json({

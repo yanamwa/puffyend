@@ -8,6 +8,7 @@ import {
   sendStudentUnenrolledEmail,
 } from "../utils/mailer.js";
 import { createNotification } from "../utils/notification.js";
+import { logAuditFromRequest } from "../services/auditLogService.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "puffybrain-secret";
 
@@ -1543,6 +1544,16 @@ export async function enrollCourse(req, res) {
           existing.enrollment_id
         );
 
+        await logAuditFromRequest(req, {
+          category: "Enrollment Management",
+          action: "Requested Enrollment",
+          target: courseName,
+          status: "Success",
+          details:
+            `${studentName} requested enrollment in ` +
+            `"${courseName}" again.`,
+        });
+
       return res.status(200).json({
         success: true,
         pending: true,
@@ -2460,6 +2471,16 @@ export async function createCourse(req, res) {
     ]);
     const course = rowToCourse(rows[0], []);
 
+    await logAuditFromRequest(req, {
+        category: "Course Management",
+        action: "Created Course",
+        target: fields.title,
+        status: "Success",
+        details:
+          `Created course "${fields.title}" ` +
+          `with course code ${fields.courseCode}.`,
+      });
+
     return res.status(201).json({
       success: true,
       message: "Course added successfully.",
@@ -2623,6 +2644,16 @@ export async function updateCourse(req, res) {
     const modulesByCourse = await getCourseLearningModules([courseId]);
     const course = rowToCourse(rows[0], modulesByCourse.get(String(courseId)) || []);
 
+    await logAuditFromRequest(req, {
+      category: "Course Management",
+      action: "Updated Course",
+      target: course.title || fields.title,
+      status: "Success",
+      details:
+        `Updated course "${course.title || fields.title}" ` +
+        `with course code ${course.courseCode || fields.courseCode}.`,
+    });
+
     return res.json({
       success: true,
       message: "Course updated successfully.",
@@ -2725,7 +2756,10 @@ export async function updateLearningModule(req, res) {
 }
 
 export async function archiveCourse(req, res) {
-  const id = req.params.id || req.body.id || req.body.course_id;
+  const id =
+    req.params.id ||
+    req.body?.id ||
+    req.body?.course_id;
 
   if (!id) {
     return res.status(400).json({
@@ -2734,17 +2768,52 @@ export async function archiveCourse(req, res) {
     });
   }
 
-  const requestedArchived = req.body?.archived ?? req.body?.archive;
-  const archived = requestedArchived === undefined ? true : isTruthy(requestedArchived);
+  const requestedArchived =
+    req.body?.archived ?? req.body?.archive;
+
+  const archived =
+    requestedArchived === undefined
+      ? true
+      : isTruthy(requestedArchived);
 
   try {
     const idColumn = await getCourseIdColumn();
     const currentUser = await getRequestUserProfile(req);
+
+    // Must be logged in
+    if (!currentUser) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    const role = normalizeRole(currentUser.role);
+
+    const allowedRoles = [
+      "super_admin",
+      "superadmin",
+      "admin",
+      "professor",
+    ];
+
+    if (!allowedRoles.includes(role)) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to archive courses.",
+      });
+    }
+
     const where = [`${idColumn} = ?`];
     const params = [id];
 
-    if (isProfessorUser(currentUser)) {
-      const owner = getProfessorOwnerCondition("", currentUser);
+    // Professors can archive ONLY their own courses.
+    if (role === "professor") {
+      const owner = getProfessorOwnerCondition(
+        "",
+        currentUser
+      );
+
       where.push(owner.sql);
       params.push(...owner.params);
     }
@@ -2759,7 +2828,10 @@ export async function archiveCourse(req, res) {
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        message: "Course not found.",
+        message:
+          role === "professor"
+            ? "Course not found or you do not have access to it."
+            : "Course not found.",
       });
     }
 
@@ -2772,19 +2844,51 @@ export async function archiveCourse(req, res) {
          u.professor_department AS database_professor_department,
          u.profile_image AS database_professor_profile_image
        FROM courses c
-       LEFT JOIN users u ON u.userId = c.professor_id
+       LEFT JOIN users u
+         ON u.userId = c.professor_id
        WHERE c.${idColumn} = ?
        LIMIT 1`,
       [id]
     );
 
     const courseId = getCourseId(rows[0]);
-    const modulesByCourse = await getCourseLearningModules([courseId]);
-    const course = rowToCourse(rows[0], modulesByCourse.get(String(courseId)) || []);
+
+    const modulesByCourse =
+      await getCourseLearningModules([courseId]);
+
+    const course = rowToCourse(
+      rows[0],
+      modulesByCourse.get(String(courseId)) || []
+    );
+
+    /* =====================================================
+        AUDIT LOG - ARCHIVE / RESTORE COURSE
+      ===================================================== */
+
+      await logAuditFromRequest(req, {
+        category: "Course Management",
+
+        action: archived
+          ? "Archived Course"
+          : "Restored Course",
+
+        target:
+          course.title ||
+          course.courseName ||
+          `Course ${id}`,
+
+        status: "Success",
+
+        details: archived
+          ? `Archived course "${course.title || course.courseName || id}".`
+          : `Restored course "${course.title || course.courseName || id}".`,
+      });
 
     return res.json({
       success: true,
-      message: archived ? "Course archived successfully." : "Course restored successfully.",
+      message: archived
+        ? "Course archived successfully."
+        : "Course restored successfully.",
       course,
     });
   } catch (error) {
@@ -2792,7 +2896,8 @@ export async function archiveCourse(req, res) {
 
     return res.status(500).json({
       success: false,
-      message: "Failed to update course archive status.",
+      message:
+        "Failed to update course archive status.",
     });
   }
 }
@@ -2810,6 +2915,30 @@ export async function deleteCourse(req, res) {
   try {
     const idColumn = await getCourseIdColumn();
     const currentUser = await getRequestUserProfile(req);
+        if (!currentUser) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    const role = String(currentUser.role || "")
+      .trim()
+      .toLowerCase();
+
+    const allowedRoles = [
+      "super_admin",
+      "superadmin",
+      "admin",
+      "professor",
+    ];
+
+    if (!allowedRoles.includes(role)) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not allowed to delete courses.",
+      });
+    }
     const where = [`${idColumn} = ?`];
     const params = [id];
 
@@ -2945,19 +3074,25 @@ export async function approveEnrollment(req, res) {
      */
     const [rows] = await db.execute(
       `SELECT
-         ce.enrollment_id,
-         ce.course_id,
-         ce.user_id,
-         ce.status,
+        ce.enrollment_id,
+        ce.course_id,
+        ce.user_id,
+        ce.status,
 
-         c.course_name,
-         c.title AS course_title,
-         c.course_code
+        c.course_name,
+        c.title AS course_title,
+        c.course_code,
+
+        s.name AS student_name,
+        s.display_name AS student_display_name
 
        FROM course_enrollments ce
 
        INNER JOIN courses c
          ON c.${idColumn} = ce.course_id
+
+         INNER JOIN users s
+           ON s.userId = ce.user_id
 
        WHERE ce.enrollment_id = ?
          AND ce.archived = 0
@@ -3005,6 +3140,11 @@ export async function approveEnrollment(req, res) {
       enrollment.course_title ||
       enrollment.course_code ||
       "your course";
+
+    const studentName =
+      enrollment.student_display_name ||
+      enrollment.student_name ||
+      `Student ${enrollment.user_id}`;
 
     const professorName =
       cleanText(
@@ -3089,6 +3229,20 @@ export async function approveEnrollment(req, res) {
         notificationError
       );
     }
+
+    /* =====================================================
+        AUDIT LOG - APPROVE ENROLLMENT
+      ===================================================== */
+
+      await logAuditFromRequest(req, {
+        category: "Enrollment Management",
+        action: "Approved Enrollment",
+        target: studentName,
+        status: "Success",
+        details:
+          `Approved ${studentName}'s enrollment in ` +
+          `"${courseName}".`,
+      });
 
     return res.json({
       success: true,
@@ -3353,6 +3507,19 @@ export async function declineEnrollment(req, res) {
         notificationError
       );
     }
+    /* =====================================================
+        AUDIT LOG - DECLINE ENROLLMENT
+      ===================================================== */
+
+      await logAuditFromRequest(req, {
+        category: "Enrollment Management",
+        action: "Declined Enrollment",
+        target: studentName,
+        status: "Success",
+        details:
+          `Declined ${studentName}'s enrollment in ` +
+          `"${courseName}". Reason: ${rejectionReason}`,
+      });
 
     return res.status(200).json({
       success: true,

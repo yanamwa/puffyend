@@ -42,7 +42,7 @@ import {
   saveLessonProgress,
   saveQuizAttempt,
 } from "../controllers/monitoringController.js";
-
+import authenticateUser from "../middleware/authMiddleware.js";
 const router = express.Router();
 
 
@@ -164,6 +164,7 @@ router.get(
  */
 router.post(
   "/courses",
+  authenticateUser,
   createCourse
 );
 
@@ -203,6 +204,7 @@ router.get(
  */
 router.post(
   "/courses/enroll",
+  authenticateUser,
   enrollCourse
 );
 
@@ -236,6 +238,7 @@ router.get(
  */
 router.patch(
   "/enrollments/:enrollmentId/approve",
+  authenticateUser,
   approveEnrollment
 );
 
@@ -249,6 +252,7 @@ router.patch(
  */
 router.patch(
   "/enrollments/:enrollmentId/decline",
+  authenticateUser,
   declineEnrollment
 );
 
@@ -332,21 +336,25 @@ router.get(
 
 router.put(
   "/courses/:id",
+  authenticateUser,
   updateCourse
 );
 
 router.patch(
   "/courses/:id/archive",
+  authenticateUser,
   archiveCourse
 );
 
 router.post(
   "/courses/:id/archive",
+  authenticateUser,
   archiveCourse
 );
 
 router.delete(
   "/courses/:id",
+  authenticateUser,
   deleteCourse
 );
 

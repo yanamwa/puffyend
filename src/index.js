@@ -9,6 +9,7 @@ import courseRoutes from "./routes/courseRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import lessonRoutes from "./routes/lessonRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
+import systemAnalyticsRoutes from "./routes/systemAnalyticsRoutes.js";
 
 import { initDb } from "./db.js";
 
@@ -261,6 +262,15 @@ app.use(
 app.use(
   "/api",
   userRoutes
+);
+
+/* =========================================
+   SYSTEM ANALYTICS
+========================================= */
+
+app.use(
+  "/api/analytics",
+  systemAnalyticsRoutes
 );
 
 /* =========================================

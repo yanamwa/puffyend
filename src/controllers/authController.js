@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import jwt from "jsonwebtoken";
 import { db } from "../db.js";
 import { sendOtpEmail, sendPasswordResetEmail } from "../utils/mailer.js";
+import { logAuditFromRequest } from "../services/auditLogService.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "puffybrain-secret";
 const OTP_TTL_SECONDS = 5 * 60;
@@ -624,6 +625,31 @@ export async function login(req, res) {
     const validPassword = await bcrypt.compare(password, user.password);
 
     if (!validPassword) {
+      console.log("FAILED LOGIN BLOCK REACHED", {
+        userId: user.userId,
+        email: user.email,
+        role: user.role,
+      });
+
+      const auditResult = await logAuditFromRequest(req, {
+        userId: user.userId,
+        userName: user.name || user.email,
+        userRole: user.role || "Unknown",
+
+        category: "Authentication",
+        action: "Failed Login Attempt",
+        target: user.email,
+        status: "Failed",
+
+        details:
+          "Login attempt failed because an incorrect password was entered.",
+      });
+
+      console.log(
+        "FAILED LOGIN AUDIT RESULT:",
+        auditResult
+      );
+
       return res.status(401).json({
         success: false,
         code: "INCORRECT_PASSWORD",
@@ -703,6 +729,25 @@ export async function login(req, res) {
       { expiresIn: Math.min(tokenMaxAgeSeconds, temporaryRemainingSeconds) }
     );
 
+    /* =====================================================
+        AUDIT LOG - SUCCESSFUL LOGIN
+      ===================================================== */
+
+      await logAuditFromRequest(req, {
+        userId: user.userId,
+        userName: user.name || user.email,
+        userRole: role,
+
+        category: "Authentication",
+        action: "User Login",
+        target: user.email,
+        status: "Success",
+
+        details:
+          `${user.name || user.email} logged in successfully.`,
+      });
+
+
     return res.json({
       success: true,
       message: "Login successful.",
@@ -724,6 +769,52 @@ export async function login(req, res) {
     return res.status(500).json({
       success: false,
       message: "Login failed.",
+    });
+  }
+}
+
+/* =====================================================
+   LOGOUT
+===================================================== */
+
+export async function logout(req, res) {
+  try {
+    const currentUser = req.user || {};
+
+    await logAuditFromRequest(req, {
+      userId:
+        currentUser.userId ||
+        currentUser.id ||
+        null,
+
+      userName:
+        currentUser.name ||
+        currentUser.email ||
+        "Unknown User",
+
+      userRole:
+        currentUser.role ||
+        "Unknown",
+
+      category: "Authentication",
+      action: "User Logout",
+      target: currentUser.email || null,
+      status: "Success",
+
+      details:
+        `${currentUser.name || currentUser.email || "User"} logged out successfully.`,
+    });
+
+    return res.json({
+      success: true,
+      message: "Logout successful.",
+    });
+  } catch (error) {
+    console.error("Logout error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to logout.",
     });
   }
 }

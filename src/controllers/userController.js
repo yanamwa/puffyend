@@ -4,6 +4,7 @@ import crypto from "crypto";
 import fs from "node:fs/promises";
 import authenticateUser from "../middleware/authMiddleware.js";
 import { sendStudentTemporaryPasswordEmail } from "../utils/mailer.js";
+import { logAuditFromRequest } from "../services/auditLogService.js";
 
 const YEAR_LEVELS = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
 const APPROVAL_STATUSES = ["pending", "approved", "declined"];
@@ -66,6 +67,19 @@ function normalizeYearLevel(value) {
   return YEAR_LEVELS.includes(cleaned) ? cleaned : "";
 }
 
+function normalizeGender(value) {
+  const cleaned = cleanText(value).toLowerCase();
+
+  if (cleaned === "male") {
+    return "Male";
+  }
+
+  if (cleaned === "female") {
+    return "Female";
+  }
+
+  return "";
+}
 function getYearNumber(yearLevel) {
   return normalizeYearLevel(yearLevel).match(/[1-4]/)?.[0] || "";
 }
@@ -232,6 +246,7 @@ function rowToUser(user) {
     verification_id: user.verification_id,
     studentId: user.student_id,
     student_id: user.student_id,
+    gender: user.gender || "",
     professorId: user.professor_id,
     professor_id: user.professor_id,
 
@@ -264,9 +279,13 @@ function rowToUser(user) {
     temporary_expires_at: user.temporary_expires_at,
     temporaryExpired,
     temporary_expired: temporaryExpired ? 1 : 0,
+
     joined: user.created_at,
     created_at: user.created_at,
-  };
+
+    lastActive: user.last_active || null,
+    last_active: user.last_active || null,
+      };
 }
 
 async function getUserByEmail(email) {
@@ -326,14 +345,14 @@ export async function getUsers(_req, res) {
   try {
     const [rows] = await db.execute(
       `SELECT userId AS id, email, role, name, display_name, year_level,
-       section_name, onboarding_completed, is_verified, verification_id,
-       student_id, professor_id, professor_faculty_id, professor_department,
-       professor_position, professor_specialization,
-       professor_employment_proof, verification_status, is_archived,
-       archived_at, must_change_password, is_temporary, temporary_expires_at,
-       created_at
-       FROM users
-       ORDER BY userId DESC`
+      section_name, onboarding_completed, is_verified, verification_id,
+      student_id, gender, professor_id, professor_faculty_id, professor_department,
+      professor_position, professor_specialization,
+      professor_employment_proof, verification_status, is_archived,
+      archived_at, must_change_password, is_temporary, temporary_expires_at,
+      created_at, last_active
+      FROM users
+      ORDER BY userId DESC`
     );
 
     return res.json({
@@ -389,20 +408,66 @@ export async function getUserById(req, res) {
   }
 }
 
-export async function createStudentAccount(req, res) {
+ export async function createStudentAccount(req, res) {
   const email = cleanEmail(req.body.email);
   const name = cleanText(req.body.name || req.body.displayName);
-  const studentId = cleanText(req.body.studentId || req.body.student_id);
-  const yearLevel = normalizeYearLevel(req.body.yearLevel || req.body.year_level);
-  const sectionName = normalizeSectionName(
-    req.body.sectionName || req.body.section_name || req.body.section
+  const studentId = cleanText(
+    req.body.studentId || req.body.student_id
   );
-  const temporaryAccount = getTemporaryAccountSettings(req.body);
 
-  if (!email || !name) {
+  const gender = normalizeGender(req.body.gender);
+
+  const yearLevel = normalizeYearLevel(
+    req.body.yearLevel || req.body.year_level
+  );
+
+  const sectionName = normalizeSectionName(
+    req.body.sectionName ||
+      req.body.section_name ||
+      req.body.section
+  );
+
+  const temporaryAccount =
+    getTemporaryAccountSettings(req.body);
+
+  /* ===================================================
+     VALIDATION
+  =================================================== */
+
+  if (
+    !name ||
+    !email ||
+    !studentId ||
+    !gender ||
+    !yearLevel ||
+    !sectionName
+  ) {
     return res.status(400).json({
       success: false,
-      message: "Student name and email are required.",
+      message:
+        "Student name, email, Student ID, gender, year level, and section are required.",
+    });
+  }
+
+  const rawGender = cleanText(req.body.gender);
+
+  if (
+    rawGender.toLowerCase() !== "male" &&
+    rawGender.toLowerCase() !== "female"
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Gender must be Male or Female.",
+    });
+  }
+
+  const yearNumber = getYearNumber(yearLevel);
+
+  if (sectionName.charAt(0) !== yearNumber) {
+    return res.status(400).json({
+      success: false,
+      message:
+        `Please choose a ${yearNumber}A-${yearNumber}F section for ${yearLevel}.`,
     });
   }
 
@@ -413,25 +478,11 @@ export async function createStudentAccount(req, res) {
     });
   }
 
-  if (studentId.length > 100) {
-    return res.status(400).json({
-      success: false,
-      message: "Student ID is too long.",
-    });
-  }
-
-  if (sectionName) {
-    const yearNumber = getYearNumber(yearLevel);
-
-    if (!yearNumber || sectionName.charAt(0) !== yearNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "Section must match the selected year level.",
-      });
-    }
-  }
-
   try {
+    /* =================================================
+       CHECK DUPLICATE EMAIL
+    ================================================= */
+
     const [existingEmail] = await db.execute(
       "SELECT userId FROM users WHERE email = ? LIMIT 1",
       [email]
@@ -444,80 +495,193 @@ export async function createStudentAccount(req, res) {
       });
     }
 
-    if (studentId) {
-      const [existingStudentId] = await db.execute(
-        "SELECT userId FROM users WHERE role = 'student' AND student_id = ? LIMIT 1",
-        [studentId]
-      );
+    /* =================================================
+       CHECK DUPLICATE STUDENT ID
+    ================================================= */
 
-      if (existingStudentId.length > 0) {
-        return res.status(409).json({
-          success: false,
-          message: "This Student ID is already registered.",
-        });
-      }
+    const [existingStudentId] = await db.execute(
+      `SELECT userId
+       FROM users
+       WHERE student_id = ?
+       LIMIT 1`,
+      [studentId]
+    );
+
+    if (existingStudentId.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "Student ID is already registered.",
+      });
     }
 
-    const temporaryPassword = generateTemporaryPassword();
-    const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
-    const onboardingCompleted = yearLevel && sectionName ? 1 : 0;
+    /* =================================================
+       CREATE TEMPORARY PASSWORD
+    ================================================= */
+
+    const temporaryPassword =
+      generateTemporaryPassword();
+
+    const hashedPassword = await bcrypt.hash(
+      temporaryPassword,
+      10
+    );
+
+    /*
+      Account is created directly by Admin/Super Admin.
+      Student only needs to change the temporary password.
+    */
+    const onboardingCompleted = 1;
+
+    /* =================================================
+       CREATE STUDENT
+    ================================================= */
 
     const [result] = await db.execute(
-      `INSERT INTO users
-       (email, password, role, name, display_name, verification_id, student_id,
-        verification_status, is_verified, onboarding_completed, year_level,
-        section_name, must_change_password, is_archived, is_temporary,
-        temporary_expires_at)
-       VALUES (?, ?, 'student', ?, ?, ?, ?, 'approved', 1, ?, ?, ?, 1, 0, ?, ?)`,
+      `INSERT INTO users (
+        email,
+        password,
+        role,
+        name,
+        display_name,
+        verification_id,
+        student_id,
+        gender,
+        verification_status,
+        is_verified,
+        onboarding_completed,
+        year_level,
+        section_name,
+        must_change_password,
+        is_archived,
+        is_temporary,
+        temporary_expires_at
+      )
+      VALUES (
+        ?,
+        ?,
+        'student',
+        ?,
+        ?,
+        ?,
+        ?,
+        ?,
+        'approved',
+        1,
+        ?,
+        ?,
+        ?,
+        1,
+        0,
+        ?,
+        ?
+      )`,
       [
         email,
         hashedPassword,
         name,
         name,
-        studentId || null,
-        studentId || null,
+        studentId,
+        studentId,
+        gender,
         onboardingCompleted,
-        yearLevel || null,
-        sectionName || null,
+        yearLevel,
+        sectionName,
         temporaryAccount.isTemporary,
         temporaryAccount.temporaryExpiresAt,
       ]
     );
 
+    /* =================================================
+       GET CREATED STUDENT
+    ================================================= */
+
     const [rows] = await db.execute(
-      `SELECT userId AS id, email, role, name, display_name, year_level,
-       section_name, onboarding_completed, is_verified, verification_id,
-       student_id, professor_id, professor_faculty_id, professor_department,
-       professor_position, professor_specialization,
-       professor_employment_proof, verification_status, is_archived,
-       archived_at, must_change_password, is_temporary, temporary_expires_at,
-       created_at
+      `SELECT
+        userId AS id,
+        email,
+        role,
+        name,
+        display_name,
+        profile_image,
+        year_level,
+        section_name,
+        onboarding_completed,
+        is_verified,
+        verification_id,
+        student_id,
+        gender,
+        professor_id,
+        professor_faculty_id,
+        professor_department,
+        professor_position,
+        professor_specialization,
+        professor_employment_proof,
+        verification_status,
+        is_archived,
+        archived_at,
+        must_change_password,
+        is_temporary,
+        temporary_expires_at,
+        created_at
        FROM users
        WHERE userId = ?
        LIMIT 1`,
       [result.insertId]
     );
 
-    try {
-      await sendStudentTemporaryPasswordEmail(email, temporaryPassword);
-    } catch (emailError) {
-      await db.execute("DELETE FROM users WHERE userId = ?", [result.insertId]);
+    /* =================================================
+       SEND TEMPORARY PASSWORD EMAIL
+    ================================================= */
 
-      return res.status(500).json({
-        success: false,
-        message: "Email failed: " + emailError.message,
+    try {
+      await sendStudentTemporaryPasswordEmail({
+        to: email,
+        studentName: name,
+        temporaryPassword,
       });
+    } catch (emailError) {
+      console.error(
+        "Student temporary password email error:",
+        emailError
+      );
     }
+
+    
+
+    /* =================================================
+       AUDIT LOG
+    ================================================= */
+
+    
+
+      await logAuditFromRequest(req, {
+        category: "User Management",
+        action: "Created student account",
+        target: name,
+        status: "Success",
+        details:
+          `Student ID: ${studentId}; ` +
+          `Email: ${email}; ` +
+          `Gender: ${gender}; ` +
+          `Year Level: ${yearLevel}; ` +
+          `Section: ${sectionName}`,
+      });
+
+    /* =================================================
+       RESPONSE
+    ================================================= */
 
     return res.status(201).json({
       success: true,
-      message: "Student account created and credentials emailed.",
-      credentialsEmailed: true,
+      message: "Student account created.",
       temporaryPassword,
       user: rowToUser(rows[0]),
     });
   } catch (error) {
-    console.error("Create student error:", error);
+    console.error(
+      "Create student account error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -526,12 +690,17 @@ export async function createStudentAccount(req, res) {
   }
 }
 
+
 export async function createAdminAccount(req, res) {
   const email = cleanEmail(req.body.email);
-  const name = cleanText(req.body.name || req.body.displayName);
-  const temporaryAccount = getTemporaryAccountSettings(req.body);
+  const name = cleanText(
+    req.body.name || req.body.displayName
+  );
 
-  if (!email || !name) {
+  const temporaryAccount =
+    getTemporaryAccountSettings(req.body);
+
+  if (!name || !email) {
     return res.status(400).json({
       success: false,
       message: "Admin name and email are required.",
@@ -558,15 +727,43 @@ export async function createAdminAccount(req, res) {
       });
     }
 
-    const temporaryPassword = generateTemporaryPassword();
-    const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+    const temporaryPassword =
+      generateTemporaryPassword();
+
+    const hashedPassword = await bcrypt.hash(
+      temporaryPassword,
+      10
+    );
 
     const [result] = await db.execute(
-      `INSERT INTO users
-       (email, password, role, name, display_name, verification_status,
-        is_verified, onboarding_completed, must_change_password, is_archived,
-        is_temporary, temporary_expires_at)
-       VALUES (?, ?, 'admin', ?, ?, 'approved', 1, 1, 1, 0, ?, ?)`,
+      `INSERT INTO users (
+        email,
+        password,
+        role,
+        name,
+        display_name,
+        verification_status,
+        is_verified,
+        onboarding_completed,
+        must_change_password,
+        is_archived,
+        is_temporary,
+        temporary_expires_at
+      )
+      VALUES (
+        ?,
+        ?,
+        'admin',
+        ?,
+        ?,
+        'approved',
+        1,
+        1,
+        1,
+        0,
+        ?,
+        ?
+      )`,
       [
         email,
         hashedPassword,
@@ -578,18 +775,55 @@ export async function createAdminAccount(req, res) {
     );
 
     const [rows] = await db.execute(
-      `SELECT userId AS id, email, role, name, display_name, year_level,
-       section_name, onboarding_completed, is_verified, verification_id,
-       student_id, professor_id, professor_faculty_id, professor_department,
-       professor_position, professor_specialization,
-       professor_employment_proof, verification_status, is_archived,
-       archived_at, must_change_password, is_temporary, temporary_expires_at,
-       created_at
+      `SELECT
+        userId AS id,
+        email,
+        role,
+        name,
+        display_name,
+        profile_image,
+        year_level,
+        section_name,
+        onboarding_completed,
+        is_verified,
+        verification_id,
+        student_id,
+        gender,
+        professor_id,
+        professor_faculty_id,
+        professor_department,
+        professor_position,
+        professor_specialization,
+        professor_employment_proof,
+        verification_status,
+        is_archived,
+        archived_at,
+        must_change_password,
+        is_temporary,
+        temporary_expires_at,
+        created_at
        FROM users
        WHERE userId = ?
        LIMIT 1`,
       [result.insertId]
     );
+
+    /* =================================================
+          AUDIT LOG
+        ================================================= */
+
+        await logAuditFromRequest(req, {
+          category: "User Management",
+          action: "Created administrator account",
+          target: name,
+          status: "Success",
+          details:
+            `Admin ID: ${result.insertId}; ` +
+            `Email: ${email}; ` +
+            `Temporary Account: ${
+              temporaryAccount.isTemporary ? "Yes" : "No"
+            }`,
+        });
 
     return res.status(201).json({
       success: true,
@@ -598,7 +832,10 @@ export async function createAdminAccount(req, res) {
       user: rowToUser(rows[0]),
     });
   } catch (error) {
-    console.error("Create admin error:", error);
+    console.error(
+      "Create admin error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -652,15 +889,21 @@ export async function createProfessorAccount(req, res) {
   const temporaryAccount =
     getTemporaryAccountSettings(req.body);
 
-  if (!email || !name) {
-    await removeUploadedProfessorProof(req.file);
+        if (
+      !name ||
+      !email ||
+      !facultyId ||
+      !department ||
+      !employmentProof
+    ) {
+      await removeUploadedProfessorProof(req.file);
 
-    return res.status(400).json({
-      success: false,
-      message:
-        "Professor name and email are required.",
-    });
-  }
+      return res.status(400).json({
+        success: false,
+        message:
+          "Professor name, email, faculty ID, department, and ID photo are required.",
+      });
+    }
 
   if (!facultyId) {
     await removeUploadedProfessorProof(req.file);
@@ -834,6 +1077,24 @@ export async function createProfessorAccount(req, res) {
       [result.insertId]
     );
 
+    /* =================================================
+          AUDIT LOG
+        ================================================= */
+
+        await logAuditFromRequest(req, {
+          category: "User Management",
+          action: "Created professor account",
+          target: name,
+          status: "Success",
+          details:
+            `Professor ID: ${result.insertId}; ` +
+            `Faculty ID: ${facultyId}; ` +
+            `Email: ${email}; ` +
+            `Department: ${department}; ` +
+            `Position: ${position}; ` +
+            `Specialization: ${specialization}`,
+        });
+
     return res.status(201).json({
       success: true,
       message:
@@ -868,10 +1129,17 @@ export async function updateProfessorRegistration(req, res) {
 
   try {
     const [existing] = await db.execute(
-      "SELECT userId, role FROM users WHERE userId = ? LIMIT 1",
-      [id]
-    );
-
+        `SELECT
+          userId,
+          role,
+          name,
+          display_name,
+          email
+        FROM users
+        WHERE userId = ?
+        LIMIT 1`,
+        [id]
+      );
     const user = existing[0];
 
     if (!user) {
@@ -907,6 +1175,34 @@ export async function updateProfessorRegistration(req, res) {
       [id]
     );
 
+      /* =================================================
+          AUDIT LOG
+        ================================================= */
+
+        const targetName =
+          user.name ||
+          user.display_name ||
+          user.email ||
+          `Professor #${id}`;
+
+        await logAuditFromRequest(req, {
+          category: "User Management",
+
+          action:
+            status === "approved"
+              ? "Approved professor registration"
+              : "Declined professor registration",
+
+          target: targetName,
+
+          status: "Success",
+
+          details:
+            `Professor ID: ${id}; ` +
+            `Email: ${user.email || "N/A"}; ` +
+            `Registration Status: ${status}`,
+        });
+
     return res.json({
       success: true,
       message:
@@ -931,7 +1227,15 @@ export async function updateAccountArchive(req, res) {
 
   try {
     const [existing] = await db.execute(
-      "SELECT userId, role FROM users WHERE userId = ? LIMIT 1",
+      `SELECT
+        userId,
+        role,
+        name,
+        display_name,
+        email
+      FROM users
+      WHERE userId = ?
+      LIMIT 1`,
       [id]
     );
 
@@ -972,6 +1276,33 @@ export async function updateAccountArchive(req, res) {
       [id]
     );
 
+    /* =================================================
+          AUDIT LOG
+        ================================================= */
+
+        const targetName =
+          user.name ||
+          user.display_name ||
+          user.email ||
+          `User #${id}`;
+
+        await logAuditFromRequest(req, {
+          category: "User Management",
+
+          action: archive
+            ? "Archived user account"
+            : "Restored user account",
+
+          target: targetName,
+
+          status: "Success",
+
+          details:
+            `User ID: ${id}; ` +
+            `Role: ${user.role}; ` +
+            `Email: ${user.email || "N/A"}`,
+        });
+
     return res.json({
       success: true,
       message: archive ? "Account archived." : "Account restored.",
@@ -992,7 +1323,15 @@ export async function resetUserCredentials(req, res) {
 
   try {
     const [existing] = await db.execute(
-      "SELECT userId, role, email FROM users WHERE userId = ? LIMIT 1",
+      `SELECT
+        userId,
+        role,
+        email,
+        name,
+        display_name
+      FROM users
+      WHERE userId = ?
+      LIMIT 1`,
       [id]
     );
 
@@ -1022,6 +1361,27 @@ export async function resetUserCredentials(req, res) {
       [hashedPassword, id]
     );
 
+    /* =================================================
+        AUDIT LOG
+      ================================================= */
+
+      const targetName =
+        user.name ||
+        user.display_name ||
+        user.email ||
+        `User #${id}`;
+
+      await logAuditFromRequest(req, {
+        category: "Security",
+        action: "Reset user credentials",
+        target: targetName,
+        status: "Success",
+        details:
+          `User ID: ${id}; ` +
+          `Role: ${user.role}; ` +
+          `Email: ${user.email}`,
+      });
+
     return res.json({
       success: true,
       message: "Temporary credentials generated.",
@@ -1038,12 +1398,25 @@ export async function resetUserCredentials(req, res) {
   }
 }
 
-export async function permanentlyRemoveArchivedAccount(req, res) {
+  export async function permanentlyRemoveArchivedAccount(req, res) {
   const { id } = req.params;
 
   try {
+    /* =================================================
+       GET USER BEFORE DELETION
+    ================================================= */
+
     const [existing] = await db.execute(
-      "SELECT userId, role, is_archived FROM users WHERE userId = ? LIMIT 1",
+      `SELECT
+        userId,
+        role,
+        name,
+        display_name,
+        email,
+        is_archived
+       FROM users
+       WHERE userId = ?
+       LIMIT 1`,
       [id]
     );
 
@@ -1056,33 +1429,86 @@ export async function permanentlyRemoveArchivedAccount(req, res) {
       });
     }
 
+    /* =================================================
+       PROTECT SUPER ADMIN
+    ================================================= */
+
     if (user.role === "super_admin") {
       return res.status(400).json({
         success: false,
-        message: "The Super Admin account cannot be removed.",
+        message:
+          "The Super Admin account cannot be removed.",
       });
     }
+
+    /* =================================================
+       ONLY ARCHIVED ACCOUNTS CAN BE DELETED
+    ================================================= */
 
     if (Number(user.is_archived) !== 1) {
       return res.status(400).json({
         success: false,
-        message: "Only archived accounts can be permanently removed.",
+        message:
+          "Only archived accounts can be permanently removed.",
       });
     }
 
-    await db.execute("DELETE FROM users WHERE userId = ?", [id]);
+    /* =================================================
+       SAVE INFORMATION FOR AUDIT LOG
+    ================================================= */
+
+    const targetName =
+      user.name ||
+      user.display_name ||
+      user.email ||
+      `User #${id}`;
+
+    const deletedUserDetails =
+      `User ID: ${id}; ` +
+      `Role: ${user.role}; ` +
+      `Email: ${user.email || "N/A"}`;
+
+    /* =================================================
+       DELETE USER
+    ================================================= */
+
+    await db.execute(
+      "DELETE FROM users WHERE userId = ?",
+      [id]
+    );
+
+    /* =================================================
+       AUDIT LOG
+    ================================================= */
+
+    await logAuditFromRequest(req, {
+      category: "User Management",
+      action: "Permanently deleted user account",
+      target: targetName,
+      status: "Success",
+      details: deletedUserDetails,
+    });
+
+    /* =================================================
+       RESPONSE
+    ================================================= */
 
     return res.json({
       success: true,
-      message: "Archived account permanently removed.",
+      message:
+        "Archived account permanently removed.",
       userId: Number(id),
     });
   } catch (error) {
-    console.error("Remove archived account error:", error);
+    console.error(
+      "Remove archived account error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Failed to remove archived account.",
+      message:
+        "Failed to remove archived account.",
     });
   }
 }
@@ -1732,3 +2158,49 @@ export async function updateProfileImage(req, res) {
     });
   }
 }
+  export async function logBulkStudentImport(req, res) {
+  const fileName = cleanText(req.body.fileName);
+  const importedCount = Number(req.body.importedCount || 0);
+  const failedCount = Number(req.body.failedCount || 0);
+  const totalCount = Number(req.body.totalCount || 0);
+
+  if (!fileName) {
+    return res.status(400).json({
+      success: false,
+      message: "Import file name is required.",
+    });
+  }
+
+  try {
+    await logAuditFromRequest(req, {
+      category: "User Management",
+      action: "Bulk student import",
+      target: fileName,
+      status:
+        failedCount > 0
+          ? "Partial Success"
+          : "Success",
+      details:
+        `Total Records: ${totalCount}; ` +
+        `Imported: ${importedCount}; ` +
+        `Failed: ${failedCount}`,
+    });
+
+    return res.json({
+      success: true,
+      message: "Bulk student import recorded.",
+    });
+  } catch (error) {
+    console.error(
+      "Bulk student import audit error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Failed to record bulk student import.",
+    });
+  }
+}
+
