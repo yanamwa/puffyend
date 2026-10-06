@@ -2,6 +2,7 @@ import express from "express";
 import authenticateUser from "../middleware/authMiddleware.js";
 import professorProofUpload from "../middleware/professorProofUpload.js";
 import uploadProfileImage from "../middleware/profileImageUpload.js";
+import { requireRole } from "../middleware/roleMiddleware.js";
 
 import {
   changeUserPassword,
@@ -9,6 +10,7 @@ import {
   createAdminAccount,
   createProfessorAccount,
   createStudentAccount,
+  logBulkStudentImport,
   getCurrentUser,
   getProfile,
   getUsers,
@@ -49,21 +51,32 @@ function handleProfessorProofUpload(req, res, next) {
    USER MANAGEMENT
 ========================= */
 
-router.get("/users", getUsers);
+router.get(
+  "/users",
+  authenticateUser,
+  requireRole("super_admin", "admin"),
+  getUsers
+);
 
 router.post(
   "/users/admin",
+  authenticateUser,
+  requireRole("super_admin"),
   createAdminAccount
 );
 
 router.post(
   "/users/professor",
+  authenticateUser,
+  requireRole("super_admin", "admin"),
   handleProfessorProofUpload,
   createProfessorAccount
 );
 
 router.post(
   "/users/student",
+  authenticateUser,
+  requireRole("super_admin", "admin"),
   createStudentAccount
 );
 
@@ -93,47 +106,48 @@ router.put(
 /* =========================
    USER BY ID
 ========================= */
+router.post(
+  "/users/student/bulk-import-audit",
+  authenticateUser,
+  requireRole("super_admin", "admin"),
+  logBulkStudentImport
+);
 
 router.get(
   "/users/:id",
+  authenticateUser,
+  requireRole("super_admin", "admin"),
   getUserById
 );
 
 router.patch(
   "/users/:id/registration",
+  authenticateUser,
+  requireRole("super_admin"),
   updateProfessorRegistration
 );
 
 router.patch(
   "/users/:id/archive",
+  authenticateUser,
+  requireRole("super_admin", "admin"),
   updateAccountArchive
 );
 
 router.post(
   "/users/:id/reset-credentials",
+  authenticateUser,
+  requireRole("super_admin", "admin"),
   resetUserCredentials
 );
 
 router.delete(
   "/users/:id/archived",
+  authenticateUser,
+  requireRole("super_admin", "admin"),
   permanentlyRemoveArchivedAccount
 );
 
-
-
-/* =========================
-   LEGACY / GENERAL ROUTES
-========================= */
-
-router.get(
-  "/",
-  getUsers
-);
-
-router.get(
-  "/:id",
-  getUserById
-);
 
 /* =========================
    PROFILE
