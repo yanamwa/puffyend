@@ -2,6 +2,16 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 
 import { db } from "../db.js";
+import { deleteWithSources } from '../services/rag/sourceLifecycleService.js';
+import authenticateUser from '../middleware/authMiddleware.js';
+import { assertCourseAccess } from '../services/rag/courseAccessService.js';
+
+async function authenticateDeletion(req, res) {
+  if (req.user) return true;
+  let authenticated = false;
+  await authenticateUser(req, res, () => { authenticated = true; });
+  return authenticated;
+}
 import {
   sendEnrollmentDeclinedEmail,
   sendEnrollmentRequestEmail,
@@ -274,6 +284,13 @@ function readList(...values) {
   return [];
 }
 
+function getMainQuizSettings(module = {}) {
+  const settings = module.mainQuizSettings || module.main_quiz_settings || {};
+  const enabled = settings.enabled ?? settings.isEnabled ?? module.mainQuizEnabled ?? module.main_quiz_enabled ?? true;
+  return { enabled: ![false, 0, '0', 'false'].includes(enabled),
+    unlockAt: settings.unlockAt || settings.unlock_at || module.mainQuizUnlockAt || module.main_quiz_unlock_at || '' };
+}
+
 function normalizeContentModule(module, index) {
   const lessonPages = readList(
     module?.lessonPages,
@@ -292,6 +309,7 @@ function normalizeContentModule(module, index) {
 
   return {
     id: module?.id || module?.lesson_id || module?.module_id || `module-${index + 1}`,
+    mainQuizSettings: getMainQuizSettings(module),
     lesson_id: module?.lesson_id || null,
     module_id: module?.module_id || module?.id || null,
     title: cleanText(module?.title) || `Module ${index + 1}`,
@@ -325,6 +343,7 @@ function getModuleMeta(module, index) {
   const moduleId = module.id || module.module_id || module.lesson_id || `module-${index + 1}`;
 
   return {
+    mainQuizSettings: getMainQuizSettings(module),
     moduleId,
     module_id: moduleId,
     moduleTitle: module.title,
@@ -394,6 +413,7 @@ function buildContentModulesFromFlatContent(lessonPages, quizItems, fallback = {
       );
 
       modules.set(key, {
+        mainQuizSettings: getMainQuizSettings(item),
         id: moduleId,
         module_id: moduleId,
         title,
@@ -772,19 +792,17 @@ function validateModule(fields) {
 }
 
 function validateCourse(fields) {
-  if (!fields.courseCode) {
-    return "Course code is required.";
-  }
-
-  if (!fields.title || !fields.summary || !fields.subject) {
-    return "Course title, description, and subject are required.";
-  }
-
+  if (!fields.courseCode) return 'Course code is required.';
+  if (!fields.title) return 'Course title is required.';
+  if (fields.status !== 'published') return '';
+  if (!fields.summary || !fields.subject) return 'Course description and subject are required to publish.';
   if (!fields.learningObjectives || fields.lessonPages.length === 0) {
-    return "Learning objectives and at least one lesson page are required.";
+    return 'Learning objectives and at least one lesson page are required to publish.';
   }
-
-  return "";
+  if (fields.contentModules.some(module => !module.title || !module.learningObjectives || !module.lessonPages.length)) {
+    return 'Complete every module before publishing the course.';
+  }
+  return '';
 }
 
 function duplicateCourseCode(error) {
@@ -2798,6 +2816,7 @@ export async function archiveCourse(req, res) {
 }
 
 export async function deleteCourse(req, res) {
+  if (!await authenticateDeletion(req, res)) return;
   const id = req.params.id || req.body.id || req.body.course_id;
 
   if (!id) {
@@ -2809,6 +2828,7 @@ export async function deleteCourse(req, res) {
 
   try {
     const idColumn = await getCourseIdColumn();
+    await assertCourseAccess(req.user, Number(id));
     const currentUser = await getRequestUserProfile(req);
     const where = [`${idColumn} = ?`];
     const params = [id];
@@ -2819,10 +2839,8 @@ export async function deleteCourse(req, res) {
       params.push(...owner.params);
     }
 
-    const [result] = await db.execute(
-      `DELETE FROM courses WHERE ${where.join(" AND ")}`,
-      params
-    );
+    const result = await deleteWithSources({ entity: 'course', id,
+      deleteSql: `DELETE FROM courses WHERE ${where.join(" AND ")}`, parameters: params });
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
@@ -2838,14 +2856,15 @@ export async function deleteCourse(req, res) {
   } catch (error) {
     console.error("Delete course error:", error);
 
-    return res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to delete course.",
+      message: error.statusCode ? error.message : "Failed to delete course.",
     });
   }
 }
 
 export async function deleteLearningModule(req, res) {
+  if (!await authenticateDeletion(req, res)) return;
   const id = req.params.id || req.body.id || req.body.lesson_id;
 
   if (!id) {
@@ -2856,10 +2875,11 @@ export async function deleteLearningModule(req, res) {
   }
 
   try {
-    const [result] = await db.execute(
-      "DELETE FROM learning_modules WHERE lesson_id = ?",
-      [id]
-    );
+    const [modules] = await db.execute('SELECT course_id FROM learning_modules WHERE lesson_id = ?', [id]);
+    if (!modules[0]) return res.status(404).json({ success: false, message: 'Learning module not found.' });
+    await assertCourseAccess(req.user, modules[0].course_id, Number(id));
+    const result = await deleteWithSources({ entity: 'lesson', id,
+      deleteSql: 'DELETE FROM learning_modules WHERE lesson_id = ?', parameters: [id] });
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
@@ -2875,9 +2895,9 @@ export async function deleteLearningModule(req, res) {
   } catch (error) {
     console.error("Delete learning module error:", error);
 
-    return res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to delete learning module.",
+      message: error.statusCode ? error.message : "Failed to delete learning module.",
     });
   }
 }

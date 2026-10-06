@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import multer from "multer";
+import { fileURLToPath } from 'node:url';
 
-const uploadDirectory = path.resolve("src/uploads");
+const uploadDirectory = fileURLToPath(new URL('../uploads/lessons/', import.meta.url));
 
 if (!fs.existsSync(uploadDirectory)) {
   fs.mkdirSync(uploadDirectory, {
@@ -15,6 +16,7 @@ const allowedExtensions = new Set([
   ".pdf",
   ".docx",
   ".txt",
+  '.ppt', '.pptx',
 ]);
 
 const allowedMimeTypes = new Set([
@@ -23,6 +25,9 @@ const allowedMimeTypes = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 
   "application/octet-stream",
+  'application/vnd.ms-powerpoint',
+  'application/mspowerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 ]);
 
 const storage = multer.diskStorage({
@@ -47,7 +52,7 @@ const upload = multer({
 
   limits: {
     fileSize: 25 * 1024 * 1024,
-    files: 1,
+    files: 10,
   },
 
   fileFilter(req, file, callback) {
@@ -60,7 +65,7 @@ const upload = multer({
 
     if (!validExtension || !validMimeType) {
       const error = new Error(
-        "Only PDF, DOCX, and TXT files are allowed.",
+        "Only PDF, PPT, PPTX, DOCX, and TXT files are allowed.",
       );
 
       error.statusCode = 400;

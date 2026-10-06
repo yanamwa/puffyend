@@ -11,6 +11,8 @@ import lessonRoutes from "./routes/lessonRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 
 import { initDb } from "./db.js";
+import { startLessonWorker } from './services/rag/lessonJobService.js';
+import privateLessonUploads from './middleware/privateLessonUploads.js';
 
 dotenv.config();
 
@@ -148,6 +150,7 @@ app.use(
 
 app.use(
   "/uploads",
+  privateLessonUploads,
   express.static(profileUploadsDirectory)
 );
 
@@ -157,6 +160,7 @@ app.use(
 
 app.use(
   "/api/uploads",
+  privateLessonUploads,
   express.static(
     path.resolve(
       __dirname,
@@ -345,6 +349,7 @@ async function startServer() {
     );
 
     await initDb();
+    startLessonWorker();
 
     console.log(
       "MySQL Connected Successfully."

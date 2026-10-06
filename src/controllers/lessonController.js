@@ -1,550 +1,120 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { db } from '../db.js';
+import { enqueueJob, loadJob } from '../services/rag/lessonJobService.js';
+import { loadDocument, withDatabaseLock } from '../services/rag/vectorRepository.js';
+import { assertCourseAccess, requestError } from '../services/rag/courseAccessService.js';
+import { deleteWithSources, drainFileDeletions, assertPrivatePath } from '../services/rag/sourceLifecycleService.js';
+import { generateQuizWithRag } from '../services/rag/quizRagService.js';
 
-import {
-  extractTextFromUploadedFile,
-} from "../services/fileExtraction.js";
-
-import {
-  generateLessonContent,
-} from "../services/geminiService.js";
-
-import {
-  generateQuizWithGemini,
-} from "../services/quizGenerationService.js";
-
-import {
-  normalizeLessonPages,
-  normalizeTextValue,
-} from "../utils/normalize.js";
-
-const allowedExtensions = new Set([
-  "pdf",
-  "docx",
-  "txt",
-]);
-
-const maximumInlinePdfSize =
-  15 * 1024 * 1024;
-
-const minimumReadableCharacterCount = 30;
-
-function cleanExtractedText(value) {
-  return String(value || "")
-    .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, " ")
-    .replace(/\f/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+function reportError(res, error) {
+  console.error('Lesson RAG:', error.message);
+  return res.status(error.statusCode || 500).json({ success: false, message: error.code === 'ER_NO_SUCH_TABLE'
+    ? 'Run all three lesson RAG SQL migrations before using this endpoint.' : error.message });
 }
 
-function hasReadableLessonText(value) {
-  const text = cleanExtractedText(value);
-  const letters = text.replace(/[^A-Za-z]/g, "");
-
-  return letters.length >= minimumReadableCharacterCount;
-}
-
-function createFallbackModuleTitle(fileName) {
-  const baseName = path.basename(
-    String(fileName || "Uploaded lesson"),
-    path.extname(String(fileName || ""))
-  );
-
-  return baseName
-    .replace(/[-_]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim() || "Uploaded lesson";
-}
-
-function summarizeText(value, maxLength = 220) {
-  const text = cleanExtractedText(value).replace(/\s+/g, " ");
-
-  if (text.length <= maxLength) {
-    return text;
-  }
-
-  return `${text.slice(0, maxLength).trim()}...`;
-}
-
-function titleFromChunk(chunk, index) {
-  const firstLine = String(chunk || "")
-    .split(/\n|[.!?]\s/)
-    .map((part) => part.trim())
-    .find(Boolean);
-
-  const title = String(firstLine || "")
-    .replace(/[^A-Za-z0-9 ():/,.-]/g, "")
-    .replace(/\s+/g, " ")
-    .slice(0, 80)
-    .trim();
-
-  return title || `Lesson Page ${index + 1}`;
-}
-
-function createFallbackLessonPages(textContent) {
-  const text = cleanExtractedText(textContent);
-
-  if (!hasReadableLessonText(text)) {
-    return [];
-  }
-
-  const words = text.split(/\s+/).filter(Boolean);
-  const pages = [];
-  const wordsPerPage = 140;
-
-  for (let index = 0; index < words.length; index += wordsPerPage) {
-    const chunk = words.slice(index, index + wordsPerPage).join(" ");
-
-    pages.push({
-      title: titleFromChunk(chunk, pages.length),
-      content: chunk,
-    });
-  }
-
-  return pages;
-}
-
-/*
- * POST /api/lessons/process-file
- *
- * Accepts:
- * multipart/form-data
- *
- * Field name:
- * file
- */
-export async function processLessonFile(
-  req,
-  res
-) {
-  const uploadedFilePath =
-    req.file?.path;
-
+export async function processLessonFile(req, res) {
+  const files = [...(req.files?.files || []), ...(req.files?.file || []), ...(req.file ? [req.file] : [])];
   try {
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        message: "No file uploaded.",
-      });
-    }
-
-    const extension = path
-      .extname(
-        req.file.originalname
-      )
-      .replace(/^\./, "")
-      .toLowerCase();
-
-    if (
-      !allowedExtensions.has(
-        extension
-      )
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Only PDF, DOCX, and TXT files are allowed.",
-      });
-    }
-
-    console.log(
-      `Processing uploaded file: ${req.file.originalname}`
-    );
-
-    let textContent =
-      await extractTextFromUploadedFile(
-        uploadedFilePath,
-        extension
-      );
-
-    textContent = cleanExtractedText(
-      textContent
-    );
-
-    let pdfInlineData = null;
-
-    /*
-     * If normal PDF text extraction returns
-     * no content, send the original PDF
-     * directly to Gemini.
-     */
-    if (
-      !hasReadableLessonText(
-        textContent
-      )
-    ) {
-      if (extension !== "pdf") {
-        return res.status(400).json({
-          success: false,
-          message:
-            "The uploaded file is empty or does not contain readable text.",
-        });
-      }
-
-      if (
-        req.file.size >
-        maximumInlinePdfSize
-      ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "This PDF has no readable text and is larger than 15 MB. Please upload a searchable or smaller PDF.",
-        });
-      }
-
-      let pdfBuffer;
-
-      try {
-        pdfBuffer =
-          await fs.readFile(
-            uploadedFilePath
-          );
-      } catch (error) {
-        console.error(
-          "Could not read uploaded PDF:",
-          error
-        );
-
-        return res.status(400).json({
-          success: false,
-          message:
-            "The uploaded PDF could not be read.",
-        });
-      }
-
-      pdfInlineData =
-        pdfBuffer.toString(
-          "base64"
-        );
-
-      textContent = "";
-
-      console.log(
-        "No readable PDF text found. Sending PDF directly to Gemini."
-      );
-    }
-
-    /*
-     * Keep the prompt size controlled.
-     */
-    textContent = Array.from(
-      textContent
-    )
-      .slice(0, 12_000)
-      .join("");
-
-    const parsed =
-      await generateLessonContent({
-        textContent,
-        pdfInlineData,
-      });
-
-    let lessonPages =
-      normalizeLessonPages(
-        parsed.lesson_pages
-      );
-
-    if (
-      lessonPages.length === 0 &&
-      hasReadableLessonText(
-        textContent
-      )
-    ) {
-      lessonPages =
-        createFallbackLessonPages(
-          textContent
-        );
-    }
-
-    if (lessonPages.length === 0) {
-      return res.status(422).json({
-        success: false,
-        message:
-          extension === "pdf"
-            ? "The PDF uploaded, but no readable lesson text could be found. If it is scanned or image-only, please upload a searchable PDF, DOCX, or TXT file."
-            : "The uploaded file was processed, but no lesson pages could be created from its text.",
-      });
-    }
-
-    const moduleTitle =
-      normalizeTextValue(
-        parsed.module_title
-      ) ||
-      createFallbackModuleTitle(
-        req.file.originalname
-      );
-
-    const description =
-      normalizeTextValue(
-        parsed.description
-      ) ||
-      summarizeText(
-        textContent ||
-          lessonPages
-            .map((page) => page.content)
-            .join(" ")
-      );
-
-    const learningObjectives =
-      normalizeTextValue(
-        parsed.learning_objectives
-      ) ||
-      `- Understand the key ideas in ${moduleTitle}.`;
-
-    return res.status(200).json({
-      success: true,
-
-      module_title:
-        moduleTitle,
-
-      subject:
-        normalizeTextValue(
-          parsed.subject
-        ) || moduleTitle,
-
-      description:
-        description,
-
-      learning_objectives:
-        learningObjectives,
-
-      lesson_pages:
-        lessonPages,
-    });
-  } catch (error) {
-    console.error(
-      "processLessonFile error:",
-      error
-    );
-
-    return res
-      .status(
-        error.statusCode || 500
-      )
-      .json({
-        success: false,
-
-        message:
-          error.message ||
-          "Could not process the uploaded lesson file.",
-      });
-  } finally {
-    /*
-     * Always remove the temporary upload.
-     */
-    if (uploadedFilePath) {
-      await fs
-        .unlink(
-          uploadedFilePath
-        )
-        .catch((error) => {
-          console.error(
-            "Could not remove temporary upload:",
-            error.message
-          );
-        });
-    }
-  }
+    if (!files.length) throw requestError('No files uploaded.', 400);
+    if (files.length > 10 || files.reduce((sum, file) => sum + file.size, 0) > 50 * 1024 * 1024) throw requestError('Upload at most 10 files with a combined size of 50 MB.', 400);
+    const courseId = Number(req.body.course_id);
+    const lessonId = req.body.lesson_id ? Number(req.body.lesson_id) : null;
+    await assertCourseAccess(req.user, courseId, lessonId);
+    const result = await enqueueJob({ type: 'upload', files, courseId, lessonId, requesterId: req.user.userId });
+    return res.status(202).json({ success: true, job_id: result.jobId, reused: result.reused, status_url: `/api/lessons/jobs/${result.jobId}` });
+  } catch (error) { return reportError(res, error); }
+  finally { await Promise.all(files.map(file => fs.unlink(file.path).catch(() => {}))); }
 }
 
-/*
- * POST /api/lessons/generate-quiz
- *
- * Accepts JSON:
- *
- * {
- *   lesson_title,
- *   lesson_content,
- *   learning_objectives,
- *   question_count,
- *   true_false_count,
- *   difficulty
- * }
- */
-export async function generateLessonQuiz(
-  req,
-  res
-) {
+export async function getLessonJob(req, res) {
   try {
-    const lessonTitle =
-      String(
-        req.body?.lesson_title ||
-          ""
-      ).trim();
+    const job = await loadJob(req.params.jobId);
+    if (!job) throw requestError('Job not found.', 404);
+    await assertCourseAccess(req.user, job.course_id, job.lesson_id);
+    return res.json({ success: true, job_id: job.job_id, status: job.status, phase: job.phase, progress: job.progress,
+      attempts: job.attempts, document_id: job.document_id, message: job.error_message,
+      ...(job.status === 'completed' ? { result: job.result } : {}) });
+  } catch (error) { return reportError(res, error); }
+}
 
-    const learningObjectives =
-      String(
-        req.body
-          ?.learning_objectives ||
-          ""
-      ).trim();
+async function authorizedDocument(req) {
+  if (!/^\d+$/.test(req.params.documentId)) throw requestError('Invalid document ID.', 400);
+  const document = await loadDocument(req.params.documentId);
+  if (!document) throw requestError('Source not found.', 404);
+  await assertCourseAccess(req.user, document.course_id, document.lesson_id);
+  return document;
+}
 
-    let lessonContent =
-      String(
-        req.body?.lesson_content ||
-          ""
-      ).trim();
+export async function listLessonSources(req, res) {
+  try {
+    const courseId = Number(req.query.course_id);
+    await assertCourseAccess(req.user, courseId);
+    const [rows] = await db.execute(`SELECT document_id, lesson_id, filename, processing_status, processing_error,
+      chunk_count, created_at FROM lesson_source_documents WHERE course_id = ? ORDER BY document_id DESC LIMIT 200`, [courseId]);
+    const [failedJobs] = await db.execute("SELECT job_id, lesson_id, error_message FROM lesson_rag_jobs WHERE course_id = ? AND status = 'failed' AND document_id IS NOT NULL ORDER BY created_at DESC LIMIT 20", [courseId]);
+    return res.json({ success: true, sources: rows, failed_jobs: failedJobs });
+  } catch (error) { return reportError(res, error); }
+}
 
-    let questionCount =
-      Number.parseInt(
-        req.body?.question_count,
-        10
-      );
+export async function queueSourceGeneration(req, res) {
+  try {
+    const document = await authorizedDocument(req);
+    const type = req.path.endsWith('/reindex') ? 'reindex' : 'generate';
+    if (type === 'generate' && document.processing_status !== 'ready') throw requestError('Index or reindex this source first.', 409);
+    const result = await enqueueJob({ type, documentId: document.document_id, courseId: document.course_id,
+      lessonId: document.lesson_id, requesterId: req.user.userId });
+    return res.status(202).json({ success: true, job_id: result.jobId, reused: result.reused });
+  } catch (error) { return reportError(res, error); }
+}
 
-    let trueFalseCount =
-      Number.parseInt(
-        req.body
-          ?.true_false_count,
-        10
-      );
-
-    const difficulty =
-      String(
-        req.body?.difficulty ||
-          "medium"
-      )
-        .trim()
-        .toLowerCase();
-
-    /*
-     * Default values.
-     */
-    if (
-      !Number.isInteger(
-        questionCount
-      )
-    ) {
-      questionCount = 5;
-    }
-
-    if (
-      !Number.isInteger(
-        trueFalseCount
-      )
-    ) {
-      trueFalseCount = 0;
-    }
-
-    /*
-     * Keep counts within allowed limits.
-     */
-    questionCount = Math.max(
-      1,
-      Math.min(
-        50,
-        questionCount
-      )
-    );
-
-    trueFalseCount = Math.max(
-      0,
-      Math.min(
-        questionCount,
-        trueFalseCount
-      )
-    );
-
-    const allowedDifficulties =
-      new Set([
-        "easy",
-        "medium",
-        "hard",
-      ]);
-
-    if (
-      !allowedDifficulties.has(
-        difficulty
-      )
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Difficulty must be easy, medium, or hard.",
-      });
-    }
-
-    if (
-      !lessonContent &&
-      !learningObjectives
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Lesson content or learning objectives are required.",
-      });
-    }
-
-    /*
-     * Limit lesson text sent to Gemini.
-     */
-    lessonContent = Array.from(
-      lessonContent
-    )
-      .slice(0, 12_000)
-      .join("");
-
-    console.log(
-      "Generating quiz:",
-      {
-        lessonTitle,
-        questionCount,
-        trueFalseCount,
-        multipleChoiceCount:
-          questionCount -
-          trueFalseCount,
-        difficulty,
-      }
-    );
-
-    const questions =
-      await generateQuizWithGemini({
-        lessonTitle,
-        lessonContent,
-        learningObjectives,
-        questionCount,
-        trueFalseCount,
-        difficulty,
-      });
-
-    return res.status(200).json({
-      success: true,
-
-      quiz: {
-        questions,
-      },
-
-      generated_count:
-        questions.length,
-
-      question_count:
-        questionCount,
-
-      true_false_count:
-        trueFalseCount,
-
-      multiple_choice_count:
-        questionCount -
-        trueFalseCount,
-
-      difficulty,
+export async function deleteLessonSource(req, res) {
+  try {
+    const document = await authorizedDocument(req);
+    await withDatabaseLock(`rag-document:${document.document_id}`, async () => {
+      const [jobs] = await db.execute(`SELECT j.job_id FROM lesson_rag_jobs j LEFT JOIN lesson_rag_job_documents r ON r.job_id = j.job_id
+        WHERE (j.document_id = ? OR r.document_id = ?) AND j.status IN ('queued', 'running') LIMIT 1`, [document.document_id, document.document_id]);
+      if (jobs.length) throw requestError('Wait for the active source job to finish before deleting it.', 409);
+      await deleteWithSources({ entity: 'document', id: document.document_id,
+        deleteSql: 'DELETE FROM lesson_source_documents WHERE document_id = ?', parameters: [document.document_id] });
     });
-  } catch (error) {
-    console.error(
-      "generateLessonQuiz error:",
-      error
-    );
+    await drainFileDeletions();
+    return res.json({ success: true, message: 'Source deleted; private file cleanup queued.' });
+  } catch (error) { return reportError(res, error); }
+}
 
-    return res
-      .status(
-        error.statusCode || 500
-      )
-      .json({
-        success: false,
+export async function downloadLessonSource(req, res) {
+  try {
+    const document = await authorizedDocument(req);
+    res.download(assertPrivatePath(document.storage_path), path.basename(document.filename), error => {
+      if (error && !res.headersSent) reportError(res, requestError('Source file is unavailable.', 404));
+    });
+  } catch (error) { return reportError(res, error); }
+}
+export async function generateLessonQuiz(req, res) {
+  try {
+    const result = await generateQuizWithRag({ user: req.user, body: req.body || {} });
+    return res.json({ success: true, quiz: { questions: result.questions },
+      generated_count: result.questions.length, question_count: result.questionCount,
+      identification_count: result.identificationCount,
+      multiple_choice_count: result.questionCount - result.identificationCount,
+      difficulty: result.difficulty, document_ids: result.document_ids, rag_version: 'quiz-1' });
+  } catch (error) { return reportError(res, error); }
+}
 
-        message:
-          error.message ||
-          "Could not generate the quiz.",
-      });
-  }
+export async function retryLessonJob(req, res) {
+  try {
+    const job = await loadJob(req.params.jobId);
+    if (!job) throw requestError('Job not found.', 404);
+    await assertCourseAccess(req.user, job.course_id, job.lesson_id);
+    const [sources] = await db.execute('SELECT d.document_id, d.processing_status, d.content_hash FROM lesson_rag_job_documents r JOIN lesson_source_documents d ON d.document_id = r.document_id WHERE r.job_id = ? ORDER BY d.document_id', [job.job_id]);
+    if (!sources.length || sources.some(s => s.processing_status !== 'ready')) throw requestError('Some sources are not indexed. Upload the materials again or reindex the failed sources.', 409);
+    const indexedHashes = new Set(sources.map(s => s.content_hash));
+    if (job.job_type === 'upload' && (job.payload.sourceHashes?.length
+      ? job.payload.sourceHashes.some(hash => !indexedHashes.has(hash))
+      : (job.payload.files?.length || 0) > sources.length)) throw requestError('Some uploaded files were not indexed. Upload the complete batch again; ready sources will reuse their embeddings.', 409);
+    const [result] = await db.execute("UPDATE lesson_rag_jobs SET status = 'queued', phase = 'retrying generation', attempts = 0, progress = 25, error_message = NULL, next_run_at = NOW(), requester_id = ?, payload = JSON_SET(payload, '$.retryDocumentIds', JSON_EXTRACT(?, '$')) WHERE job_id = ? AND status = 'failed'", [req.user.userId, JSON.stringify(sources.map(s => s.document_id)), job.job_id]);
+    if (!result.affectedRows) throw requestError('Only failed jobs can be retried.', 409);
+    return res.status(202).json({ success: true, job_id: job.job_id });
+  } catch (error) { return reportError(res, error); }
 }

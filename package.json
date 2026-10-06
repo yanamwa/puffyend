@@ -2,20 +2,25 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test tests/rag.test.js tests/grounding.test.js tests/powerPoint.test.js tests/outlineRecovery.test.js tests/quizRag.test.js",
+    "test:integration": "node --test tests/rag.integration.test.js"
   },
   "dependencies": {
+    "adm-zip": "^0.6.1",
     "axios": "^1.18.1",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.2",
+    "fast-xml-parser": "^5.11.2",
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.12.0",
     "multer": "^2.2.0",
     "mysql2": "^3.22.5",
     "nodemailer": "^9.0.3",
-    "pdf-parse": "^2.4.5"
+    "pdf-parse": "^2.4.5",
+    "ppt-to-text": "^1.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"
