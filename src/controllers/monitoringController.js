@@ -1,3 +1,4 @@
+import { assertCourseAccess } from '../services/rag/courseAccessService.js';
 import { db } from "../db.js";
 
 function parseJsonList(value) {
@@ -514,7 +515,7 @@ export async function saveLessonProgress(req, res) {
 }
 
 export async function saveQuizAttempt(req, res) {
-  const userId = req.body.user_id || req.body.userId || 1;
+  const userId = req.user.userId;
   const lessonId = req.body.lesson_id || req.body.lessonId || null;
   const requestedCourseId = req.body.course_id || req.body.courseId || null;
   const score = Number(req.body.score || 0);
@@ -532,6 +533,11 @@ export async function saveQuizAttempt(req, res) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, lessonId, courseId, score, total, source, quizMode, timeSpent]
     );
+
+    const assessmentType = req.body.assessment_type === 'main' ? 'main' : 'practice';
+    const answers = Array.isArray(req.body.answers) ? req.body.answers.slice(0, 500) : [];
+    await db.execute('INSERT INTO quiz_attempt_details (attempts_id, assessment_type, answers_json, module_index) VALUES (?, ?, ?, ?)',
+      [result.insertId, assessmentType, JSON.stringify(answers), Number.isInteger(req.body.module_index) ? req.body.module_index : null]);
 
     if (courseId) {
       await db.execute(
@@ -735,4 +741,19 @@ export async function getQuizAttempts(req, res) {
       message: "Failed to fetch quiz attempts.",
     });
   }
+}
+
+export async function getAssessmentAttempts(req, res) {
+  try {
+    await assertCourseAccess(req.user, Number(req.params.courseId));
+    const [attempts] = await db.execute(`SELECT a.*, d.assessment_type, d.answers_json, d.module_index,
+      COALESCE(u.display_name, u.name, u.email) AS student_name
+      FROM quiz_attempts a LEFT JOIN quiz_attempt_details d ON d.attempts_id = a.attempts_id
+      LEFT JOIN users u ON u.userId = a.user_id
+      WHERE a.course_id = ? ORDER BY a.created_at, a.attempts_id`, [req.params.courseId]);
+    const [students] = await db.execute(`SELECT ce.user_id, COALESCE(u.display_name, u.name, u.email) AS student_name
+      FROM course_enrollments ce LEFT JOIN users u ON u.userId = ce.user_id WHERE ce.course_id = ? AND ce.status = 'approved'`, [req.params.courseId]);
+    return res.json({ success: true, attempts: attempts.map(a => ({ ...a, answers: parseJsonList(a.answers_json),
+      assessment_type: a.assessment_type || (/main/i.test(a.source + ' ' + a.quiz_mode) ? 'main' : 'practice') })), students });
+  } catch (error) { return res.status(error.statusCode || 500).json({ success: false, message: error.message }); }
 }

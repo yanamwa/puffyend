@@ -37,6 +37,7 @@ import {
 import {
   generateAdaptiveFeedback,
   getCourseMonitoring,
+  getAssessmentAttempts,
   getLessonProgress,
   getQuizAttempts,
   saveLessonProgress,
@@ -418,6 +419,10 @@ router.delete(
    MONITORING
 ===================================================== */
 
+router.get("/assessment-attempts/:courseId", authenticateUser, getAssessmentAttempts);
+
+
+
 router.get(
   "/monitoring/:courseId",
   getCourseMonitoring
@@ -435,6 +440,7 @@ router.post(
 
 router.post(
   "/saveQuizAttempt.php",
+  authenticateUser,
   saveQuizAttempt
 );
 

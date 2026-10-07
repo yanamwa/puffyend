@@ -97,7 +97,8 @@ export async function generateLessonQuiz(req, res) {
     return res.json({ success: true, quiz: { questions: result.questions },
       generated_count: result.questions.length, question_count: result.questionCount,
       identification_count: result.identificationCount,
-      multiple_choice_count: result.questionCount - result.identificationCount,
+      multiple_choice_count: result.multipleChoiceCount ?? result.questionCount - result.identificationCount,
+      ...(result.assessmentType === 'practice' ? { assessment_type: 'practice', true_false_count: result.trueFalseCount, lots_count: result.lotsCount, hots_count: result.hotsCount } : {}),
       difficulty: result.difficulty, document_ids: result.document_ids, rag_version: 'quiz-1' });
   } catch (error) { return reportError(res, error); }
 }
