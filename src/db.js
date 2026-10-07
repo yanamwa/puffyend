@@ -428,6 +428,11 @@ async function initMonitoringTables() {
     )
   `);
 
+  await db.execute(`CREATE TABLE IF NOT EXISTS quiz_attempt_details (
+    attempts_id INT PRIMARY KEY, assessment_type VARCHAR(20) NOT NULL,
+    answers_json LONGTEXT NOT NULL, module_index INT NULL
+  )`);
+
   await db.execute(`
     CREATE TABLE IF NOT EXISTS performance_analytics (
       analytics_id INT AUTO_INCREMENT PRIMARY KEY,
