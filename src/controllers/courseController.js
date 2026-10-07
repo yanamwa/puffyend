@@ -1541,20 +1541,24 @@ export async function enrollCourse(req, res) {
 
       const notificationResult =
         await notifyProfessor(
-          existing.enrollment_id
+          result.insertId
         );
 
-        await logAuditFromRequest(req, {
-          category: "Enrollment Management",
-          action: "Requested Enrollment",
-          target: courseName,
-          status: "Success",
-          details:
-            `${studentName} requested enrollment in ` +
-            `"${courseName}" again.`,
-        });
+      /* =====================================================
+        AUDIT LOG - REQUEST ENROLLMENT
+      ===================================================== */
 
-      return res.status(200).json({
+      await logAuditFromRequest(req, {
+        category: "Enrollment Management",
+        action: "Requested Enrollment",
+        target: courseName,
+        status: "Success",
+        details:
+          `${studentName} requested enrollment in ` +
+          `"${courseName}".`,
+      });
+
+      return res.status(201).json({
         success: true,
         pending: true,
         enrolled: false,
@@ -1991,14 +1995,30 @@ try {
   console.log(
     `Unenrollment notification created for user ${enrollment.user_id}`
   );
-} catch (notificationError) {
-  console.error(
-    "Failed to create unenrollment notification:",
-    notificationError
-  );
-}
+    } catch (notificationError) {
+        console.error(
+          "Failed to create unenrollment notification:",
+          notificationError
+        );
+      }
 
-    return res.json({
+
+      /* =====================================================
+        AUDIT LOG - UNENROLL STUDENT
+      ===================================================== */
+
+      await logAuditFromRequest(req, {
+        category: "Enrollment Management",
+        action: "Unenrolled Student",
+        target: studentName,
+        status: "Success",
+        details:
+          `Unenrolled ${studentName} from ` +
+          `"${courseName}". Reason: ${reason}`,
+      });
+
+
+      return res.json({
       success: true,
 
       message: emailSent
@@ -2056,6 +2076,34 @@ export async function unenrollCourse(req, res) {
   try {
     const idColumn = await getCourseIdColumn();
 
+    const [courseRows] = await db.execute(
+        `SELECT
+          course_name,
+          title,
+          course_code,
+          code
+        FROM courses
+        WHERE ${idColumn} = ?
+        LIMIT 1`,
+        [courseId]
+      );
+
+      if (courseRows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Course not found.",
+        });
+      }
+
+      const selectedCourse = courseRows[0];
+
+      const courseName =
+        selectedCourse.course_name ||
+        selectedCourse.title ||
+        selectedCourse.course_code ||
+        selectedCourse.code ||
+        `Course ${courseId}`;
+
     const [result] = await db.execute(
       `UPDATE course_enrollments
        SET archived = 1
@@ -2086,6 +2134,18 @@ export async function unenrollCourse(req, res) {
        WHERE ${idColumn} = ?`,
       [courseId, courseId]
     );
+    /* =====================================================
+      AUDIT LOG - STUDENT LEFT COURSE
+    ===================================================== */
+
+    await logAuditFromRequest(req, {
+      category: "Enrollment Management",
+      action: "Left Course",
+      target: courseName,
+      status: "Success",
+      details:
+        `Student left "${courseName}".`,
+    });
 
     return res.json({
       success: true,
@@ -2504,16 +2564,34 @@ export async function createLearningModule(req, res) {
   }
 
   try {
-    fields = await applyAuthenticatedProfessorFields(req, fields);
+    fields = await applyAuthenticatedProfessorFields(
+      req,
+      fields
+    );
 
     const course = await getOrCreateCourse(fields);
-    const quizContents = toJsonList(fields.quizItems);
-    const lessonContents = toJsonList(fields.lessonPages);
+
+    const quizContents = toJsonList(
+      fields.quizItems
+    );
+
+    const lessonContents = toJsonList(
+      fields.lessonPages
+    );
 
     const [result] = await db.execute(
       `INSERT INTO learning_modules
-       (course_id, title, description, subject, status, quiz_contents,
-        learning_objectives, lesson_contents, has_quiz)
+       (
+         course_id,
+         title,
+         description,
+         subject,
+         status,
+         quiz_contents,
+         learning_objectives,
+         lesson_contents,
+         has_quiz
+       )
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         getCourseId(course),
@@ -2528,19 +2606,53 @@ export async function createLearningModule(req, res) {
       ]
     );
 
-    const rows = await getModuleRows("WHERE lm.lesson_id = ?", [result.insertId]);
+    const rows = await getModuleRows(
+      "WHERE lm.lesson_id = ?",
+      [result.insertId]
+    );
+
     const module = rowToModule(rows[0]);
+
+    /* =====================================================
+       AUDIT LOG - CREATE LEARNING MODULE
+    ===================================================== */
+
+    await logAuditFromRequest(req, {
+      category: "Learning Module Management",
+
+      action: "Created Learning Module",
+
+      target:
+        module.title ||
+        fields.title ||
+        `Module ${result.insertId}`,
+
+      status: "Success",
+
+      details:
+        `Created learning module ` +
+        `"${module.title || fields.title}" ` +
+        `for course "${module.courseName || fields.courseName || "Course"}".`,
+    });
 
     return res.status(201).json({
       success: true,
-      message: "Learning module added successfully.",
+      message:
+        "Learning module added successfully.",
       module,
       course: module,
     });
   } catch (error) {
-    console.error("Create learning module error:", error);
+    console.error(
+      "Create learning module error:",
+      error
+    );
 
-    return sendCourseWriteError(res, error, "Failed to add learning module.");
+    return sendCourseWriteError(
+      res,
+      error,
+      "Failed to add learning module."
+    );
   }
 }
 
@@ -2667,13 +2779,20 @@ export async function updateCourse(req, res) {
 
 export async function updateLearningModule(req, res) {
   let fields = payloadToModuleFields(req.body);
-  const validationMessage = validateModule(fields);
-  const id = req.params.id || req.body.id || req.body.lesson_id;
+
+  const validationMessage =
+    validateModule(fields);
+
+  const id =
+    req.params.id ||
+    req.body.id ||
+    req.body.lesson_id;
 
   if (!id) {
     return res.status(400).json({
       success: false,
-      message: "Learning module ID is required.",
+      message:
+        "Learning module ID is required.",
     });
   }
 
@@ -2685,38 +2804,62 @@ export async function updateLearningModule(req, res) {
   }
 
   try {
-    fields = await applyAuthenticatedProfessorFields(req, fields);
+    fields =
+      await applyAuthenticatedProfessorFields(
+        req,
+        fields
+      );
 
-    const course = await getOrCreateCourse(fields);
-    const currentUser = await getRequestUserProfile(req);
+    const course =
+      await getOrCreateCourse(fields);
+
+    const currentUser =
+      await getRequestUserProfile(req);
+
     const where = ["lesson_id = ?"];
     const whereParams = [id];
 
+    /*
+     * Professors may update modules
+     * only from courses they own.
+     */
     if (isProfessorUser(currentUser)) {
-      const idColumn = await getCourseIdColumn();
-      const owner = getProfessorOwnerCondition("c", currentUser);
+      const idColumn =
+        await getCourseIdColumn();
+
+      const owner =
+        getProfessorOwnerCondition(
+          "c",
+          currentUser
+        );
+
       where.push(
         `EXISTS (
            SELECT 1
            FROM courses c
-           WHERE c.${idColumn} = learning_modules.course_id
+           WHERE c.${idColumn} =
+                 learning_modules.course_id
              AND ${owner.sql}
          )`
       );
-      whereParams.push(...owner.params);
+
+      whereParams.push(
+        ...owner.params
+      );
     }
 
     const [result] = await db.execute(
       `UPDATE learning_modules
-       SET course_id = ?,
-           title = ?,
-           description = ?,
-           subject = ?,
-           status = ?,
-           quiz_contents = ?,
-           learning_objectives = ?,
-           lesson_contents = ?,
-           has_quiz = ?
+       SET
+         course_id = ?,
+         title = ?,
+         description = ?,
+         subject = ?,
+         status = ?,
+         quiz_contents = ?,
+         learning_objectives = ?,
+         lesson_contents = ?,
+         has_quiz = ?
        WHERE ${where.join(" AND ")}`,
       [
         getCourseId(course),
@@ -2727,7 +2870,9 @@ export async function updateLearningModule(req, res) {
         toJsonList(fields.quizItems),
         fields.learningObjectives,
         toJsonList(fields.lessonPages),
-        fields.quizItems.length > 0 ? 1 : 0,
+        fields.quizItems.length > 0
+          ? 1
+          : 0,
         ...whereParams,
       ]
     );
@@ -2735,23 +2880,61 @@ export async function updateLearningModule(req, res) {
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        message: "Learning module not found.",
+        message:
+          "Learning module not found or you do not have access to it.",
       });
     }
 
-    const rows = await getModuleRows("WHERE lm.lesson_id = ?", [id]);
-    const module = rowToModule(rows[0]);
+    const rows = await getModuleRows(
+      "WHERE lm.lesson_id = ?",
+      [id]
+    );
+
+    const module =
+      rowToModule(rows[0]);
+
+    /* =====================================================
+       AUDIT LOG - UPDATE LEARNING MODULE
+    ===================================================== */
+
+    await logAuditFromRequest(req, {
+      category:
+        "Learning Module Management",
+
+      action:
+        "Updated Learning Module",
+
+      target:
+        module.title ||
+        fields.title ||
+        `Module ${id}`,
+
+      status: "Success",
+
+      details:
+        `Updated learning module ` +
+        `"${module.title || fields.title}" ` +
+        `for course "${module.courseName || fields.courseName || "Course"}".`,
+    });
 
     return res.json({
       success: true,
-      message: "Learning module updated successfully.",
+      message:
+        "Learning module updated successfully.",
       module,
       course: module,
     });
   } catch (error) {
-    console.error("Update learning module error:", error);
+    console.error(
+      "Update learning module error:",
+      error
+    );
 
-    return sendCourseWriteError(res, error, "Failed to update learning module.");
+    return sendCourseWriteError(
+      res,
+      error,
+      "Failed to update learning module."
+    );
   }
 }
 
@@ -2975,42 +3158,137 @@ export async function deleteCourse(req, res) {
 }
 
 export async function deleteLearningModule(req, res) {
-  const id = req.params.id || req.body.id || req.body.lesson_id;
+  const id =
+    req.params.id ||
+    req.body.id ||
+    req.body.lesson_id;
 
   if (!id) {
     return res.status(400).json({
       success: false,
-      message: "Learning module ID is required.",
+      message:
+        "Learning module ID is required.",
     });
   }
 
   try {
+    const currentUser =
+      await getRequestUserProfile(req);
+
+    if (!currentUser) {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Authentication required.",
+      });
+    }
+
+    /*
+     * Load module BEFORE deleting it.
+     *
+     * We need its title/course for
+     * authorization and the audit log.
+     */
+    const where = [
+      "lm.lesson_id = ?",
+    ];
+
+    const params = [id];
+
+    /*
+     * Professors can delete modules only
+     * from courses that they own.
+     */
+    if (isProfessorUser(currentUser)) {
+      const owner =
+        getProfessorOwnerCondition(
+          "c",
+          currentUser
+        );
+
+      where.push(owner.sql);
+
+      params.push(
+        ...owner.params
+      );
+    }
+
+    const rows = await getModuleRows(
+      `WHERE ${where.join(" AND ")}`,
+      params
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Learning module not found or you do not have access to it.",
+      });
+    }
+
+    const module =
+      rowToModule(rows[0]);
+
+    /*
+     * Delete module only after
+     * ownership/access has been checked.
+     */
     const [result] = await db.execute(
-      "DELETE FROM learning_modules WHERE lesson_id = ?",
+      `DELETE FROM learning_modules
+       WHERE lesson_id = ?`,
       [id]
     );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        message: "Learning module not found.",
+        message:
+          "Learning module not found.",
       });
     }
 
+    /* =====================================================
+       AUDIT LOG - DELETE LEARNING MODULE
+    ===================================================== */
+
+    await logAuditFromRequest(req, {
+      category:
+        "Learning Module Management",
+
+      action:
+        "Deleted Learning Module",
+
+      target:
+        module.title ||
+        `Module ${id}`,
+
+      status: "Success",
+
+      details:
+        `Deleted learning module ` +
+        `"${module.title || id}" ` +
+        `from course "${module.courseName || "Course"}".`,
+    });
+
     return res.json({
       success: true,
-      message: "Learning module deleted successfully.",
+      message:
+        "Learning module deleted successfully.",
+      moduleId: Number(id),
     });
   } catch (error) {
-    console.error("Delete learning module error:", error);
+    console.error(
+      "Delete learning module error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Failed to delete learning module.",
+      message:
+        "Failed to delete learning module.",
     });
   }
 }
-
 export async function handleLegacyLearningModule(req, res) {
   if (req.method === "GET") {
     return getLearningModules(req, res);

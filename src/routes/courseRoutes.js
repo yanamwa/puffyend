@@ -1,17 +1,21 @@
 import express from "express";
 
 import {
+  // COURSES
   createCourse,
-  createLearningModule,
   archiveCourse,
-  deleteCourse,
-  deleteLearningModule,
   getCourseById,
   getEnrolledCourses,
   getArchivedCourses,
   getCourses,
+  updateCourse,
+
+  // LEARNING MODULES
+  createLearningModule,
+  deleteLearningModule,
   getLearningModuleById,
   getLearningModules,
+  updateLearningModule,
   handleLegacyLearningModule,
 
   // ENROLLMENT
@@ -21,10 +25,7 @@ import {
   declineEnrollment,
   unenrollStudentFromCourse,
   unenrollCourse,
-
   joinCourseByCode,
-  updateCourse,
-  updateLearningModule,
 } from "../controllers/courseController.js";
 
 import {
@@ -42,7 +43,9 @@ import {
   saveLessonProgress,
   saveQuizAttempt,
 } from "../controllers/monitoringController.js";
+
 import authenticateUser from "../middleware/authMiddleware.js";
+
 const router = express.Router();
 
 
@@ -151,7 +154,7 @@ function parseLegacyModeBody(
 ===================================================== */
 
 /*
- * Get all courses
+ * Get all courses.
  */
 router.get(
   "/courses",
@@ -160,7 +163,10 @@ router.get(
 
 
 /*
- * Create course
+ * Create a new course.
+ *
+ * AUDIT:
+ * Created Course
  */
 router.post(
   "/courses",
@@ -174,14 +180,14 @@ router.post(
 ===================================================== */
 
 /*
- * Get all courses where the current
- * student is already approved/enrolled.
+ * Get courses where the current student
+ * is actively enrolled.
  *
- * Example:
  * GET /api/courses/enrolled
  */
 router.get(
   "/courses/enrolled",
+  authenticateUser,
   getEnrolledCourses
 );
 
@@ -189,12 +195,9 @@ router.get(
 /*
  * Student sends an enrollment request.
  *
- * This should create/update:
+ * AUDIT:
+ * Requested Enrollment
  *
- * course_enrollments
- * status = "pending"
- *
- * Example:
  * POST /api/courses/enroll
  *
  * Body:
@@ -210,30 +213,24 @@ router.post(
 
 
 /*
- * Professor gets all enrollment records
- * belonging to one specific course.
+ * Professor gets enrollment records
+ * for a specific course.
  *
- * The controller should return:
- *
- * {
- *   pending: [],
- *   enrolled: []
- * }
- *
- * Example:
  * GET /api/courses/7/enrollments
  */
 router.get(
   "/courses/:courseId/enrollments",
+  authenticateUser,
   getCourseEnrollments
 );
 
 
 /*
- * Professor approves a student's
- * pending enrollment request.
+ * Professor approves enrollment.
  *
- * Example:
+ * AUDIT:
+ * Approved Enrollment
+ *
  * PATCH /api/enrollments/25/approve
  */
 router.patch(
@@ -244,10 +241,11 @@ router.patch(
 
 
 /*
- * Professor declines a student's
- * pending enrollment request.
+ * Professor declines enrollment.
  *
- * Example:
+ * AUDIT:
+ * Declined Enrollment
+ *
  * PATCH /api/enrollments/25/decline
  */
 router.patch(
@@ -256,30 +254,33 @@ router.patch(
   declineEnrollment
 );
 
+
 /*
- * Professor removes an enrolled student
- * from this course.
+ * Professor removes an enrolled student.
  *
- * Example:
+ * AUDIT:
+ * Unenrolled Student
+ *
  * PATCH /api/enrollments/25/unenroll
  */
 router.patch(
   "/enrollments/:enrollmentId/unenroll",
+  authenticateUser,
   unenrollStudentFromCourse
 );
 
 
 /*
- * Professor removes a student
- * from a course.
+ * Student leaves/un-enrolls from a course.
  *
- * Existing route kept for compatibility.
+ * AUDIT:
+ * Left Course
  *
- * Example:
  * PUT /api/courses/7/unenroll
  */
 router.put(
   "/courses/:id/unenroll",
+  authenticateUser,
   unenrollCourse
 );
 
@@ -289,7 +290,7 @@ router.put(
 ===================================================== */
 
 /*
- * Find/join course using course code
+ * Find/join a course using a course code.
  */
 router.get(
   "/courses/join",
@@ -306,8 +307,13 @@ router.post(
    ARCHIVED COURSES
 ===================================================== */
 
+/*
+ * Get archived courses for the
+ * authenticated student.
+ */
 router.get(
   "/courses/archived",
+  authenticateUser,
   getArchivedCourses
 );
 
@@ -319,14 +325,14 @@ router.get(
 /*
  * IMPORTANT:
  *
- * Keep these AFTER routes such as:
+ * Keep these routes AFTER:
  *
  * /courses/enrolled
  * /courses/join
  * /courses/archived
  *
- * so Express does not treat words like
- * "enrolled" as the :id parameter.
+ * Otherwise Express may interpret words such
+ * as "enrolled" as the :id parameter.
  */
 
 router.get(
@@ -334,57 +340,116 @@ router.get(
   getCourseById
 );
 
+
+/*
+ * Update course.
+ *
+ * AUDIT:
+ * Updated Course
+ */
 router.put(
   "/courses/:id",
   authenticateUser,
   updateCourse
 );
 
+
+/*
+ * Archive or restore course.
+ *
+ * AUDIT:
+ * Archived Course
+ * Restored Course
+ */
 router.patch(
   "/courses/:id/archive",
   authenticateUser,
   archiveCourse
 );
 
+
+/*
+ * Compatibility route for archive/restore.
+ */
 router.post(
   "/courses/:id/archive",
   authenticateUser,
   archiveCourse
 );
 
-router.delete(
-  "/courses/:id",
-  authenticateUser,
-  deleteCourse
-);
+
+/*
+ * NO DELETE COURSE ROUTE.
+ *
+ * PuffyBrain uses archive/restore instead
+ * of permanent course deletion.
+ */
 
 
 /* =====================================================
    LEARNING MODULES
 ===================================================== */
 
+/*
+ * Get learning modules.
+ *
+ * Reading data does not need an audit entry.
+ */
 router.get(
   "/modules",
   getLearningModules
 );
 
+
+/*
+ * Create learning module.
+ *
+ * AUDIT:
+ * Created Learning Module
+ */
 router.post(
   "/modules",
+  authenticateUser,
   createLearningModule
 );
 
+
+/*
+ * Get one learning module.
+ */
 router.get(
   "/modules/:id",
   getLearningModuleById
 );
 
+
+/*
+ * Update learning module.
+ *
+ * AUDIT:
+ * Updated Learning Module
+ */
 router.put(
   "/modules/:id",
+  authenticateUser,
   updateLearningModule
 );
 
+
+/*
+ * Delete learning module.
+ *
+ * AUDIT:
+ * Deleted Learning Module
+ *
+ * NOTE:
+ * If modules should eventually use archive
+ * instead of permanent deletion, this can
+ * later be changed to an archive route.
+ */
 router.delete(
   "/modules/:id",
+  authenticateUser,
   deleteLearningModule
 );
 
@@ -400,16 +465,19 @@ router.get(
 
 router.post(
   "/modes",
+  authenticateUser,
   createMode
 );
 
 router.put(
   "/modes/:id",
+  authenticateUser,
   updateMode
 );
 
 router.delete(
   "/modes/:id",
+  authenticateUser,
   deleteMode
 );
 
@@ -460,18 +528,21 @@ router.get(
 
 router.post(
   "/addMode.php",
+  authenticateUser,
   parseLegacyModeBody,
   createMode
 );
 
 router.post(
   "/updateMode.php",
+  authenticateUser,
   parseLegacyModeBody,
   updateMode
 );
 
 router.post(
   "/deleteMode.php",
+  authenticateUser,
   parseLegacyModeBody,
   deleteMode
 );
@@ -488,6 +559,7 @@ router.get(
 
 router.post(
   "/adminLearningModule.php",
+  authenticateUser,
   handleLegacyLearningModule
 );
 

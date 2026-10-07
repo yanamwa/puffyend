@@ -1314,6 +1314,19 @@ export async function createNotification(
       icon: "announcement",
     };
 
+      await logAuditFromRequest(req, {
+      category: "Notification Management",
+      action: "Created Announcement",
+      target: title,
+      status: "Success",
+      details:
+        `Created announcement "${title}" ` +
+        `for target "${target}".`,
+      userId: currentUser.userId || null,
+      userName: createdByName,
+      userRole: createdByRole,
+    });
+
     return res.status(201).json({
       success: true,
       message:
@@ -1347,19 +1360,14 @@ export async function createNotification(
    DELETE ANNOUNCEMENT
 ===================================================== */
 
-export async function deleteNotification(
-  req,
-  res
-) {
+export async function deleteNotification(req, res) {
   try {
     const currentUser =
       await getAuthenticatedUser(req);
 
     if (
       !currentUser ||
-      !isNotificationManager(
-        currentUser.role
-      )
+      !isNotificationManager(currentUser.role)
     ) {
       return res.status(403).json({
         success: false,
@@ -1367,6 +1375,9 @@ export async function deleteNotification(
           "Only admins and super admins can delete notifications.",
       });
     }
+
+    const currentRole =
+      normalizeRole(currentUser.role);
 
     const notificationId =
       Number(
@@ -1378,9 +1389,7 @@ export async function deleteNotification(
       );
 
     if (
-      !Number.isFinite(
-        notificationId
-      ) ||
+      !Number.isFinite(notificationId) ||
       notificationId <= 0
     ) {
       return res.status(400).json({
@@ -1391,19 +1400,79 @@ export async function deleteNotification(
     }
 
     /*
-     * Only allow this endpoint to delete
-     * broadcast announcements.
+     * Get announcement BEFORE deleting it.
      *
-     * This prevents an admin from accidentally
-     * deleting enrollment notifications.
+     * We need this for:
+     * 1. Permission checking
+     * 2. Audit logging
+     */
+    const [rows] = await db.execute(
+      `
+        SELECT
+          notification_id,
+          title,
+          message,
+          target,
+          type,
+          recipient_user_id,
+          created_by_user_id,
+          created_by_name,
+          created_by_role,
+          created_at
+        FROM notifications
+        WHERE notification_id = ?
+          AND recipient_user_id IS NULL
+          AND type = 'announcement'
+        LIMIT 1
+      `,
+      [notificationId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Announcement not found.",
+      });
+    }
+
+    const notification = rows[0];
+
+    const creatorRole =
+      normalizeRole(
+        notification.created_by_role
+      );
+
+    /*
+     * SECURITY RULE:
+     *
+     * Admin cannot delete announcements
+     * created by a Super Admin.
+     */
+    if (
+      currentRole === "admin" &&
+      creatorRole === "super_admin"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Admins cannot delete announcements created by a Super Admin.",
+      });
+    }
+
+    /*
+     * Delete announcement.
+     *
+     * notification_reads records should
+     * disappear automatically through
+     * ON DELETE CASCADE.
      */
     const [result] = await db.execute(
       `
-      DELETE FROM notifications
-
-      WHERE notification_id = ?
-        AND recipient_user_id IS NULL
-        AND type = 'announcement'
+        DELETE FROM notifications
+        WHERE notification_id = ?
+          AND recipient_user_id IS NULL
+          AND type = 'announcement'
       `,
       [notificationId]
     );
@@ -1418,11 +1487,42 @@ export async function deleteNotification(
       });
     }
 
+    const currentUserName =
+      getCreatorDisplayName(
+        currentUser,
+        req.user
+      );
+
     /*
-     * notification_reads rows are automatically
-     * removed because you created the FK with
-     * ON DELETE CASCADE.
+     * AUDIT LOG
      */
+    await logAuditFromRequest(req, {
+      category:
+        "Notification Management",
+
+      action:
+        "Deleted Announcement",
+
+      target:
+        notification.title ||
+        `Announcement #${notificationId}`,
+
+      status:
+        "Success",
+
+      details:
+        `Deleted announcement "${notification.title || `#${notificationId}`}" ` +
+        `targeted to "${normalizeTarget(notification.target)}".`,
+
+      userId:
+        currentUser.userId || null,
+
+      userName:
+        currentUserName,
+
+      userRole:
+        currentRole,
+    });
 
     return res.json({
       success: true,

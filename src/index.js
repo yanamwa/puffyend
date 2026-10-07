@@ -10,6 +10,8 @@ import userRoutes from "./routes/userRoutes.js";
 import lessonRoutes from "./routes/lessonRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import systemAnalyticsRoutes from "./routes/systemAnalyticsRoutes.js";
+import backupRoutes from "./routes/backupRoutes.js";
+import systemSettingsRoutes from "./routes/systemSettingsRoutes.js";
 
 import { initDb } from "./db.js";
 
@@ -263,7 +265,14 @@ app.use(
   "/api",
   userRoutes
 );
+/* =========================================
+   BACKUP & RESTORE
+========================================= */
 
+app.use(
+  "/api/backup",
+  backupRoutes
+);
 /* =========================================
    SYSTEM ANALYTICS
 ========================================= */
@@ -272,7 +281,14 @@ app.use(
   "/api/analytics",
   systemAnalyticsRoutes
 );
+/* =========================================
+   SYSTEM SETTINGS
+========================================= */
 
+app.use(
+  "/api/system-settings",
+  systemSettingsRoutes
+);
 /* =========================================
    404
 ========================================= */
