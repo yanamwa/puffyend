@@ -14,8 +14,8 @@ import backupRoutes from "./routes/backupRoutes.js";
 import systemSettingsRoutes from "./routes/systemSettingsRoutes.js";
 
 import { initDb } from "./db.js";
-import { startLessonWorker } from './services/rag/lessonJobService.js';
-import privateLessonUploads from './middleware/privateLessonUploads.js';
+import { startLessonWorker } from "./services/rag/lessonJobService.js";
+import privateLessonUploads from "./middleware/privateLessonUploads.js";
 
 dotenv.config();
 
@@ -40,15 +40,9 @@ const __dirname = path.dirname(__filename);
   C:\xampp\htdocs\server\uploads
 */
 
-const profileUploadsDirectory = path.join(
-  __dirname,
-  "uploads"
-);
+const profileUploadsDirectory = path.join(__dirname, "uploads");
 
-console.log(
-  "Profile uploads directory:",
-  profileUploadsDirectory
-);
+console.log("Profile uploads directory:", profileUploadsDirectory);
 
 /* =========================================
    CORS
@@ -80,23 +74,15 @@ const allowedOrigins = [
 app.use(
   cors({
     origin(origin, callback) {
-      if (
-        !origin ||
-        allowedOrigins.includes(origin)
-      ) {
+      if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
 
         return;
       }
 
-      console.error(
-        "Blocked CORS Origin:",
-        origin
-      );
+      console.error("Blocked CORS Origin:", origin);
 
-      const error = new Error(
-        `Origin not allowed: ${origin}`
-      );
+      const error = new Error(`Origin not allowed: ${origin}`);
 
       error.statusCode = 403;
 
@@ -105,21 +91,10 @@ app.use(
 
     credentials: true,
 
-    methods: [
-      "GET",
-      "POST",
-      "PUT",
-      "PATCH",
-      "DELETE",
-      "OPTIONS",
-    ],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-    ],
-  })
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  }),
 );
 
 /* =========================================
@@ -129,14 +104,14 @@ app.use(
 app.use(
   express.json({
     limit: "25mb",
-  })
+  }),
 );
 
 app.use(
   express.urlencoded({
     extended: true,
     limit: "25mb",
-  })
+  }),
 );
 
 /* =========================================
@@ -154,7 +129,7 @@ app.use(
 app.use(
   "/uploads",
   privateLessonUploads,
-  express.static(profileUploadsDirectory)
+  express.static(profileUploadsDirectory),
 );
 
 /* =========================================
@@ -164,13 +139,7 @@ app.use(
 app.use(
   "/api/uploads",
   privateLessonUploads,
-  express.static(
-    path.resolve(
-      __dirname,
-      "src",
-      "uploads"
-    )
-  )
+  express.static(path.resolve(__dirname, "src", "uploads")),
 );
 
 /* =========================================
@@ -178,9 +147,7 @@ app.use(
 ========================================= */
 
 app.use((req, res, next) => {
-  console.log(
-    `${req.method} ${req.originalUrl}`
-  );
+  console.log(`${req.method} ${req.originalUrl}`);
 
   next();
 });
@@ -189,35 +156,26 @@ app.use((req, res, next) => {
    HEALTH CHECK
 ========================================= */
 
-app.get(
-  "/api/health",
-  (req, res) => {
-    res.json({
-      success: true,
-      message:
-        "PuffyBrain API is running.",
-    });
-  }
-);
+app.get("/api/health", (req, res) => {
+  res.json({
+    success: true,
+    message: "PuffyBrain API is running.",
+  });
+});
 
 /* =========================================
    TEST PROFILE UPLOAD STATIC FOLDER
 ========================================= */
 
-app.get(
-  "/api/debug/uploads",
-  (req, res) => {
-    res.json({
-      success: true,
+app.get("/api/debug/uploads", (req, res) => {
+  res.json({
+    success: true,
 
-      uploadsDirectory:
-        profileUploadsDirectory,
+    uploadsDirectory: profileUploadsDirectory,
 
-      example:
-        "http://localhost:5000/uploads/profile-images/filename.jpg",
-    });
-  }
-);
+    example: "http://localhost:5000/uploads/profile-images/filename.jpg",
+  });
+});
 
 /* =========================================
    ROUTES
@@ -228,71 +186,44 @@ app.get(
   This prevents broad /api routers from
   intercepting /api/notifications.
 */
-app.use(
-  "/api/notifications",
-  notificationRoutes
-);
+app.use("/api/notifications", notificationRoutes);
 
 /*
   Lesson routes
 */
-app.use(
-  "/api/lessons",
-  lessonRoutes
-);
+app.use("/api/lessons", lessonRoutes);
 
 /*
   Authentication routes
 */
-app.use(
-  "/api/auth",
-  authRoutes
-);
+app.use("/api/auth", authRoutes);
 
-app.use(
-  "/api",
-  authRoutes
-);
+app.use("/api", authRoutes);
 
 /*
   Course routes
 */
-app.use(
-  "/api",
-  courseRoutes
-);
+app.use("/api", courseRoutes);
 
 /*
   User routes
 */
-app.use(
-  "/api",
-  userRoutes
-);
+app.use("/api", userRoutes);
 /* =========================================
    BACKUP & RESTORE
 ========================================= */
 
-app.use(
-  "/api/backup",
-  backupRoutes
-);
+app.use("/api/backup", backupRoutes);
 /* =========================================
    SYSTEM ANALYTICS
 ========================================= */
 
-app.use(
-  "/api/analytics",
-  systemAnalyticsRoutes
-);
+app.use("/api/analytics", systemAnalyticsRoutes);
 /* =========================================
    SYSTEM SETTINGS
 ========================================= */
 
-app.use(
-  "/api/system-settings",
-  systemSettingsRoutes
-);
+app.use("/api/system-settings", systemSettingsRoutes);
 /* =========================================
    404
 ========================================= */
@@ -300,8 +231,7 @@ app.use(
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message:
-      "Route not found.",
+    message: "Route not found.",
   });
 });
 
@@ -309,48 +239,32 @@ app.use((req, res) => {
    INVALID JSON
 ========================================= */
 
-app.use(
-  (error, req, res, next) => {
-    if (
-      error instanceof SyntaxError &&
-      "body" in error
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Invalid JSON request body.",
-      });
-    }
-
-    next(error);
+app.use((error, req, res, next) => {
+  if (error instanceof SyntaxError && "body" in error) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid JSON request body.",
+    });
   }
-);
+
+  next(error);
+});
 
 /* =========================================
    GENERAL ERROR HANDLER
 ========================================= */
 
-app.use(
-  (error, req, res, next) => {
-    console.error(
-      "Unhandled Server Error:"
-    );
+app.use((error, req, res, next) => {
+  console.error("Unhandled Server Error:");
 
-    console.error(error);
+  console.error(error);
 
-    res
-      .status(
-        error.statusCode || 500
-      )
-      .json({
-        success: false,
+  res.status(error.statusCode || 500).json({
+    success: false,
 
-        message:
-          error.message ||
-          "Internal Server Error",
-      });
-  }
-);
+    message: error.message || "Internal Server Error",
+  });
+});
 
 /* =========================================
    START SERVER
@@ -358,73 +272,42 @@ app.use(
 
 async function startServer() {
   try {
-    console.log(
-      "--------------------------------------"
-    );
+    console.log("--------------------------------------");
 
-    console.log(
-      "Starting PuffyBrain Backend..."
-    );
+    console.log("Starting PuffyBrain Backend...");
 
-    console.log(
-      "--------------------------------------"
-    );
+    console.log("--------------------------------------");
 
-    console.log(
-      "Connecting to MySQL..."
-    );
+    console.log("Connecting to MySQL...");
 
     await initDb();
     startLessonWorker();
 
-    console.log(
-      "MySQL Connected Successfully."
-    );
+    console.log("MySQL Connected Successfully.");
 
-    app.listen(
-      port,
-      () => {
-        console.log(
-          "--------------------------------------"
-        );
+    app.listen(port, () => {
+      console.log("--------------------------------------");
 
-        console.log(
-          `Server running on http://localhost:${port}`
-        );
+      console.log(`Server running on http://localhost:${port}`);
 
-        console.log(
-          `Health Check: http://localhost:${port}/api/health`
-        );
+      console.log(`Health Check: http://localhost:${port}/api/health`);
 
-        console.log(
-          `Uploads folder: ${profileUploadsDirectory}`
-        );
+      console.log(`Uploads folder: ${profileUploadsDirectory}`);
 
-        console.log(
-          `Upload Debug: http://localhost:${port}/api/debug/uploads`
-        );
+      console.log(`Upload Debug: http://localhost:${port}/api/debug/uploads`);
 
-        console.log(
-          `Lesson Upload: http://localhost:${port}/api/lessons/process-file`
-        );
+      console.log(
+        `Lesson Upload: http://localhost:${port}/api/lessons/process-file`,
+      );
 
-        console.log(
-          "--------------------------------------"
-        );
-      }
-    );
+      console.log("--------------------------------------");
+    });
   } catch (error) {
-    console.error(
-      "--------------------------------------"
-    );
+    console.error("--------------------------------------");
 
-    console.error(
-      "SERVER FAILED TO START"
-    );
+    console.error("SERVER FAILED TO START");
 
-    console.error(
-      "--------------------------------------"
-    );
+    console.error("--------------------------------------");
 
     console.error(error);
   }

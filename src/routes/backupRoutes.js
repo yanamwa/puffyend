@@ -24,7 +24,7 @@ router.get(
   "/",
   authenticateUser,
   requireRole("super_admin"),
-  createDatabaseBackup
+  createDatabaseBackup,
 );
 
 /*
@@ -36,7 +36,7 @@ router.post(
   "/restore",
   authenticateUser,
   requireRole("super_admin"),
-  restoreDatabaseBackup
+  restoreDatabaseBackup,
 );
 
 export default router;

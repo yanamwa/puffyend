@@ -1,4 +1,4 @@
-import { assertCourseAccess } from '../services/rag/courseAccessService.js';
+import { assertCourseAccess } from "../services/rag/courseAccessService.js";
 import { db } from "../db.js";
 
 function parseJsonList(value) {
@@ -21,7 +21,7 @@ function average(numbers) {
   const validNumbers = numbers.map(Number).filter(Number.isFinite);
   if (!validNumbers.length) return 0;
   return clampScore(
-    validNumbers.reduce((sum, number) => sum + number, 0) / validNumbers.length
+    validNumbers.reduce((sum, number) => sum + number, 0) / validNumbers.length,
   );
 }
 
@@ -49,8 +49,9 @@ function getWeakestTopic(topics, scores) {
   if (!topics.length || !scores.length) return "Course topic";
 
   const weakestIndex = scores.reduce(
-    (lowestIndex, score, index) => (score < scores[lowestIndex] ? index : lowestIndex),
-    0
+    (lowestIndex, score, index) =>
+      score < scores[lowestIndex] ? index : lowestIndex,
+    0,
   );
 
   return topics[weakestIndex]?.name || "Course topic";
@@ -62,7 +63,7 @@ async function getCourseIdColumn() {
      FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE()
        AND TABLE_NAME = 'courses'
-       AND COLUMN_NAME IN ('course_id', 'id')`
+       AND COLUMN_NAME IN ('course_id', 'id')`,
   );
   const names = new Set(columns.map((column) => column.COLUMN_NAME));
   return names.has("course_id") ? "course_id" : "id";
@@ -94,10 +95,10 @@ function getCourseTopics(course, modules) {
   const courseLessonPages = parseJsonList(course.lesson_pages);
   const courseQuizItems = parseJsonList(course.quiz_items);
   const modulePages = modules.flatMap((module) =>
-    parseJsonList(module.lesson_contents)
+    parseJsonList(module.lesson_contents),
   );
   const moduleQuizzes = modules.flatMap((module) =>
-    parseJsonList(module.quiz_contents)
+    parseJsonList(module.quiz_contents),
   );
 
   const lessonTopics = [...courseLessonPages, ...modulePages]
@@ -166,7 +167,7 @@ export async function getCourseMonitoring(req, res) {
        FROM courses
        WHERE ${idColumn} = ? OR code = ? OR course_code = ?
        LIMIT 1`,
-      [requestedCourseId, requestedCourseId, requestedCourseId]
+      [requestedCourseId, requestedCourseId, requestedCourseId],
     );
 
     if (courseRows.length === 0) {
@@ -181,7 +182,7 @@ export async function getCourseMonitoring(req, res) {
 
     const [modules] = await db.execute(
       "SELECT * FROM learning_modules WHERE course_id = ? ORDER BY lesson_id",
-      [courseId]
+      [courseId],
     );
 
     const topics = getCourseTopics(course, modules);
@@ -193,12 +194,12 @@ export async function getCourseMonitoring(req, res) {
        LEFT JOIN users u ON u.userId = ce.user_id
        WHERE ce.course_id = ?
        ORDER BY ce.created_at ASC`,
-      [courseId]
+      [courseId],
     );
 
     const [analyticsRows] = await db.execute(
       "SELECT * FROM performance_analytics WHERE course_id = ?",
-      [courseId]
+      [courseId],
     );
 
     const enrolledUserIds = enrollments.map((row) => row.user_id);
@@ -219,7 +220,7 @@ export async function getCourseMonitoring(req, res) {
          FROM lesson_progress
          WHERE user_id IN (${userPlaceholders})
            AND (course_id = ? ${lessonFilter})`,
-        [...userIds, courseId, ...lessonIds]
+        [...userIds, courseId, ...lessonIds],
       );
       progressRows.push(...progress);
 
@@ -228,17 +229,17 @@ export async function getCourseMonitoring(req, res) {
          FROM quiz_attempts
          WHERE user_id IN (${userPlaceholders})
            AND (course_id = ? ${lessonFilter})`,
-        [...userIds, courseId, ...lessonIds]
+        [...userIds, courseId, ...lessonIds],
       );
       attemptRows.push(...attempts);
     }
 
     const analyticsByUser = new Map(
-      analyticsRows.map((row) => [String(row.user_id), row])
+      analyticsRows.map((row) => [String(row.user_id), row]),
     );
 
     const enrollmentByUser = new Map(
-      enrollments.map((row) => [String(row.user_id), row])
+      enrollments.map((row) => [String(row.user_id), row]),
     );
 
     const students = userIds.map((userId) => {
@@ -246,10 +247,10 @@ export async function getCourseMonitoring(req, res) {
       const enrollment = enrollmentByUser.get(userKey) || { user_id: userId };
       const analytics = analyticsByUser.get(userKey);
       const studentProgressRows = progressRows.filter(
-        (row) => String(row.user_id) === userKey
+        (row) => String(row.user_id) === userKey,
       );
       const studentAttemptRows = attemptRows.filter(
-        (row) => String(row.user_id) === userKey
+        (row) => String(row.user_id) === userKey,
       );
 
       const progressPercent = average(
@@ -259,18 +260,18 @@ export async function getCourseMonitoring(req, res) {
             return (Number(row.studied_cards) / Number(row.total_cards)) * 100;
           }
           return 0;
-        })
+        }),
       );
 
       const attemptScore = average(
         studentAttemptRows.map((row) => {
           if (Number(row.total) <= 0) return 0;
           return (Number(row.score) / Number(row.total)) * 100;
-        })
+        }),
       );
 
       const score = clampScore(
-        Number(analytics?.average_score) || attemptScore || progressPercent
+        Number(analytics?.average_score) || attemptScore || progressPercent,
       );
       const completion = clampScore(progressPercent);
       const topicScores = buildTopicScores(topics, score, analytics);
@@ -293,7 +294,9 @@ export async function getCourseMonitoring(req, res) {
         name: getStudentName(enrollment),
         completion,
         score,
-        lastActive: formatDate(lastAttempt || lastProgress || enrollment.created_at),
+        lastActive: formatDate(
+          lastAttempt || lastProgress || enrollment.created_at,
+        ),
         status: getStatus(completion, score),
         weakestTopic,
         strongestTopic: analytics?.strongest_topic || "",
@@ -314,9 +317,11 @@ export async function getCourseMonitoring(req, res) {
       attemptRows.map((row) => {
         if (Number(row.total) <= 0) return 0;
         return (Number(row.score) / Number(row.total)) * 100;
-      })
+      }),
     );
-    const completionAverage = average(students.map((student) => student.completion));
+    const completionAverage = average(
+      students.map((student) => student.completion),
+    );
     const scoreAverage = average(students.map((student) => student.score));
 
     return res.json({
@@ -357,14 +362,14 @@ async function resolveCourseId(value) {
      FROM courses
      WHERE ${idColumn} = ? OR code = ? OR course_code = ?
      LIMIT 1`,
-    [value, value, value]
+    [value, value, value],
   );
 
   if (courseRows.length) return courseRows[0].course_pk;
 
   const [moduleRows] = await db.execute(
     "SELECT course_id FROM learning_modules WHERE lesson_id = ? LIMIT 1",
-    [value]
+    [value],
   );
 
   return moduleRows[0]?.course_id || null;
@@ -375,7 +380,7 @@ async function refreshPerformanceAnalytics(userId, courseId) {
 
   const [attempts] = await db.execute(
     "SELECT * FROM quiz_attempts WHERE user_id = ? AND course_id = ?",
-    [userId, courseId]
+    [userId, courseId],
   );
 
   const scores = attempts.map((attempt) => {
@@ -399,7 +404,7 @@ async function refreshPerformanceAnalytics(userId, courseId) {
       averageScore >= 80 ? "Review maintenance" : "Quiz performance",
       averageScore >= 80 ? "Quiz performance" : "Module completion",
       attempts.length,
-    ]
+    ],
   );
 }
 
@@ -422,18 +427,17 @@ export async function getLessonProgress(req, res) {
          AND (lesson_id = ? OR course_id = ?)
        ORDER BY updated_at DESC
        LIMIT 1`,
-      [userId, lessonId, lessonId]
+      [userId, lessonId, lessonId],
     );
 
     return res.json({
       success: true,
-      progress:
-        rows[0] || {
-          total_cards: 0,
-          studied_cards: 0,
-          progress_percent: 0,
-          last_viewed_card: 0,
-        },
+      progress: rows[0] || {
+        total_cards: 0,
+        studied_cards: 0,
+        progress_percent: 0,
+        last_viewed_card: 0,
+      },
     });
   } catch (error) {
     console.error("Get lesson progress error:", error);
@@ -450,7 +454,9 @@ export async function saveLessonProgress(req, res) {
   const lessonId = req.body.lesson_id || req.body.lessonId;
   const requestedCourseId = req.body.course_id || req.body.courseId || null;
   const totalCards = Number(req.body.total_cards || req.body.totalCards || 0);
-  const studiedCards = Number(req.body.studied_cards || req.body.studiedCards || 0);
+  const studiedCards = Number(
+    req.body.studied_cards || req.body.studiedCards || 0,
+  );
   const progressPercent =
     req.body.progress_percent !== undefined
       ? Number(req.body.progress_percent)
@@ -458,7 +464,7 @@ export async function saveLessonProgress(req, res) {
         ? (studiedCards / totalCards) * 100
         : 0;
   const lastViewedCard = Number(
-    req.body.last_viewed_card || req.body.lastViewedCard || studiedCards || 0
+    req.body.last_viewed_card || req.body.lastViewedCard || studiedCards || 0,
   );
 
   if (!lessonId) {
@@ -475,7 +481,7 @@ export async function saveLessonProgress(req, res) {
       await db.execute(
         `INSERT IGNORE INTO course_enrollments (course_id, user_id)
          VALUES (?, ?)`,
-        [courseId, userId]
+        [courseId, userId],
       );
     }
 
@@ -497,7 +503,7 @@ export async function saveLessonProgress(req, res) {
         studiedCards,
         clampScore(progressPercent),
         lastViewedCard,
-      ]
+      ],
     );
 
     return res.json({
@@ -515,6 +521,11 @@ export async function saveLessonProgress(req, res) {
 }
 
 export async function saveQuizAttempt(req, res) {
+  if (req.body.assessment_type === "main")
+    return res.status(400).json({
+      success: false,
+      message: "Submit Main Quiz through its saved assessment endpoint.",
+    });
   const userId = req.user.userId;
   const lessonId = req.body.lesson_id || req.body.lessonId || null;
   const requestedCourseId = req.body.course_id || req.body.courseId || null;
@@ -531,19 +542,31 @@ export async function saveQuizAttempt(req, res) {
       `INSERT INTO quiz_attempts
        (user_id, lesson_id, course_id, score, total, source, quiz_mode, time_spent)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, lessonId, courseId, score, total, source, quizMode, timeSpent]
+      [userId, lessonId, courseId, score, total, source, quizMode, timeSpent],
     );
 
-    const assessmentType = req.body.assessment_type === 'main' ? 'main' : 'practice';
-    const answers = Array.isArray(req.body.answers) ? req.body.answers.slice(0, 500) : [];
-    await db.execute('INSERT INTO quiz_attempt_details (attempts_id, assessment_type, answers_json, module_index) VALUES (?, ?, ?, ?)',
-      [result.insertId, assessmentType, JSON.stringify(answers), Number.isInteger(req.body.module_index) ? req.body.module_index : null]);
+    const assessmentType =
+      quizMode === "lesson" || req.body.assessment_type === "recap"
+        ? "recap"
+        : "practice";
+    const answers = Array.isArray(req.body.answers)
+      ? req.body.answers.slice(0, 500)
+      : [];
+    await db.execute(
+      "INSERT INTO quiz_attempt_details (attempts_id, assessment_type, answers_json, module_index) VALUES (?, ?, ?, ?)",
+      [
+        result.insertId,
+        assessmentType,
+        JSON.stringify(answers),
+        Number.isInteger(req.body.module_index) ? req.body.module_index : null,
+      ],
+    );
 
     if (courseId) {
       await db.execute(
         `INSERT IGNORE INTO course_enrollments (course_id, user_id)
          VALUES (?, ?)`,
-        [courseId, userId]
+        [courseId, userId],
       );
       await refreshPerformanceAnalytics(userId, courseId);
     }
@@ -583,7 +606,9 @@ export async function generateAdaptiveFeedback(req, res) {
           : String(userAnswer).trim().toLowerCase() ===
             String(correctAnswer).trim().toLowerCase();
       const topic =
-        String(answer.topic || answer.subject || answer.category || "").trim() ||
+        String(
+          answer.topic || answer.subject || answer.category || "",
+        ).trim() ||
         contentTitle ||
         "Course topic";
 
@@ -599,7 +624,9 @@ export async function generateAdaptiveFeedback(req, res) {
       }
 
       const group = grouped.get(topic);
-      const question = String(answer.question || `Question ${index + 1}`).trim();
+      const question = String(
+        answer.question || `Question ${index + 1}`,
+      ).trim();
 
       group.total += 1;
       group.questionIndexes.push(index);
@@ -613,7 +640,8 @@ export async function generateAdaptiveFeedback(req, res) {
     });
 
     const feedback = [...grouped.values()].map((group) => {
-      const confidence = group.total > 0 ? clampScore((group.correct / group.total) * 100) : 0;
+      const confidence =
+        group.total > 0 ? clampScore((group.correct / group.total) * 100) : 0;
       const understanding =
         confidence >= 80
           ? "Good Understanding"
@@ -661,7 +689,7 @@ export async function generateAdaptiveFeedback(req, res) {
              AND quiz_mode = ?
            ORDER BY created_at DESC, attempts_id DESC
            LIMIT 1`,
-          [userId, lessonId, source, quizMode]
+          [userId, lessonId, source, quizMode],
         );
 
         attemptId = attemptRows[0]?.attempts_id || null;
@@ -677,7 +705,7 @@ export async function generateAdaptiveFeedback(req, res) {
           JSON.stringify(feedback.flatMap((item) => item.strengths)),
           JSON.stringify(feedback.flatMap((item) => item.areasForImprovement)),
           JSON.stringify(feedback.map((item) => item.recommendation)),
-        ]
+        ],
       );
     }
 
@@ -702,8 +730,8 @@ export async function getQuizAttempts(req, res) {
   const quizMode = req.query.quizMode || req.query.quiz_mode || "";
 
   try {
-    const where = [];
-    const params = [];
+    const where = ["user_id = ?"];
+    const params = [req.user.userId];
 
     if (source) {
       where.push("source = ?");
@@ -726,7 +754,7 @@ export async function getQuizAttempts(req, res) {
       `SELECT COUNT(*) AS attempts
        FROM quiz_attempts
        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`,
-      params
+      params,
     );
 
     return res.json({
@@ -746,14 +774,37 @@ export async function getQuizAttempts(req, res) {
 export async function getAssessmentAttempts(req, res) {
   try {
     await assertCourseAccess(req.user, Number(req.params.courseId));
-    const [attempts] = await db.execute(`SELECT a.*, d.assessment_type, d.answers_json, d.module_index,
+    const [attempts] = await db.execute(
+      `SELECT a.*, d.assessment_type, d.answers_json, d.module_index,
       COALESCE(u.display_name, u.name, u.email) AS student_name
       FROM quiz_attempts a LEFT JOIN quiz_attempt_details d ON d.attempts_id = a.attempts_id
       LEFT JOIN users u ON u.userId = a.user_id
-      WHERE a.course_id = ? ORDER BY a.created_at, a.attempts_id`, [req.params.courseId]);
-    const [students] = await db.execute(`SELECT ce.user_id, COALESCE(u.display_name, u.name, u.email) AS student_name
-      FROM course_enrollments ce LEFT JOIN users u ON u.userId = ce.user_id WHERE ce.course_id = ? AND ce.status = 'approved'`, [req.params.courseId]);
-    return res.json({ success: true, attempts: attempts.map(a => ({ ...a, answers: parseJsonList(a.answers_json),
-      assessment_type: a.assessment_type || (/main/i.test(a.source + ' ' + a.quiz_mode) ? 'main' : 'practice') })), students });
-  } catch (error) { return res.status(error.statusCode || 500).json({ success: false, message: error.message }); }
+      WHERE a.course_id = ? ORDER BY a.created_at, a.attempts_id`,
+      [req.params.courseId],
+    );
+    const [students] = await db.execute(
+      `SELECT ce.user_id, COALESCE(u.display_name, u.name, u.email) AS student_name
+      FROM course_enrollments ce LEFT JOIN users u ON u.userId = ce.user_id WHERE ce.course_id = ? AND ce.status = 'approved'`,
+      [req.params.courseId],
+    );
+    return res.json({
+      success: true,
+      attempts: attempts.map((a) => ({
+        ...a,
+        answers: parseJsonList(a.answers_json),
+        assessment_type:
+          a.quiz_mode === "lesson"
+            ? "recap"
+            : a.assessment_type ||
+              (/main/i.test(a.source + " " + a.quiz_mode)
+                ? "main"
+                : "practice"),
+      })),
+      students,
+    });
+  } catch (error) {
+    return res
+      .status(error.statusCode || 500)
+      .json({ success: false, message: error.message });
+  }
 }

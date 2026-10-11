@@ -16,15 +16,11 @@ export async function createNotification({
   createdByRole = null,
 }) {
   if (!recipientUserId) {
-    throw new Error(
-      "Notification recipient is required."
-    );
+    throw new Error("Notification recipient is required.");
   }
 
   if (!title || !message) {
-    throw new Error(
-      "Notification title and message are required."
-    );
+    throw new Error("Notification title and message are required.");
   }
 
   const [result] = await db.execute(
@@ -53,7 +49,7 @@ export async function createNotification({
       createdByUserId,
       createdByName,
       createdByRole,
-    ]
+    ],
   );
 
   return {

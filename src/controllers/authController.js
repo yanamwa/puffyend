@@ -4,54 +4,37 @@ import fs from "node:fs/promises";
 import jwt from "jsonwebtoken";
 
 import { db } from "../db.js";
-import {
-  sendOtpEmail,
-  sendPasswordResetEmail,
-} from "../utils/mailer.js";
+import { sendOtpEmail, sendPasswordResetEmail } from "../utils/mailer.js";
 
-import {
-  logAuditFromRequest,
-} from "../services/auditLogService.js";
-
+import { logAuditFromRequest } from "../services/auditLogService.js";
 
 /* =====================================================
    CONFIGURATION
 ===================================================== */
 
-const JWT_SECRET =
-  process.env.JWT_SECRET ||
-  "puffybrain-secret";
+const JWT_SECRET = process.env.JWT_SECRET || "puffybrain-secret";
 
-const OTP_TTL_SECONDS =
-  5 * 60;
+const OTP_TTL_SECONDS = 5 * 60;
 
-const RESET_PASSWORD_TTL_SECONDS =
-  60 * 60;
+const RESET_PASSWORD_TTL_SECONDS = 60 * 60;
 
-const RESERVED_SUPER_ADMIN_EMAIL =
-  cleanEmailValue(
-    process.env.SUPER_ADMIN_EMAIL ||
-      "superadmin@puffybrain.local"
-  );
-
+const RESERVED_SUPER_ADMIN_EMAIL = cleanEmailValue(
+  process.env.SUPER_ADMIN_EMAIL || "superadmin@puffybrain.local",
+);
 
 /* =====================================================
    HELPERS
 ===================================================== */
 
 function createOtp() {
-  return Math.floor(
-    1000 + Math.random() * 9000
-  ).toString();
+  return Math.floor(1000 + Math.random() * 9000).toString();
 }
-
 
 function cleanEmailValue(value) {
   return String(value || "")
     .trim()
     .toLowerCase();
 }
-
 
 function normalizeRoleValue(value) {
   return String(value || "")
@@ -60,36 +43,25 @@ function normalizeRoleValue(value) {
     .replace(/[\s-]+/g, "_");
 }
 
-
-function normalizeVerificationStatusValue(
-  value
-) {
+function normalizeVerificationStatusValue(value) {
   return String(value || "pending")
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, "_");
 }
 
-
 function hashPasswordResetToken(token) {
-  return crypto
-    .createHash("sha256")
-    .update(token)
-    .digest("hex");
+  return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-
 function createPasswordResetToken() {
-  const token =
-    crypto.randomBytes(32).toString("hex");
+  const token = crypto.randomBytes(32).toString("hex");
 
   return {
     token,
-    tokenHash:
-      hashPasswordResetToken(token),
+    tokenHash: hashPasswordResetToken(token),
   };
 }
-
 
 function isStrongPassword(password) {
   return (
@@ -101,7 +73,6 @@ function isStrongPassword(password) {
   );
 }
 
-
 function getPasswordResetBaseUrl(req) {
   const configuredBaseUrl =
     process.env.FRONTEND_URL ||
@@ -110,11 +81,8 @@ function getPasswordResetBaseUrl(req) {
     req.get("origin") ||
     "http://localhost:5173";
 
-  return String(
-    configuredBaseUrl
-  ).replace(/\/+$/, "");
+  return String(configuredBaseUrl).replace(/\/+$/, "");
 }
-
 
 async function getOtpTiming(userId) {
   const [rows] = await db.execute(
@@ -130,31 +98,21 @@ async function getOtpTiming(userId) {
      FROM users
      WHERE userId = ?
      LIMIT 1`,
-    [userId]
+    [userId],
   );
 
-  const seconds =
-    Number(
-      rows[0]?.otp_seconds_remaining
-    );
+  const seconds = Number(rows[0]?.otp_seconds_remaining);
 
-  return Number.isFinite(seconds)
-    ? seconds
-    : OTP_TTL_SECONDS;
+  return Number.isFinite(seconds) ? seconds : OTP_TTL_SECONDS;
 }
-
 
 function getUploadedProofUrl(file) {
   if (!file?.filename) {
     return "";
   }
 
-  return (
-    `/api/uploads/professor-ids/` +
-    `${file.filename}`
-  );
+  return `/api/uploads/professor-ids/` + `${file.filename}`;
 }
-
 
 async function removeUploadedProof(file) {
   if (!file?.path) {
@@ -165,161 +123,90 @@ async function removeUploadedProof(file) {
     await fs.unlink(file.path);
   } catch (error) {
     if (error.code !== "ENOENT") {
-      console.error(
-        "Could not delete uploaded proof:",
-        error
-      );
+      console.error("Could not delete uploaded proof:", error);
     }
   }
 }
 
-
 function isTemporaryAccountExpired(user) {
-  if (
-    Number(user.is_temporary) !== 1 ||
-    !user.temporary_expires_at
-  ) {
+  if (Number(user.is_temporary) !== 1 || !user.temporary_expires_at) {
     return false;
   }
 
-  const expiresAt =
-    new Date(
-      user.temporary_expires_at
-    );
+  const expiresAt = new Date(user.temporary_expires_at);
 
-  return (
-    !Number.isNaN(
-      expiresAt.getTime()
-    ) &&
-    expiresAt <= new Date()
-  );
+  return !Number.isNaN(expiresAt.getTime()) && expiresAt <= new Date();
 }
 
-
 function authUserPayload(user) {
-  const displayName =
-    user.display_name ||
-    user.name ||
-    "";
+  const displayName = user.display_name || user.name || "";
 
-  const isTemporary =
-    Number(user.is_temporary) === 1;
+  const isTemporary = Number(user.is_temporary) === 1;
 
-  const temporaryExpired =
-    isTemporaryAccountExpired(user);
+  const temporaryExpired = isTemporaryAccountExpired(user);
 
   return {
-    id:
-      user.userId,
+    id: user.userId,
 
-    userId:
-      user.userId,
+    userId: user.userId,
 
-    email:
-      user.email,
+    email: user.email,
 
-    role:
-      user.role,
+    role: user.role,
 
-    name:
-      user.name,
+    name: user.name,
 
     displayName,
 
-    display_name:
-      displayName,
+    display_name: displayName,
 
-    yearLevel:
-      user.year_level || "",
+    yearLevel: user.year_level || "",
 
-    year_level:
-      user.year_level || "",
+    year_level: user.year_level || "",
 
-    sectionName:
-      user.section_name || "",
+    sectionName: user.section_name || "",
 
-    section_name:
-      user.section_name || "",
+    section_name: user.section_name || "",
 
-    professorDepartment:
-      user.professor_department || "",
+    professorDepartment: user.professor_department || "",
 
-    professor_department:
-      user.professor_department || "",
+    professor_department: user.professor_department || "",
 
-    onboardingCompleted:
-      Number(
-        user.onboarding_completed
-      ) === 1,
+    onboardingCompleted: Number(user.onboarding_completed) === 1,
 
-    onboarding_completed:
-      Number(
-        user.onboarding_completed
-      ) === 1
-        ? 1
-        : 0,
+    onboarding_completed: Number(user.onboarding_completed) === 1 ? 1 : 0,
 
-    verificationStatus:
-      user.verification_status,
+    verificationStatus: user.verification_status,
 
-    verification_status:
-      user.verification_status,
+    verification_status: user.verification_status,
 
-    isArchived:
-      Number(
-        user.is_archived
-      ) === 1,
+    isArchived: Number(user.is_archived) === 1,
 
-    is_archived:
-      Number(
-        user.is_archived
-      ) === 1
-        ? 1
-        : 0,
+    is_archived: Number(user.is_archived) === 1 ? 1 : 0,
 
-    mustChangePassword:
-      Number(
-        user.must_change_password
-      ) === 1,
+    mustChangePassword: Number(user.must_change_password) === 1,
 
-    must_change_password:
-      Number(
-        user.must_change_password
-      ) === 1
-        ? 1
-        : 0,
+    must_change_password: Number(user.must_change_password) === 1 ? 1 : 0,
 
     isTemporary,
 
-    is_temporary:
-      isTemporary
-        ? 1
-        : 0,
+    is_temporary: isTemporary ? 1 : 0,
 
-    temporaryExpiresAt:
-      user.temporary_expires_at,
+    temporaryExpiresAt: user.temporary_expires_at,
 
-    temporary_expires_at:
-      user.temporary_expires_at,
+    temporary_expires_at: user.temporary_expires_at,
 
     temporaryExpired,
 
-    temporary_expired:
-      temporaryExpired
-        ? 1
-        : 0,
+    temporary_expired: temporaryExpired ? 1 : 0,
   };
 }
-
 
 /* =====================================================
    PROFESSOR SIGNUP
 ===================================================== */
 
-export async function signup(
-  req,
-  res
-) {
+export async function signup(req, res) {
   const {
     email,
     password,
@@ -332,67 +219,38 @@ export async function signup(
     proofOfEmployment,
   } = req.body || {};
 
-  const uploadedProofUrl =
-    getUploadedProofUrl(req.file);
+  const uploadedProofUrl = getUploadedProofUrl(req.file);
 
-  const cleanEmail =
-    cleanEmailValue(email);
+  const cleanEmail = cleanEmailValue(email);
 
-  const cleanName =
-    name?.toString().trim();
+  const cleanName = name?.toString().trim();
 
-  const cleanFacultyId =
-    (
-      facultyId ||
-      employeeId ||
-      ""
-    )
-      .toString()
-      .trim();
+  const cleanFacultyId = (facultyId || employeeId || "").toString().trim();
 
-  const cleanDepartment =
-    (department || "")
-      .toString()
-      .trim();
+  const cleanDepartment = (department || "").toString().trim();
 
-  const cleanEmploymentProof =
-    (
-      uploadedProofUrl ||
-      employmentProof ||
-      proofOfEmployment ||
-      ""
-    )
-      .toString()
-      .trim();
+  const cleanEmploymentProof = (
+    uploadedProofUrl ||
+    employmentProof ||
+    proofOfEmployment ||
+    ""
+  )
+    .toString()
+    .trim();
 
-  const requestedRole =
-    role === "professor"
-      ? "professor"
-      : "";
+  const requestedRole = role === "professor" ? "professor" : "";
 
-  if (
-    !cleanEmail ||
-    !password ||
-    !cleanName
-  ) {
-    await removeUploadedProof(
-      req.file
-    );
+  if (!cleanEmail || !password || !cleanName) {
+    await removeUploadedProof(req.file);
 
     return res.status(400).json({
       success: false,
-      message:
-        "Missing required fields.",
+      message: "Missing required fields.",
     });
   }
 
-  if (
-    cleanEmail ===
-    RESERVED_SUPER_ADMIN_EMAIL
-  ) {
-    await removeUploadedProof(
-      req.file
-    );
+  if (cleanEmail === RESERVED_SUPER_ADMIN_EMAIL) {
+    await removeUploadedProof(req.file);
 
     return res.status(409).json({
       success: false,
@@ -402,97 +260,72 @@ export async function signup(
   }
 
   if (!requestedRole) {
-    await removeUploadedProof(
-      req.file
-    );
+    await removeUploadedProof(req.file);
 
     return res.status(400).json({
       success: false,
-      message:
-        "Public sign up is only available for professors.",
+      message: "Public sign up is only available for professors.",
     });
   }
 
   if (!cleanDepartment) {
-    await removeUploadedProof(
-      req.file
-    );
+    await removeUploadedProof(req.file);
 
     return res.status(400).json({
       success: false,
-      message:
-        "Department is required.",
+      message: "Department is required.",
     });
   }
 
   if (!cleanFacultyId) {
-    await removeUploadedProof(
-      req.file
-    );
+    await removeUploadedProof(req.file);
 
     return res.status(400).json({
       success: false,
-      message:
-        "Employee or faculty ID is required.",
+      message: "Employee or faculty ID is required.",
     });
   }
 
-  if (
-    cleanFacultyId.length > 100
-  ) {
-    await removeUploadedProof(
-      req.file
-    );
+  if (cleanFacultyId.length > 100) {
+    await removeUploadedProof(req.file);
 
     return res.status(400).json({
       success: false,
-      message:
-        "Employee or faculty ID is too long.",
+      message: "Employee or faculty ID is too long.",
     });
   }
 
   if (!cleanEmploymentProof) {
     return res.status(400).json({
       success: false,
-      message:
-        "Faculty or employee ID photo is required.",
+      message: "Faculty or employee ID photo is required.",
     });
   }
 
   try {
-    const [existing] =
-      await db.execute(
-        `SELECT userId
+    const [existing] = await db.execute(
+      `SELECT userId
          FROM users
          WHERE email = ?
          LIMIT 1`,
-        [cleanEmail]
-      );
+      [cleanEmail],
+    );
 
     if (existing.length > 0) {
-      await removeUploadedProof(
-        req.file
-      );
+      await removeUploadedProof(req.file);
 
       return res.status(409).json({
         success: false,
-        message:
-          "Email is already registered.",
+        message: "Email is already registered.",
       });
     }
 
-    const hashedPassword =
-      await bcrypt.hash(
-        password,
-        10
-      );
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    const otp =
-      createOtp();
+    const otp = createOtp();
 
-    const [result] =
-      await db.execute(
-        `INSERT INTO users
+    const [result] = await db.execute(
+      `INSERT INTO users
          (
            email,
            password,
@@ -532,59 +365,44 @@ export async function signup(
            0,
            1
          )`,
-        [
-          cleanEmail,
-          hashedPassword,
-          cleanName,
-          cleanName,
-          cleanFacultyId || null,
-          cleanDepartment || null,
-          cleanEmploymentProof || null,
-          otp,
-          OTP_TTL_SECONDS,
-        ]
-      );
+      [
+        cleanEmail,
+        hashedPassword,
+        cleanName,
+        cleanName,
+        cleanFacultyId || null,
+        cleanDepartment || null,
+        cleanEmploymentProof || null,
+        otp,
+        OTP_TTL_SECONDS,
+      ],
+    );
 
     try {
-      await sendOtpEmail(
-        cleanEmail,
-        cleanName,
-        otp
-      );
+      await sendOtpEmail(cleanEmail, cleanName, otp);
 
-      const otpSecondsRemaining =
-        await getOtpTiming(
-          result.insertId
-        );
+      const otpSecondsRemaining = await getOtpTiming(result.insertId);
 
       /* ===============================================
          AUDIT LOG - PROFESSOR SIGNUP
       =============================================== */
 
       await logAuditFromRequest(req, {
-        userId:
-          result.insertId,
+        userId: result.insertId,
 
-        userName:
-          cleanName,
+        userName: cleanName,
 
-        userRole:
-          "professor",
+        userRole: "professor",
 
-        category:
-          "Authentication",
+        category: "Authentication",
 
-        action:
-          "Professor Signup",
+        action: "Professor Signup",
 
-        target:
-          cleanEmail,
+        target: cleanEmail,
 
-        status:
-          "Success",
+        status: "Success",
 
-        details:
-          `${cleanName} submitted a professor registration.`,
+        details: `${cleanName} submitted a professor registration.`,
       });
 
       return res.json({
@@ -593,11 +411,9 @@ export async function signup(
         message:
           "Verification code sent to your email. Your professor account will be reviewed by the Super Admin after email verification.",
 
-        email:
-          cleanEmail,
+        email: cleanEmail,
 
-        requiresApproval:
-          true,
+        requiresApproval: true,
 
         otpSecondsRemaining,
       });
@@ -606,67 +422,47 @@ export async function signup(
         `DELETE FROM users
          WHERE userId = ?
            AND is_verified = 0`,
-        [result.insertId]
+        [result.insertId],
       );
 
-      await removeUploadedProof(
-        req.file
-      );
+      await removeUploadedProof(req.file);
 
       return res.status(500).json({
         success: false,
-        message:
-          "Email failed: " +
-          emailError.message,
+        message: "Email failed: " + emailError.message,
       });
     }
   } catch (error) {
-    await removeUploadedProof(
-      req.file
-    );
+    await removeUploadedProof(req.file);
 
-    console.error(
-      "Signup error:",
-      error
-    );
+    console.error("Signup error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Signup failed.",
+      message: "Signup failed.",
     });
   }
 }
-
 
 /* =====================================================
    VERIFY EMAIL
 ===================================================== */
 
-export async function verifyEmail(
-  req,
-  res
-) {
-  const { otp } =
-    req.body;
+export async function verifyEmail(req, res) {
+  const { otp } = req.body;
 
-  const email =
-    cleanEmailValue(
-      req.body?.email
-    );
+  const email = cleanEmailValue(req.body?.email);
 
   if (!email || !otp) {
     return res.status(400).json({
       success: false,
-      message:
-        "Email and OTP are required.",
+      message: "Email and OTP are required.",
     });
   }
 
   try {
-    const [rows] =
-      await db.execute(
-        `SELECT
+    const [rows] = await db.execute(
+      `SELECT
            users.*,
            TIMESTAMPDIFF(
              SECOND,
@@ -677,50 +473,36 @@ export async function verifyEmail(
          WHERE email = ?
            AND role = 'professor'
          LIMIT 1`,
-        [email]
-      );
+      [email],
+    );
 
-    const user =
-      rows[0];
+    const user = rows[0];
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message:
-          "User not found.",
+        message: "User not found.",
       });
     }
 
-    if (
-      user.is_verified === 1
-    ) {
+    if (user.is_verified === 1) {
       return res.json({
         success: true,
-        message:
-          "Email already verified.",
+        message: "Email already verified.",
       });
     }
 
-    if (
-      user.otp_code !== otp
-    ) {
+    if (user.otp_code !== otp) {
       return res.status(400).json({
         success: false,
-        message:
-          "Wrong OTP. Make sure to input the correct code.",
+        message: "Wrong OTP. Make sure to input the correct code.",
       });
     }
 
-    if (
-      !user.otp_expires ||
-      Number(
-        user.otp_seconds_remaining
-      ) <= 0
-    ) {
+    if (!user.otp_expires || Number(user.otp_seconds_remaining) <= 0) {
       return res.status(400).json({
         success: false,
-        message:
-          "Verification code expired",
+        message: "Verification code expired",
         otpSecondsRemaining: 0,
       });
     }
@@ -732,7 +514,7 @@ export async function verifyEmail(
          otp_code = NULL,
          otp_expires = NULL
        WHERE userId = ?`,
-      [user.userId]
+      [user.userId],
     );
 
     /* ===============================================
@@ -740,108 +522,78 @@ export async function verifyEmail(
     =============================================== */
 
     await logAuditFromRequest(req, {
-      userId:
-        user.userId,
+      userId: user.userId,
 
-      userName:
-        user.name ||
-        user.email,
+      userName: user.name || user.email,
 
-      userRole:
-        user.role ||
-        "professor",
+      userRole: user.role || "professor",
 
-      category:
-        "Authentication",
+      category: "Authentication",
 
-      action:
-        "Email Verified",
+      action: "Email Verified",
 
-      target:
-        user.email,
+      target: user.email,
 
-      status:
-        "Success",
+      status: "Success",
 
-      details:
-        `${user.name || user.email} successfully verified their email address.`,
+      details: `${user.name || user.email} successfully verified their email address.`,
     });
 
     return res.json({
       success: true,
-      message:
-        "Email verified successfully.",
+      message: "Email verified successfully.",
     });
   } catch (error) {
-    console.error(
-      "Verify email error:",
-      error
-    );
+    console.error("Verify email error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Verification failed.",
+      message: "Verification failed.",
     });
   }
 }
-
 
 /* =====================================================
    RESEND OTP
 ===================================================== */
 
-export async function resendOtp(
-  req,
-  res
-) {
-  const email =
-    cleanEmailValue(
-      req.body?.email
-    );
+export async function resendOtp(req, res) {
+  const email = cleanEmailValue(req.body?.email);
 
   if (!email) {
     return res.status(400).json({
       success: false,
-      message:
-        "Email is required.",
+      message: "Email is required.",
     });
   }
 
   try {
-    const [rows] =
-      await db.execute(
-        `SELECT *
+    const [rows] = await db.execute(
+      `SELECT *
          FROM users
          WHERE email = ?
            AND role = 'professor'
          LIMIT 1`,
-        [email]
-      );
+      [email],
+    );
 
-    const user =
-      rows[0];
+    const user = rows[0];
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message:
-          "User not found.",
+        message: "User not found.",
       });
     }
 
-    if (
-      user.is_verified === 1
-    ) {
+    if (user.is_verified === 1) {
       return res.status(400).json({
         success: false,
-        message:
-          "Email is already verified.",
+        message: "Email is already verified.",
       });
     }
 
-    const otp =
-      createOtp();
+    const otp = createOtp();
 
     await db.execute(
       `UPDATE users
@@ -853,23 +605,12 @@ export async function resendOtp(
              INTERVAL ? SECOND
            )
        WHERE userId = ?`,
-      [
-        otp,
-        OTP_TTL_SECONDS,
-        user.userId,
-      ]
+      [otp, OTP_TTL_SECONDS, user.userId],
     );
 
-    await sendOtpEmail(
-      user.email,
-      user.name,
-      otp
-    );
+    await sendOtpEmail(user.email, user.name, otp);
 
-    const otpSecondsRemaining =
-      await getOtpTiming(
-        user.userId
-      );
+    const otpSecondsRemaining = await getOtpTiming(user.userId);
 
     /*
      * OTP resend intentionally does not create
@@ -878,37 +619,25 @@ export async function resendOtp(
 
     return res.json({
       success: true,
-      message:
-        "New verification code sent.",
+      message: "New verification code sent.",
       otpSecondsRemaining,
     });
   } catch (error) {
-    console.error(
-      "Resend OTP error:",
-      error
-    );
+    console.error("Resend OTP error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to resend OTP.",
+      message: "Failed to resend OTP.",
     });
   }
 }
-
 
 /* =====================================================
    FORGOT PASSWORD
 ===================================================== */
 
-export async function forgotPassword(
-  req,
-  res
-) {
-  const email =
-    cleanEmailValue(
-      req.body?.email
-    );
+export async function forgotPassword(req, res) {
+  const email = cleanEmailValue(req.body?.email);
 
   const genericResponse = {
     success: true,
@@ -919,15 +648,13 @@ export async function forgotPassword(
   if (!email) {
     return res.status(400).json({
       success: false,
-      message:
-        "Email is required.",
+      message: "Email is required.",
     });
   }
 
   try {
-    const [rows] =
-      await db.execute(
-        `SELECT
+    const [rows] = await db.execute(
+      `SELECT
            userId,
            email,
            name,
@@ -936,11 +663,10 @@ export async function forgotPassword(
          FROM users
          WHERE email = ?
          LIMIT 1`,
-        [email]
-      );
+      [email],
+    );
 
-    const user =
-      rows[0];
+    const user = rows[0];
 
     /*
      * Keep the generic response.
@@ -948,22 +674,11 @@ export async function forgotPassword(
      * This prevents exposing whether
      * an account exists.
      */
-    if (
-      !user ||
-      Number(
-        user.is_archived
-      ) === 1
-    ) {
-      return res.json(
-        genericResponse
-      );
+    if (!user || Number(user.is_archived) === 1) {
+      return res.json(genericResponse);
     }
 
-    const {
-      token,
-      tokenHash,
-    } =
-      createPasswordResetToken();
+    const { token, tokenHash } = createPasswordResetToken();
 
     await db.execute(
       `UPDATE users
@@ -975,11 +690,7 @@ export async function forgotPassword(
              INTERVAL ? SECOND
            )
        WHERE userId = ?`,
-      [
-        tokenHash,
-        RESET_PASSWORD_TTL_SECONDS,
-        user.userId,
-      ]
+      [tokenHash, RESET_PASSWORD_TTL_SECONDS, user.userId],
     );
 
     const resetLink =
@@ -988,11 +699,7 @@ export async function forgotPassword(
       `${encodeURIComponent(token)}`;
 
     try {
-      await sendPasswordResetEmail(
-        user.email,
-        user.name || "there",
-        resetLink
-      );
+      await sendPasswordResetEmail(user.email, user.name || "there", resetLink);
     } catch (emailError) {
       try {
         await db.execute(
@@ -1001,37 +708,26 @@ export async function forgotPassword(
              password_reset_token = NULL,
              password_reset_expires = NULL
            WHERE userId = ?`,
-          [user.userId]
+          [user.userId],
         );
       } catch (cleanupError) {
-        console.error(
-          "Password reset token cleanup error:",
-          cleanupError
-        );
+        console.error("Password reset token cleanup error:", cleanupError);
       }
 
-      console.error(
-        "Password reset email error:",
-        {
-          code:
-            emailError.code,
+      console.error("Password reset email error:", {
+        code: emailError.code,
 
-          command:
-            emailError.command,
+        command: emailError.command,
 
-          responseCode:
-            emailError.responseCode,
+        responseCode: emailError.responseCode,
 
-          message:
-            emailError.message,
-        }
-      );
+        message: emailError.message,
+      });
 
       return res.status(503).json({
         success: false,
 
-        code:
-          "PASSWORD_RESET_EMAIL_FAILED",
+        code: "PASSWORD_RESET_EMAIL_FAILED",
 
         message:
           "Password reset email service is unavailable. Please try again later.",
@@ -1043,86 +739,51 @@ export async function forgotPassword(
     =============================================== */
 
     await logAuditFromRequest(req, {
-      userId:
-        user.userId,
+      userId: user.userId,
 
-      userName:
-        user.name ||
-        user.email,
+      userName: user.name || user.email,
 
-      userRole:
-        user.role ||
-        "Unknown",
+      userRole: user.role || "Unknown",
 
-      category:
-        "Security",
+      category: "Security",
 
-      action:
-        "Password Reset Requested",
+      action: "Password Reset Requested",
 
-      target:
-        user.email,
+      target: user.email,
 
-      status:
-        "Success",
+      status: "Success",
 
-      details:
-        `${user.name || user.email} requested a password reset.`,
+      details: `${user.name || user.email} requested a password reset.`,
     });
 
-    return res.json(
-      genericResponse
-    );
+    return res.json(genericResponse);
   } catch (error) {
-    console.error(
-      "Forgot password error:",
-      error
-    );
+    console.error("Forgot password error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to send password reset email.",
+      message: "Failed to send password reset email.",
     });
   }
 }
-
 
 /* =====================================================
    RESET PASSWORD
 ===================================================== */
 
-export async function resetPassword(
-  req,
-  res
-) {
-  const token =
-    String(
-      req.body?.token ||
-      ""
-    ).trim();
+export async function resetPassword(req, res) {
+  const token = String(req.body?.token || "").trim();
 
-  const password =
-    String(
-      req.body?.password ||
-      req.body?.newPassword ||
-      ""
-    );
+  const password = String(req.body?.password || req.body?.newPassword || "");
 
-  if (
-    !token ||
-    !password
-  ) {
+  if (!token || !password) {
     return res.status(400).json({
       success: false,
-      message:
-        "Reset token and new password are required.",
+      message: "Reset token and new password are required.",
     });
   }
 
-  if (
-    !isStrongPassword(password)
-  ) {
+  if (!isStrongPassword(password)) {
     return res.status(400).json({
       success: false,
       message:
@@ -1131,19 +792,15 @@ export async function resetPassword(
   }
 
   try {
-    const tokenHash =
-      hashPasswordResetToken(
-        token
-      );
+    const tokenHash = hashPasswordResetToken(token);
 
     /*
      * Fetch identifying fields as well
      * so the successful reset can be
      * recorded in the audit log.
      */
-    const [rows] =
-      await db.execute(
-        `SELECT
+    const [rows] = await db.execute(
+      `SELECT
            userId,
            name,
            email,
@@ -1156,25 +813,19 @@ export async function resetPassword(
                > NOW()
            AND is_archived = 0
          LIMIT 1`,
-        [tokenHash]
-      );
+      [tokenHash],
+    );
 
-    const user =
-      rows[0];
+    const user = rows[0];
 
     if (!user) {
       return res.status(400).json({
         success: false,
-        message:
-          "This password reset link is invalid or has expired.",
+        message: "This password reset link is invalid or has expired.",
       });
     }
 
-    const hashedPassword =
-      await bcrypt.hash(
-        password,
-        10
-      );
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     await db.execute(
       `UPDATE users
@@ -1184,10 +835,7 @@ export async function resetPassword(
          password_reset_expires = NULL,
          must_change_password = 0
        WHERE userId = ?`,
-      [
-        hashedPassword,
-        user.userId,
-      ]
+      [hashedPassword, user.userId],
     );
 
     /* ===============================================
@@ -1195,101 +843,64 @@ export async function resetPassword(
     =============================================== */
 
     await logAuditFromRequest(req, {
-      userId:
-        user.userId,
+      userId: user.userId,
 
-      userName:
-        user.name ||
-        user.email,
+      userName: user.name || user.email,
 
-      userRole:
-        user.role ||
-        "Unknown",
+      userRole: user.role || "Unknown",
 
-      category:
-        "Security",
+      category: "Security",
 
-      action:
-        "Reset Password",
+      action: "Reset Password",
 
-      target:
-        user.email,
+      target: user.email,
 
-      status:
-        "Success",
+      status: "Success",
 
-      details:
-        `${user.name || user.email} successfully reset their password.`,
+      details: `${user.name || user.email} successfully reset their password.`,
     });
 
     return res.json({
       success: true,
-      message:
-        "Your password has been updated.",
+      message: "Your password has been updated.",
     });
   } catch (error) {
-    console.error(
-      "Reset password error:",
-      error
-    );
+    console.error("Reset password error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to update password.",
+      message: "Failed to update password.",
     });
   }
 }
-
 
 /* =====================================================
    LOGIN
 ===================================================== */
 
-export async function login(
-  req,
-  res
-) {
-  const {
-    email,
-    username,
-    password,
-  } = req.body;
+export async function login(req, res) {
+  const { email, username, password } = req.body;
 
-  const loginEmail =
-    (
-      email ||
-      username ||
-      ""
-    )
-      .trim()
-      .toLowerCase();
+  const loginEmail = (email || username || "").trim().toLowerCase();
 
-  if (
-    !loginEmail ||
-    !password
-  ) {
+  if (!loginEmail || !password) {
     return res.status(400).json({
       success: false,
-      code:
-        "MISSING_LOGIN_FIELDS",
-      message:
-        "Please enter email and password.",
+      code: "MISSING_LOGIN_FIELDS",
+      message: "Please enter email and password.",
     });
   }
 
   try {
-    const [rows] =
-      await db.execute(
-        `SELECT *
+    const [rows] = await db.execute(
+      `SELECT *
          FROM users
          WHERE email = ?
          LIMIT 1`,
-        [loginEmail]
-      );
+      [loginEmail],
+    );
 
-    const user =
-      rows[0];
+    const user = rows[0];
 
     if (!user) {
       /*
@@ -1305,17 +916,13 @@ export async function login(
         userName: "System",
         userRole: "System",
 
-        category:
-          "Authentication",
+        category: "Authentication",
 
-        action:
-          "Failed Login Attempt",
+        action: "Failed Login Attempt",
 
-        target:
-          loginEmail,
+        target: loginEmail,
 
-        status:
-          "Failed",
+        status: "Failed",
 
         details:
           "Login attempt failed because the email address was not found.",
@@ -1323,43 +930,28 @@ export async function login(
 
       return res.status(404).json({
         success: false,
-        code:
-          "EMAIL_NOT_FOUND",
-        message:
-          "Email not found. Please check your email or sign up.",
+        code: "EMAIL_NOT_FOUND",
+        message: "Email not found. Please check your email or sign up.",
       });
     }
 
-    const validPassword =
-      await bcrypt.compare(
-        password,
-        user.password
-      );
+    const validPassword = await bcrypt.compare(password, user.password);
 
     if (!validPassword) {
       await logAuditFromRequest(req, {
-        userId:
-          user.userId,
+        userId: user.userId,
 
-        userName:
-          user.name ||
-          user.email,
+        userName: user.name || user.email,
 
-        userRole:
-          user.role ||
-          "Unknown",
+        userRole: user.role || "Unknown",
 
-        category:
-          "Authentication",
+        category: "Authentication",
 
-        action:
-          "Failed Login Attempt",
+        action: "Failed Login Attempt",
 
-        target:
-          user.email,
+        target: user.email,
 
-        status:
-          "Failed",
+        status: "Failed",
 
         details:
           "Login attempt failed because an incorrect password was entered.",
@@ -1367,290 +959,188 @@ export async function login(
 
       return res.status(401).json({
         success: false,
-        code:
-          "INCORRECT_PASSWORD",
-        message:
-          "Incorrect password. Please try again.",
+        code: "INCORRECT_PASSWORD",
+        message: "Incorrect password. Please try again.",
       });
     }
 
-    if (
-      user.is_verified !== 1
-    ) {
+    if (user.is_verified !== 1) {
       return res.status(403).json({
         success: false,
-        code:
-          "EMAIL_NOT_VERIFIED",
-        message:
-          "Please verify your email first.",
-        email:
-          user.email,
+        code: "EMAIL_NOT_VERIFIED",
+        message: "Please verify your email first.",
+        email: user.email,
       });
     }
 
-    if (
-      Number(
-        user.is_archived
-      ) === 1
-    ) {
+    if (Number(user.is_archived) === 1) {
       return res.status(403).json({
         success: false,
-        code:
-          "ACCOUNT_ARCHIVED",
-        message:
-          "This account is archived. Please contact the Super Admin.",
+        code: "ACCOUNT_ARCHIVED",
+        message: "This account is archived. Please contact the Super Admin.",
       });
     }
 
-    if (
-      isTemporaryAccountExpired(
-        user
-      )
-    ) {
+    if (isTemporaryAccountExpired(user)) {
       return res.status(403).json({
         success: false,
-        code:
-          "TEMPORARY_ACCOUNT_EXPIRED",
+        code: "TEMPORARY_ACCOUNT_EXPIRED",
         message:
           "This temporary account has expired. Please contact the Super Admin.",
       });
     }
 
-    const role =
-      normalizeRoleValue(
-        user.role
-      );
+    const role = normalizeRoleValue(user.role);
 
-    const verificationStatus =
-      normalizeVerificationStatusValue(
-        user.verification_status
-      );
+    const verificationStatus = normalizeVerificationStatusValue(
+      user.verification_status,
+    );
 
-    if (
-      role === "professor" &&
-      verificationStatus !==
-        "approved"
-    ) {
-      const isDeclined =
-        verificationStatus ===
-        "declined";
+    if (role === "professor" && verificationStatus !== "approved") {
+      const isDeclined = verificationStatus === "declined";
 
       return res.status(403).json({
         success: false,
 
-        code:
-          isDeclined
-            ? "PROFESSOR_REGISTRATION_DECLINED"
-            : "PROFESSOR_REGISTRATION_PENDING",
+        code: isDeclined
+          ? "PROFESSOR_REGISTRATION_DECLINED"
+          : "PROFESSOR_REGISTRATION_PENDING",
 
-        message:
-          isDeclined
-            ? "Your professor registration was declined by the Super Admin."
-            : "Your professor registration is pending Super Admin approval.",
+        message: isDeclined
+          ? "Your professor registration was declined by the Super Admin."
+          : "Your professor registration is pending Super Admin approval.",
 
         verificationStatus,
       });
     }
 
-    const tokenMaxAgeSeconds =
-      7 * 24 * 60 * 60;
+    const tokenMaxAgeSeconds = 7 * 24 * 60 * 60;
 
     const temporaryExpiresAt =
-      Number(
-        user.is_temporary
-      ) === 1 &&
-      user.temporary_expires_at
-        ? new Date(
-            user.temporary_expires_at
-          )
+      Number(user.is_temporary) === 1 && user.temporary_expires_at
+        ? new Date(user.temporary_expires_at)
         : null;
 
     const temporaryRemainingSeconds =
-      temporaryExpiresAt &&
-      !Number.isNaN(
-        temporaryExpiresAt.getTime()
-      )
+      temporaryExpiresAt && !Number.isNaN(temporaryExpiresAt.getTime())
         ? Math.max(
             1,
-            Math.floor(
-              (
-                temporaryExpiresAt.getTime() -
-                Date.now()
-              ) / 1000
-            )
+            Math.floor((temporaryExpiresAt.getTime() - Date.now()) / 1000),
           )
         : tokenMaxAgeSeconds;
 
-    const token =
-      jwt.sign(
-        {
-          id:
-            user.userId,
+    const token = jwt.sign(
+      {
+        id: user.userId,
 
-          userId:
-            user.userId,
+        userId: user.userId,
 
-          email:
-            user.email,
+        email: user.email,
 
-          role,
+        role,
 
-          name:
-            user.name,
+        name: user.name,
 
-          verificationStatus,
+        verificationStatus,
 
-          verification_status:
-            verificationStatus,
-        },
+        verification_status: verificationStatus,
+      },
 
-        JWT_SECRET,
+      JWT_SECRET,
 
-        {
-          expiresIn:
-            Math.min(
-              tokenMaxAgeSeconds,
-              temporaryRemainingSeconds
-            ),
-        }
-      );
+      {
+        expiresIn: Math.min(tokenMaxAgeSeconds, temporaryRemainingSeconds),
+      },
+    );
 
     /* ===============================================
        AUDIT LOG - SUCCESSFUL LOGIN
     =============================================== */
 
     await logAuditFromRequest(req, {
-      userId:
-        user.userId,
+      userId: user.userId,
 
-      userName:
-        user.name ||
-        user.email,
+      userName: user.name || user.email,
 
-      userRole:
-        role,
+      userRole: role,
 
-      category:
-        "Authentication",
+      category: "Authentication",
 
-      action:
-        "User Login",
+      action: "User Login",
 
-      target:
-        user.email,
+      target: user.email,
 
-      status:
-        "Success",
+      status: "Success",
 
-      details:
-        `${user.name || user.email} logged in successfully.`,
+      details: `${user.name || user.email} logged in successfully.`,
     });
 
     return res.json({
       success: true,
-      message:
-        "Login successful.",
+      message: "Login successful.",
 
       token,
 
-      email:
-        user.email,
+      email: user.email,
 
-      username:
-        user.name,
+      username: user.name,
 
-      isNewUser:
-        role === "student" &&
-        Number(
-          user.onboarding_completed
-        ) !== 1,
+      isNewUser: role === "student" && Number(user.onboarding_completed) !== 1,
 
-      user:
-        authUserPayload({
-          ...user,
-          role,
-          verification_status:
-            verificationStatus,
-        }),
+      user: authUserPayload({
+        ...user,
+        role,
+        verification_status: verificationStatus,
+      }),
     });
   } catch (error) {
-    console.error(
-      "Login error:",
-      error
-    );
+    console.error("Login error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Login failed.",
+      message: "Login failed.",
     });
   }
 }
-
 
 /* =====================================================
    LOGOUT
 ===================================================== */
 
-export async function logout(
-  req,
-  res
-) {
+export async function logout(req, res) {
   try {
-    const currentUser =
-      req.user || {};
+    const currentUser = req.user || {};
 
     await logAuditFromRequest(req, {
-      userId:
-        currentUser.userId ||
-        currentUser.id ||
-        null,
+      userId: currentUser.userId || currentUser.id || null,
 
-      userName:
-        currentUser.name ||
-        currentUser.email ||
-        "Unknown User",
+      userName: currentUser.name || currentUser.email || "Unknown User",
 
-      userRole:
-        currentUser.role ||
-        "Unknown",
+      userRole: currentUser.role || "Unknown",
 
-      category:
-        "Authentication",
+      category: "Authentication",
 
-      action:
-        "User Logout",
+      action: "User Logout",
 
-      target:
-        currentUser.email ||
-        null,
+      target: currentUser.email || null,
 
-      status:
-        "Success",
+      status: "Success",
 
-      details:
-        `${
-          currentUser.name ||
-          currentUser.email ||
-          "User"
-        } logged out successfully.`,
+      details: `${
+        currentUser.name || currentUser.email || "User"
+      } logged out successfully.`,
     });
 
     return res.json({
       success: true,
-      message:
-        "Logout successful.",
+      message: "Logout successful.",
     });
   } catch (error) {
-    console.error(
-      "Logout error:",
-      error
-    );
+    console.error("Logout error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to logout.",
+      message: "Failed to logout.",
     });
   }
 }

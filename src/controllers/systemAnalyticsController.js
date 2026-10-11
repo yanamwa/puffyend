@@ -1,6 +1,5 @@
 import { db } from "../db.js";
 
-
 /* =====================================================
    NUMBER HELPERS
 ===================================================== */
@@ -8,11 +7,8 @@ import { db } from "../db.js";
 function toNumber(value) {
   const number = Number(value);
 
-  return Number.isFinite(number)
-    ? number
-    : 0;
+  return Number.isFinite(number) ? number : 0;
 }
-
 
 function toPercent(value) {
   const number = toNumber(value);
@@ -20,14 +16,12 @@ function toPercent(value) {
   return Math.round(number * 100) / 100;
 }
 
-
 /* =====================================================
    GET SYSTEM ANALYTICS
 ===================================================== */
 
 export async function getSystemAnalytics(req, res) {
   try {
-
     /* =================================================
        USER ANALYTICS
     ================================================= */
@@ -91,7 +85,6 @@ export async function getSystemAnalytics(req, res) {
       FROM users
     `);
 
-
     /* =================================================
        USER REGISTRATIONS
 
@@ -135,7 +128,6 @@ export async function getSystemAnalytics(req, res) {
       WHERE is_archived = 0
     `);
 
-
     /* =================================================
        COURSE ANALYTICS
     ================================================= */
@@ -171,7 +163,6 @@ export async function getSystemAnalytics(req, res) {
 
       FROM courses
     `);
-
 
     /* =================================================
        ENROLLMENT ANALYTICS
@@ -210,7 +201,6 @@ export async function getSystemAnalytics(req, res) {
       FROM course_enrollments
     `);
 
-
     /* =================================================
        LEARNING MODULE ANALYTICS
     ================================================= */
@@ -237,7 +227,6 @@ export async function getSystemAnalytics(req, res) {
 
       FROM learning_modules
     `);
-
 
     /* =================================================
        QUIZ ANALYTICS
@@ -271,7 +260,6 @@ export async function getSystemAnalytics(req, res) {
       FROM quiz_attempts
     `);
 
-
     /* =================================================
        QUIZ ACTIVITY THIS WEEK
     ================================================= */
@@ -293,7 +281,6 @@ export async function getSystemAnalytics(req, res) {
         )
     `);
 
-
     /* =================================================
        QUIZ MODE USAGE
     ================================================= */
@@ -313,7 +300,6 @@ export async function getSystemAnalytics(req, res) {
 
       ORDER BY attempts DESC
     `);
-
 
     /* =================================================
        LEARNING PROGRESS
@@ -351,7 +337,6 @@ export async function getSystemAnalytics(req, res) {
       FROM lesson_progress
     `);
 
-
     /* =================================================
        STUDENTS AT MASTERY
 
@@ -387,95 +372,39 @@ export async function getSystemAnalytics(req, res) {
       ) AS mastery
     `);
 
-
     /* =================================================
        CALCULATIONS
     ================================================= */
 
-    const totalUsers =
-      toNumber(
-        userStats.totalUsers
-      );
+    const totalUsers = toNumber(userStats.totalUsers);
 
-    const activeAccounts =
-      toNumber(
-        userStats.activeAccounts
-      );
+    const activeAccounts = toNumber(userStats.activeAccounts);
 
-    const totalCourses =
-      toNumber(
-        courseStats.totalCourses
-      );
+    const totalCourses = toNumber(courseStats.totalCourses);
 
-    const publishedCourses =
-      toNumber(
-        courseStats.publishedCourses
-      );
+    const publishedCourses = toNumber(courseStats.publishedCourses);
 
-    const totalModules =
-      toNumber(
-        moduleStats.totalModules
-      );
+    const totalModules = toNumber(moduleStats.totalModules);
 
-    const publishedModules =
-      toNumber(
-        moduleStats.publishedModules
-      );
+    const publishedModules = toNumber(moduleStats.publishedModules);
 
-    const totalEnrollments =
-      toNumber(
-        enrollmentStats.totalEnrollments
-      );
+    const totalEnrollments = toNumber(enrollmentStats.totalEnrollments);
 
-    const approvedEnrollments =
-      toNumber(
-        enrollmentStats.approvedEnrollments
-      );
-
+    const approvedEnrollments = toNumber(enrollmentStats.approvedEnrollments);
 
     const activeAccountRate =
-      totalUsers > 0
-        ? toPercent(
-            (
-              activeAccounts /
-              totalUsers
-            ) * 100
-          )
-        : 0;
-
+      totalUsers > 0 ? toPercent((activeAccounts / totalUsers) * 100) : 0;
 
     const publishedCourseRate =
-      totalCourses > 0
-        ? toPercent(
-            (
-              publishedCourses /
-              totalCourses
-            ) * 100
-          )
-        : 0;
-
+      totalCourses > 0 ? toPercent((publishedCourses / totalCourses) * 100) : 0;
 
     const enrollmentApprovalRate =
       totalEnrollments > 0
-        ? toPercent(
-            (
-              approvedEnrollments /
-              totalEnrollments
-            ) * 100
-          )
+        ? toPercent((approvedEnrollments / totalEnrollments) * 100)
         : 0;
-
 
     const modulePublishRate =
-      totalModules > 0
-        ? toPercent(
-            (
-              publishedModules /
-              totalModules
-            ) * 100
-          )
-        : 0;
-
+      totalModules > 0 ? toPercent((publishedModules / totalModules) * 100) : 0;
 
     /* =================================================
        RESPONSE
@@ -484,9 +413,7 @@ export async function getSystemAnalytics(req, res) {
     return res.json({
       success: true,
 
-      generatedAt:
-        new Date().toISOString(),
-
+      generatedAt: new Date().toISOString(),
 
       /* -----------------------------------------------
          OVERVIEW
@@ -495,108 +422,65 @@ export async function getSystemAnalytics(req, res) {
       overview: {
         totalUsers,
 
-        activeUsers:
-          toNumber(
-            userStats.activeUsersThisWeek
-          ),
+        activeUsers: toNumber(userStats.activeUsersThisWeek),
 
         totalCourses,
 
-        quizAttempts:
-          toNumber(
-            quizStats.totalAttempts
-          ),
+        quizAttempts: toNumber(quizStats.totalAttempts),
       },
-
 
       /* -----------------------------------------------
          USER GROWTH
       ----------------------------------------------- */
 
       users: {
-        total:
-          totalUsers,
+        total: totalUsers,
 
-        students:
-          toNumber(
-            userStats.students
-          ),
+        students: toNumber(userStats.students),
 
-        professors:
-          toNumber(
-            userStats.professors
-          ),
+        professors: toNumber(userStats.professors),
 
-        administrators:
-          toNumber(
-            userStats.administrators
-          ),
+        administrators: toNumber(userStats.administrators),
 
         activeAccounts,
 
-        archivedAccounts:
-          toNumber(
-            userStats.archivedAccounts
-          ),
+        archivedAccounts: toNumber(userStats.archivedAccounts),
 
-        activeThisWeek:
-          toNumber(
-            userStats.activeUsersThisWeek
-          ),
+        activeThisWeek: toNumber(userStats.activeUsersThisWeek),
 
-        registrationsThisMonth:
-          toNumber(
-            registrationStats
-              .registrationsThisMonth
-          ),
+        registrationsThisMonth: toNumber(
+          registrationStats.registrationsThisMonth,
+        ),
 
-        registrationsPreviousMonth:
-          toNumber(
-            registrationStats
-              .registrationsPreviousMonth
-          ),
+        registrationsPreviousMonth: toNumber(
+          registrationStats.registrationsPreviousMonth,
+        ),
 
         activeAccountRate,
       },
-
 
       /* -----------------------------------------------
          COURSE ACTIVITY
       ----------------------------------------------- */
 
       courses: {
-        total:
-          totalCourses,
+        total: totalCourses,
 
-        active:
-          toNumber(
-            courseStats.activeCourses
-          ),
+        active: toNumber(courseStats.activeCourses),
 
-        archived:
-          toNumber(
-            courseStats.archivedCourses
-          ),
+        archived: toNumber(courseStats.archivedCourses),
 
-        published:
-          publishedCourses,
+        published: publishedCourses,
 
-        publishedRate:
-          publishedCourseRate,
+        publishedRate: publishedCourseRate,
 
         totalEnrollments,
 
         approvedEnrollments,
 
-        pendingEnrollments:
-          toNumber(
-            enrollmentStats.pendingEnrollments
-          ),
+        pendingEnrollments: toNumber(enrollmentStats.pendingEnrollments),
 
-        declinedEnrollments:
-          toNumber(
-            enrollmentStats.declinedEnrollments
-          ),
+        declinedEnrollments: toNumber(enrollmentStats.declinedEnrollments),
 
         enrollmentApprovalRate,
 
@@ -604,117 +488,64 @@ export async function getSystemAnalytics(req, res) {
 
         publishedModules,
 
-        draftModules:
-          toNumber(
-            moduleStats.draftModules
-          ),
+        draftModules: toNumber(moduleStats.draftModules),
 
         modulePublishRate,
       },
-
 
       /* -----------------------------------------------
          QUIZ USAGE
       ----------------------------------------------- */
 
       quizzes: {
-        totalAttempts:
-          toNumber(
-            quizStats.totalAttempts
-          ),
+        totalAttempts: toNumber(quizStats.totalAttempts),
 
-        studentsWithAttempts:
-          toNumber(
-            quizStats.studentsWithAttempts
-          ),
+        studentsWithAttempts: toNumber(quizStats.studentsWithAttempts),
 
-        averageScore:
-          toPercent(
-            quizStats.averageScore
-          ),
+        averageScore: toPercent(quizStats.averageScore),
 
-        totalQuizTime:
-          toNumber(
-            quizStats.totalQuizTime
-          ),
+        totalQuizTime: toNumber(quizStats.totalQuizTime),
 
-        attemptsThisWeek:
-          toNumber(
-            weeklyQuizStats.attemptsThisWeek
-          ),
+        attemptsThisWeek: toNumber(weeklyQuizStats.attemptsThisWeek),
 
-        studentsThisWeek:
-          toNumber(
-            weeklyQuizStats.studentsThisWeek
-          ),
+        studentsThisWeek: toNumber(weeklyQuizStats.studentsThisWeek),
 
-        modeUsage:
-          quizModeRows.map(
-            (row) => ({
-              mode:
-                row.quizMode ||
-                "unknown",
+        modeUsage: quizModeRows.map((row) => ({
+          mode: row.quizMode || "unknown",
 
-              attempts:
-                toNumber(
-                  row.attempts
-                ),
-            })
-          ),
+          attempts: toNumber(row.attempts),
+        })),
       },
-
 
       /* -----------------------------------------------
          LEARNING PROGRESS
       ----------------------------------------------- */
 
       learning: {
-        progressRecords:
-          toNumber(
-            progressStats.progressRecords
-          ),
+        progressRecords: toNumber(progressStats.progressRecords),
 
-        studentsWithProgress:
-          toNumber(
-            progressStats.studentsWithProgress
-          ),
+        studentsWithProgress: toNumber(progressStats.studentsWithProgress),
 
-        averageProgress:
-          toPercent(
-            progressStats.averageProgress
-          ),
+        averageProgress: toPercent(progressStats.averageProgress),
 
-        completedModules:
-          toNumber(
-            progressStats.completedModules
-          ),
+        completedModules: toNumber(progressStats.completedModules),
 
-        studentsWithCompletedModules:
-          toNumber(
-            progressStats
-              .studentsWithCompletedModules
-          ),
+        studentsWithCompletedModules: toNumber(
+          progressStats.studentsWithCompletedModules,
+        ),
 
-        studentsAtMastery:
-          toNumber(
-            masteryStats.studentsAtMastery
-          ),
+        studentsAtMastery: toNumber(masteryStats.studentsAtMastery),
 
-        masteryThreshold:
-          80,
+        masteryThreshold: 80,
       },
     });
   } catch (error) {
-    console.error(
-      "System analytics error:",
-      error
-    );
+    console.error("System analytics error:", error);
 
     return res.status(500).json({
       success: false,
 
-      message:
-        "Failed to load system analytics.",
+      message: "Failed to load system analytics.",
     });
   }
 }

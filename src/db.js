@@ -35,7 +35,7 @@ async function ensureDatabaseExists() {
     await bootstrapPool.execute(
       `CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\`
        CHARACTER SET utf8mb4
-       COLLATE utf8mb4_general_ci`
+       COLLATE utf8mb4_general_ci`,
     );
   } finally {
     await bootstrapPool.end();
@@ -49,7 +49,7 @@ async function ensureColumn(columnName, columnDefinition) {
      WHERE TABLE_SCHEMA = DATABASE()
        AND TABLE_NAME = 'users'
        AND COLUMN_NAME = ?`,
-    [columnName]
+    [columnName],
   );
 
   if (columns.length === 0) {
@@ -64,7 +64,7 @@ async function ensureTableColumn(tableName, columnName, columnDefinition) {
      WHERE TABLE_SCHEMA = DATABASE()
        AND TABLE_NAME = ?
        AND COLUMN_NAME = ?`,
-    [tableName, columnName]
+    [tableName, columnName],
   );
 
   if (columns.length === 0) {
@@ -107,56 +107,88 @@ async function initCourseTables() {
   await ensureTableColumn("courses", "title", "title VARCHAR(255) NOT NULL");
   await ensureTableColumn("courses", "code", "code VARCHAR(50) NOT NULL");
   await ensureTableColumn("courses", "summary", "summary TEXT NOT NULL");
-  await ensureTableColumn("courses", "subject", "subject VARCHAR(255) NOT NULL");
+  await ensureTableColumn(
+    "courses",
+    "subject",
+    "subject VARCHAR(255) NOT NULL",
+  );
   await ensureTableColumn("courses", "professor_id", "professor_id INT NULL");
-  await ensureTableColumn("courses", "course_name", "course_name VARCHAR(255) NULL");
+  await ensureTableColumn(
+    "courses",
+    "course_name",
+    "course_name VARCHAR(255) NULL",
+  );
   await ensureTableColumn("courses", "description", "description TEXT NULL");
-  await ensureTableColumn("courses", "course_code", "course_code VARCHAR(50) NULL");
+  await ensureTableColumn(
+    "courses",
+    "course_code",
+    "course_code VARCHAR(50) NULL",
+  );
   await ensureTableColumn(
     "courses",
     "learning_objectives",
-    "learning_objectives TEXT NULL"
+    "learning_objectives TEXT NULL",
   );
   await ensureTableColumn(
     "courses",
     "status",
-    "status VARCHAR(50) NOT NULL DEFAULT 'draft'"
+    "status VARCHAR(50) NOT NULL DEFAULT 'draft'",
   );
   await ensureTableColumn(
     "courses",
     "visibility",
-    "visibility VARCHAR(50) NOT NULL DEFAULT 'private'"
+    "visibility VARCHAR(50) NOT NULL DEFAULT 'private'",
   );
-  await ensureTableColumn("courses", "lesson_pages", "lesson_pages LONGTEXT NULL");
+  await ensureTableColumn(
+    "courses",
+    "lesson_pages",
+    "lesson_pages LONGTEXT NULL",
+  );
   await ensureTableColumn("courses", "quiz_items", "quiz_items LONGTEXT NULL");
-  await ensureTableColumn("courses", "students", "students INT NOT NULL DEFAULT 0");
-  await ensureTableColumn("courses", "modules", "modules INT NOT NULL DEFAULT 0");
-  await ensureTableColumn("courses", "quizzes", "quizzes INT NOT NULL DEFAULT 0");
-  await ensureTableColumn("courses", "join_link", "join_link VARCHAR(500) NULL");
+  await ensureTableColumn(
+    "courses",
+    "students",
+    "students INT NOT NULL DEFAULT 0",
+  );
+  await ensureTableColumn(
+    "courses",
+    "modules",
+    "modules INT NOT NULL DEFAULT 0",
+  );
+  await ensureTableColumn(
+    "courses",
+    "quizzes",
+    "quizzes INT NOT NULL DEFAULT 0",
+  );
+  await ensureTableColumn(
+    "courses",
+    "join_link",
+    "join_link VARCHAR(500) NULL",
+  );
   await ensureTableColumn(
     "courses",
     "archived",
-    "archived TINYINT(1) NOT NULL DEFAULT 0"
+    "archived TINYINT(1) NOT NULL DEFAULT 0",
   );
   await ensureTableColumn(
     "courses",
     "professor_name",
-    "professor_name VARCHAR(255) NULL"
+    "professor_name VARCHAR(255) NULL",
   );
   await ensureTableColumn(
     "courses",
     "professor_email",
-    "professor_email VARCHAR(255) NULL"
+    "professor_email VARCHAR(255) NULL",
   );
   await ensureTableColumn(
     "courses",
     "professor_department",
-    "professor_department VARCHAR(255) NULL"
+    "professor_department VARCHAR(255) NULL",
   );
   await ensureTableColumn(
     "courses",
     "professor_profile_image",
-    "professor_profile_image VARCHAR(500) NULL"
+    "professor_profile_image VARCHAR(500) NULL",
   );
 
   const [courseIdColumns] = await db.execute(
@@ -164,12 +196,14 @@ async function initCourseTables() {
      FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE()
        AND TABLE_NAME = 'courses'
-       AND COLUMN_NAME IN ('course_id', 'id')`
+       AND COLUMN_NAME IN ('course_id', 'id')`,
   );
   const courseIdColumnNames = new Set(
-    courseIdColumns.map((column) => column.COLUMN_NAME)
+    courseIdColumns.map((column) => column.COLUMN_NAME),
   );
-  const courseIdColumn = courseIdColumnNames.has("course_id") ? "course_id" : "id";
+  const courseIdColumn = courseIdColumnNames.has("course_id")
+    ? "course_id"
+    : "id";
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS learning_modules (
@@ -195,47 +229,47 @@ async function initCourseTables() {
   await ensureTableColumn(
     "learning_modules",
     "course_id",
-    "course_id INT NOT NULL"
+    "course_id INT NOT NULL",
   );
   await ensureTableColumn(
     "learning_modules",
     "title",
-    "title VARCHAR(255) NOT NULL"
+    "title VARCHAR(255) NOT NULL",
   );
   await ensureTableColumn(
     "learning_modules",
     "description",
-    "description TEXT NULL"
+    "description TEXT NULL",
   );
   await ensureTableColumn(
     "learning_modules",
     "subject",
-    "subject VARCHAR(255) NULL"
+    "subject VARCHAR(255) NULL",
   );
   await ensureTableColumn(
     "learning_modules",
     "status",
-    "status VARCHAR(50) NOT NULL DEFAULT 'draft'"
+    "status VARCHAR(50) NOT NULL DEFAULT 'draft'",
   );
   await ensureTableColumn(
     "learning_modules",
     "quiz_contents",
-    "quiz_contents LONGTEXT NULL"
+    "quiz_contents LONGTEXT NULL",
   );
   await ensureTableColumn(
     "learning_modules",
     "learning_objectives",
-    "learning_objectives TEXT NULL"
+    "learning_objectives TEXT NULL",
   );
   await ensureTableColumn(
     "learning_modules",
     "lesson_contents",
-    "lesson_contents LONGTEXT NULL"
+    "lesson_contents LONGTEXT NULL",
   );
   await ensureTableColumn(
     "learning_modules",
     "has_quiz",
-    "has_quiz TINYINT(1) NOT NULL DEFAULT 0"
+    "has_quiz TINYINT(1) NOT NULL DEFAULT 0",
   );
 }
 
@@ -258,7 +292,7 @@ async function initQuizModeTables() {
   await ensureTableColumn(
     "quiz_modes",
     "mode_name",
-    "mode_name VARCHAR(255) NOT NULL"
+    "mode_name VARCHAR(255) NOT NULL",
   );
   await ensureTableColumn("quiz_modes", "title", "title VARCHAR(255) NULL");
   await ensureTableColumn("quiz_modes", "description", "description TEXT NULL");
@@ -311,14 +345,14 @@ async function initQuizModeTables() {
   ];
 
   const [existingModes] = await db.execute(
-    "SELECT mode_name, title, route FROM quiz_modes"
+    "SELECT mode_name, title, route FROM quiz_modes",
   );
   const existingKeys = new Set(
     existingModes.flatMap((mode) => [
       String(mode.mode_name || "").toLowerCase(),
       String(mode.title || "").toLowerCase(),
       String(mode.route || "").toLowerCase(),
-    ])
+    ]),
   );
 
   for (const mode of defaultQuizModes) {
@@ -333,7 +367,7 @@ async function initQuizModeTables() {
     await db.execute(
       `INSERT INTO quiz_modes (mode_name, title, description, image, route)
        VALUES (?, ?, ?, ?, ?)`,
-      [modeName, title, description, image, route]
+      [modeName, title, description, image, route],
     );
   }
 }
@@ -357,22 +391,22 @@ async function initMonitoringTables() {
   await ensureTableColumn(
     "course_enrollments",
     "archived",
-    "archived TINYINT(1) NOT NULL DEFAULT 0"
+    "archived TINYINT(1) NOT NULL DEFAULT 0",
   );
   await ensureTableColumn(
     "course_enrollments",
     "status",
-    "status VARCHAR(50) NOT NULL DEFAULT 'pending'"
+    "status VARCHAR(50) NOT NULL DEFAULT 'pending'",
   );
   await ensureTableColumn(
     "course_enrollments",
     "approved_at",
-    "approved_at DATETIME NULL"
+    "approved_at DATETIME NULL",
   );
   await ensureTableColumn(
     "course_enrollments",
     "rejection_reason",
-    "rejection_reason TEXT NULL"
+    "rejection_reason TEXT NULL",
   );
 
   await db.execute(`
@@ -486,47 +520,47 @@ async function initNotificationTables() {
   await ensureTableColumn(
     "managed_notifications",
     "title",
-    "title VARCHAR(255) NOT NULL"
+    "title VARCHAR(255) NOT NULL",
   );
   await ensureTableColumn(
     "managed_notifications",
     "message",
-    "message TEXT NOT NULL"
+    "message TEXT NOT NULL",
   );
   await ensureTableColumn(
     "managed_notifications",
     "target",
-    "target VARCHAR(50) NOT NULL DEFAULT 'all'"
+    "target VARCHAR(50) NOT NULL DEFAULT 'all'",
   );
   await ensureTableColumn(
     "managed_notifications",
     "type",
-    "type VARCHAR(50) NOT NULL DEFAULT 'announcement'"
+    "type VARCHAR(50) NOT NULL DEFAULT 'announcement'",
   );
   await ensureTableColumn(
     "managed_notifications",
     "created_by_user_id",
-    "created_by_user_id INT NULL"
+    "created_by_user_id INT NULL",
   );
   await ensureTableColumn(
     "managed_notifications",
     "created_by_name",
-    "created_by_name VARCHAR(255) NULL"
+    "created_by_name VARCHAR(255) NULL",
   );
   await ensureTableColumn(
     "managed_notifications",
     "created_by_role",
-    "created_by_role VARCHAR(50) NULL"
+    "created_by_role VARCHAR(50) NULL",
   );
   await ensureTableColumn(
     "managed_notifications",
     "created_at",
-    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
   );
   await ensureTableColumn(
     "managed_notifications",
     "updated_at",
-    "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+    "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
   );
 
   await db.execute(`
@@ -548,15 +582,14 @@ async function ensureSuperAdminUser() {
     .trim()
     .toLowerCase();
   const configuredSuperAdminPassword = process.env.SUPER_ADMIN_PASSWORD;
-  const superAdminPassword =
-    configuredSuperAdminPassword || "SuperAdmin#2026!";
+  const superAdminPassword = configuredSuperAdminPassword || "SuperAdmin#2026!";
   const superAdminName = process.env.SUPER_ADMIN_NAME || "Super Admin";
 
   if (!superAdminEmail || !superAdminPassword) return;
 
   const [rows] = await db.execute(
     "SELECT userId FROM users WHERE email = ? LIMIT 1",
-    [superAdminEmail]
+    [superAdminEmail],
   );
 
   if (rows.length > 0) {
@@ -577,7 +610,7 @@ async function ensureSuperAdminUser() {
              is_temporary = 0,
              temporary_expires_at = NULL
          WHERE email = ?`,
-        [hashedPassword, superAdminName, superAdminName, superAdminEmail]
+        [hashedPassword, superAdminName, superAdminName, superAdminEmail],
       );
       return;
     }
@@ -595,7 +628,7 @@ async function ensureSuperAdminUser() {
            is_temporary = 0,
            temporary_expires_at = NULL
        WHERE email = ?`,
-      [superAdminName, superAdminName, superAdminEmail]
+      [superAdminName, superAdminName, superAdminEmail],
     );
     return;
   }
@@ -608,7 +641,7 @@ async function ensureSuperAdminUser() {
       is_verified, onboarding_completed, is_archived, is_temporary,
       temporary_expires_at)
      VALUES (?, ?, 'super_admin', ?, ?, 'approved', 1, 1, 0, 0, NULL)`,
-    [superAdminEmail, hashedPassword, superAdminName, superAdminName]
+    [superAdminEmail, hashedPassword, superAdminName, superAdminName],
   );
 }
 
@@ -655,15 +688,15 @@ export async function initDb() {
   await ensureColumn("otp_expires", "otp_expires DATETIME NULL");
   await ensureColumn(
     "password_reset_token",
-    "password_reset_token VARCHAR(64) NULL"
+    "password_reset_token VARCHAR(64) NULL",
   );
   await ensureColumn(
     "password_reset_expires",
-    "password_reset_expires DATETIME NULL"
+    "password_reset_expires DATETIME NULL",
   );
   await ensureColumn(
     "is_verified",
-    "is_verified TINYINT(1) NOT NULL DEFAULT 0"
+    "is_verified TINYINT(1) NOT NULL DEFAULT 0",
   );
   await ensureColumn("display_name", "display_name VARCHAR(255) NULL");
   await ensureColumn("gender", "gender VARCHAR(50) NULL");
@@ -672,51 +705,51 @@ export async function initDb() {
   await ensureColumn("section_name", "section_name VARCHAR(20) NULL");
   await ensureColumn(
     "onboarding_completed",
-    "onboarding_completed TINYINT(1) NOT NULL DEFAULT 0"
+    "onboarding_completed TINYINT(1) NOT NULL DEFAULT 0",
   );
   await ensureColumn("verification_id", "verification_id VARCHAR(100) NULL");
   await ensureColumn("student_id", "student_id VARCHAR(100) NULL");
   await ensureColumn("professor_id", "professor_id VARCHAR(100) NULL");
   await ensureColumn(
     "professor_faculty_id",
-    "professor_faculty_id VARCHAR(100) NULL"
+    "professor_faculty_id VARCHAR(100) NULL",
   );
   await ensureColumn(
     "professor_department",
-    "professor_department VARCHAR(255) NULL"
+    "professor_department VARCHAR(255) NULL",
   );
   await ensureColumn(
     "professor_position",
-    "professor_position VARCHAR(255) NULL"
+    "professor_position VARCHAR(255) NULL",
   );
   await ensureColumn(
     "professor_specialization",
-    "professor_specialization VARCHAR(255) NULL"
+    "professor_specialization VARCHAR(255) NULL",
   );
   await ensureColumn(
     "professor_employment_proof",
-    "professor_employment_proof TEXT NULL"
+    "professor_employment_proof TEXT NULL",
   );
   await ensureColumn(
     "verification_status",
-    "verification_status VARCHAR(50) NOT NULL DEFAULT 'pending'"
+    "verification_status VARCHAR(50) NOT NULL DEFAULT 'pending'",
   );
   await ensureColumn(
     "is_archived",
-    "is_archived TINYINT(1) NOT NULL DEFAULT 0"
+    "is_archived TINYINT(1) NOT NULL DEFAULT 0",
   );
   await ensureColumn("archived_at", "archived_at DATETIME NULL");
   await ensureColumn(
     "must_change_password",
-    "must_change_password TINYINT(1) NOT NULL DEFAULT 0"
+    "must_change_password TINYINT(1) NOT NULL DEFAULT 0",
   );
   await ensureColumn(
     "is_temporary",
-    "is_temporary TINYINT(1) NOT NULL DEFAULT 0"
+    "is_temporary TINYINT(1) NOT NULL DEFAULT 0",
   );
   await ensureColumn(
     "temporary_expires_at",
-    "temporary_expires_at DATETIME NULL"
+    "temporary_expires_at DATETIME NULL",
   );
 
   await ensureSuperAdminUser();
@@ -724,6 +757,8 @@ export async function initDb() {
   await initCourseTables();
   await initQuizModeTables();
   await initMonitoringTables();
+  const { initMainQuizTables } = await import("./services/mainQuizService.js");
+  await initMainQuizTables();
   await initNotificationTables();
 
   return db;

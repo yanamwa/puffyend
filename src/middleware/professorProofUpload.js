@@ -12,11 +12,7 @@ if (!fs.existsSync(uploadDirectory)) {
 }
 
 const allowedExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
-const allowedMimeTypes = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
+const allowedMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 const storage = multer.diskStorage({
   destination(req, file, callback) {

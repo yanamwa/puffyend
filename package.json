@@ -4,7 +4,9 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "test": "node --test tests/rag.test.js tests/grounding.test.js tests/powerPoint.test.js tests/outlineRecovery.test.js tests/quizRag.test.js",
-    "test:integration": "node --test tests/rag.integration.test.js"
+    "test:integration": "node --test tests/rag.integration.test.js",
+    "format": "prettier --write src tests --ignore-unknown",
+    "format:check": "prettier --check src tests --ignore-unknown"
   },
   "dependencies": {
     "adm-zip": "^0.6.1",
@@ -23,6 +25,7 @@
     "ppt-to-text": "^1.0.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.7"
+    "nodemon": "^3.1.7",
+    "prettier": "^3.9.10"
   }
 }

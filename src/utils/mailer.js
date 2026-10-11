@@ -27,7 +27,7 @@ function getSmtpConfig() {
 
   if (missingKeys.length > 0) {
     const error = new Error(
-      `SMTP configuration is incomplete: ${missingKeys.join(", ")}`
+      `SMTP configuration is incomplete: ${missingKeys.join(", ")}`,
     );
     error.code = "SMTP_CONFIG_MISSING";
     throw error;
@@ -129,7 +129,10 @@ If you did not request a password reset, you can ignore this email.`,
   });
 }
 
-export async function sendStudentTemporaryPasswordEmail(email, temporaryPassword) {
+export async function sendStudentTemporaryPasswordEmail(
+  email,
+  temporaryPassword,
+) {
   const { transporter, from } = createSmtpMailer();
   const passwordHtml = escapeHtml(temporaryPassword);
 
@@ -179,7 +182,7 @@ export async function sendEnrollmentDeclinedEmail(
   studentName,
   courseName,
   courseCode,
-  reason
+  reason,
 ) {
   const { transporter, from } = createSmtpMailer();
 
@@ -267,7 +270,7 @@ export async function sendEnrollmentRequestEmail(
   professorEmail,
   professorName,
   studentName,
-  courseName
+  courseName,
 ) {
   const { transporter, from } = createSmtpMailer();
 
@@ -399,25 +402,17 @@ export async function sendStudentUnenrolledEmail(
   studentName,
   courseName,
   reason,
-  professorName
+  professorName,
 ) {
   const { transporter, from } = createSmtpMailer();
 
-  const nameHtml = escapeHtml(
-    studentName || "Student"
-  );
+  const nameHtml = escapeHtml(studentName || "Student");
 
-  const courseNameHtml = escapeHtml(
-    courseName || "your course"
-  );
+  const courseNameHtml = escapeHtml(courseName || "your course");
 
-  const reasonHtml = escapeHtml(
-    reason || "No reason provided."
-  );
+  const reasonHtml = escapeHtml(reason || "No reason provided.");
 
-  const professorNameHtml = escapeHtml(
-    professorName || "Professor"
-  );
+  const professorNameHtml = escapeHtml(professorName || "Professor");
 
   await transporter.sendMail({
     from,
@@ -578,9 +573,7 @@ Course Unenrollment Notice
 
 Hi ${studentName || "Student"},
 
-You have been unenrolled from ${
-      courseName || "your course"
-    } by your professor.
+You have been unenrolled from ${courseName || "your course"} by your professor.
 
 Reason for unenrollment:
 ${reason || "No reason provided."}

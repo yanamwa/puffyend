@@ -35,11 +35,7 @@ function handleSignupUpload(req, res, next) {
 
 router.post("/signup", handleSignupUpload, signup);
 router.post("/login", login);
-router.post(
-  "/logout",
-  authenticateUser,
-  logout
-);
+router.post("/logout", authenticateUser, logout);
 router.post("/verify-email", verifyEmail);
 router.post("/resend-otp", resendOtp);
 router.post("/forgot-password", forgotPassword);

@@ -41,7 +41,9 @@ export default async function authenticateUser(req, res, next) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     const decodedUserId = decoded.userId || decoded.id;
-    const decodedEmail = String(decoded.email || "").trim().toLowerCase();
+    const decodedEmail = String(decoded.email || "")
+      .trim()
+      .toLowerCase();
     let rows = [];
 
     if (decodedUserId) {
@@ -51,7 +53,7 @@ export default async function authenticateUser(req, res, next) {
          FROM users
          WHERE userId = ?
          LIMIT 1`,
-        [decodedUserId]
+        [decodedUserId],
       );
     } else if (decodedEmail) {
       [rows] = await db.execute(
@@ -60,7 +62,7 @@ export default async function authenticateUser(req, res, next) {
          FROM users
          WHERE email = ?
          LIMIT 1`,
-        [decodedEmail]
+        [decodedEmail],
       );
     }
 
@@ -92,7 +94,7 @@ export default async function authenticateUser(req, res, next) {
 
     const role = normalizeRole(user.role);
     const verificationStatus = normalizeVerificationStatus(
-      user.verification_status
+      user.verification_status,
     );
 
     if (role === "professor" && verificationStatus !== "approved") {
@@ -121,11 +123,11 @@ export default async function authenticateUser(req, res, next) {
     };
 
     await db.execute(
-        `UPDATE users
+      `UPDATE users
         SET last_active = NOW()
         WHERE userId = ?`,
-        [user.userId]
-      );
+      [user.userId],
+    );
 
     next();
   } catch (error) {

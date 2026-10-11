@@ -55,14 +55,14 @@ router.get(
   "/users",
   authenticateUser,
   requireRole("super_admin", "admin"),
-  getUsers
+  getUsers,
 );
 
 router.post(
   "/users/admin",
   authenticateUser,
   requireRole("super_admin"),
-  createAdminAccount
+  createAdminAccount,
 );
 
 router.post(
@@ -70,38 +70,30 @@ router.post(
   authenticateUser,
   requireRole("super_admin", "admin"),
   handleProfessorProofUpload,
-  createProfessorAccount
+  createProfessorAccount,
 );
 
 router.post(
   "/users/student",
   authenticateUser,
   requireRole("super_admin", "admin"),
-  createStudentAccount
+  createStudentAccount,
 );
 
 /* =========================
    CURRENT USER
 ========================= */
 
-router.get(
-  "/users/me",
-  authenticateUser,
-  getCurrentUser
-);
+router.get("/users/me", authenticateUser, getCurrentUser);
 
 router.put(
   "/users/me/profile-image",
   authenticateUser,
   uploadProfileImage.single("profileImage"),
-  updateProfileImage
+  updateProfileImage,
 );
 
-router.put(
-  "/users/change-password",
-  authenticateUser,
-  changeUserPassword
-);
+router.put("/users/change-password", authenticateUser, changeUserPassword);
 
 /* =========================
    USER BY ID
@@ -110,105 +102,74 @@ router.post(
   "/users/student/bulk-import-audit",
   authenticateUser,
   requireRole("super_admin", "admin"),
-  logBulkStudentImport
+  logBulkStudentImport,
 );
 
 router.get(
   "/users/:id",
   authenticateUser,
   requireRole("super_admin", "admin"),
-  getUserById
+  getUserById,
 );
 
 router.patch(
   "/users/:id/registration",
   authenticateUser,
   requireRole("super_admin"),
-  updateProfessorRegistration
+  updateProfessorRegistration,
 );
 
 router.patch(
   "/users/:id/archive",
   authenticateUser,
   requireRole("super_admin", "admin"),
-  updateAccountArchive
+  updateAccountArchive,
 );
 
 router.post(
   "/users/:id/reset-credentials",
   authenticateUser,
   requireRole("super_admin", "admin"),
-  resetUserCredentials
+  resetUserCredentials,
 );
 
 router.delete(
   "/users/:id/archived",
   authenticateUser,
   requireRole("super_admin", "admin"),
-  permanentlyRemoveArchivedAccount
+  permanentlyRemoveArchivedAccount,
 );
-
 
 /* =========================
    PROFILE
 ========================= */
 
-router.post(
-  "/profile",
-  getProfile
-);
+router.post("/profile", getProfile);
 
 /* =========================
    ONBOARDING
 ========================= */
 
-router.post(
-  "/onboarding/name",
-  updateOnboardingName
-);
+router.post("/onboarding/name", updateOnboardingName);
 
-router.post(
-  "/onboarding/year",
-  updateOnboardingYear
-);
+router.post("/onboarding/year", updateOnboardingYear);
 
-router.post(
-  "/onboarding/section",
-  updateOnboardingSection
-);
+router.post("/onboarding/section", updateOnboardingSection);
 
-router.post(
-  "/onboarding/complete",
-  completeOnboarding
-);
+router.post("/onboarding/complete", completeOnboarding);
 
 /* =========================
    LEGACY PHP-COMPATIBLE ROUTES
 ========================= */
 
-router.post(
-  "/get-profile.php",
-  getProfile
-);
+router.post("/get-profile.php", getProfile);
 
-router.post(
-  "/update-name.php",
-  updateOnboardingName
-);
+router.post("/update-name.php", updateOnboardingName);
 
-router.post(
-  "/update-year.php",
-  updateOnboardingYear
-);
+router.post("/update-year.php", updateOnboardingYear);
 
-router.post(
-  "/update-section.php",
-  updateOnboardingSection
-);
+router.post("/update-section.php", updateOnboardingSection);
 
-router.post(
-  "/complete-onboarding.php",
-  completeOnboarding
-);
+router.post("/complete-onboarding.php", completeOnboarding);
 
 export default router;

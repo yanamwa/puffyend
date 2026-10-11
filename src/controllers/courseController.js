@@ -2,14 +2,16 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 
 import { db } from "../db.js";
-import { deleteWithSources } from '../services/rag/sourceLifecycleService.js';
-import authenticateUser from '../middleware/authMiddleware.js';
-import { assertCourseAccess } from '../services/rag/courseAccessService.js';
+import { deleteWithSources } from "../services/rag/sourceLifecycleService.js";
+import authenticateUser from "../middleware/authMiddleware.js";
+import { assertCourseAccess } from "../services/rag/courseAccessService.js";
 
 async function authenticateDeletion(req, res) {
   if (req.user) return true;
   let authenticated = false;
-  await authenticateUser(req, res, () => { authenticated = true; });
+  await authenticateUser(req, res, () => {
+    authenticated = true;
+  });
   return authenticated;
 }
 import {
@@ -104,7 +106,10 @@ function getTokenUser(req) {
 
 function getRequestUserId(req) {
   const explicitId =
-    req.body?.userId || req.body?.user_id || req.query.userId || req.query.user_id;
+    req.body?.userId ||
+    req.body?.user_id ||
+    req.query.userId ||
+    req.query.user_id;
 
   if (explicitId) {
     return explicitId;
@@ -116,7 +121,9 @@ function getRequestUserId(req) {
 }
 
 function normalizeRole(role) {
-  const value = cleanText(role).toLowerCase().replace(/[\s-]+/g, "_");
+  const value = cleanText(role)
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
 
   if (value === "instructor") return "professor";
 
@@ -143,7 +150,7 @@ async function getRequestUserProfile(req) {
          FROM users
          WHERE userId = ?
          LIMIT 1`,
-        [userId]
+        [userId],
       );
     } else if (email) {
       [rows] = await db.execute(
@@ -152,7 +159,7 @@ async function getRequestUserProfile(req) {
          FROM users
          WHERE LOWER(email) = ?
          LIMIT 1`,
-        [email]
+        [email],
       );
     }
 
@@ -210,17 +217,25 @@ function getProfessorOwnerCondition(tableAlias, user) {
 
 function courseMatchesProfessorFields(course, fields) {
   const professorId = cleanText(fields.professorId || fields.professor_id);
-  const professorEmail = cleanText(fields.professorEmail || fields.professor_email).toLowerCase();
-  const courseProfessorId = cleanText(course?.professor_id || course?.professorId);
+  const professorEmail = cleanText(
+    fields.professorEmail || fields.professor_email,
+  ).toLowerCase();
+  const courseProfessorId = cleanText(
+    course?.professor_id || course?.professorId,
+  );
   const courseProfessorEmail = cleanText(
-    course?.professor_email || course?.professorEmail
+    course?.professor_email || course?.professorEmail,
   ).toLowerCase();
 
   if (professorId && courseProfessorId && professorId === courseProfessorId) {
     return true;
   }
 
-  if (professorEmail && courseProfessorEmail && professorEmail === courseProfessorEmail) {
+  if (
+    professorEmail &&
+    courseProfessorEmail &&
+    professorEmail === courseProfessorEmail
+  ) {
     return true;
   }
 
@@ -234,9 +249,12 @@ async function applyAuthenticatedProfessorFields(req, fields) {
     return fields;
   }
 
-  const professorId = currentUser.id || currentUser.userId || currentUser.user_id || null;
+  const professorId =
+    currentUser.id || currentUser.userId || currentUser.user_id || null;
   const professorName =
-    cleanText(currentUser.displayName || currentUser.display_name || currentUser.name) ||
+    cleanText(
+      currentUser.displayName || currentUser.display_name || currentUser.name,
+    ) ||
     fields.professorName ||
     "Professor";
 
@@ -248,12 +266,12 @@ async function applyAuthenticatedProfessorFields(req, fields) {
     professorDepartment: cleanText(
       currentUser.professorDepartment ||
         currentUser.professor_department ||
-        fields.professorDepartment
+        fields.professorDepartment,
     ),
     professorProfileImage: cleanText(
       currentUser.profileImage ||
         currentUser.profile_image ||
-        fields.professorProfileImage
+        fields.professorProfileImage,
     ),
   };
 }
@@ -287,9 +305,28 @@ function readList(...values) {
 
 function getMainQuizSettings(module = {}) {
   const settings = module.mainQuizSettings || module.main_quiz_settings || {};
-  const enabled = settings.enabled ?? settings.isEnabled ?? module.mainQuizEnabled ?? module.main_quiz_enabled ?? true;
-  return { enabled: ![false, 0, '0', 'false'].includes(enabled),
-    unlockAt: settings.unlockAt || settings.unlock_at || module.mainQuizUnlockAt || module.main_quiz_unlock_at || '' };
+  const enabled =
+    settings.enabled ??
+    settings.isEnabled ??
+    module.mainQuizEnabled ??
+    module.main_quiz_enabled ??
+    true;
+  return {
+    manualQuestions: module.mainQuizItems || settings.manualQuestions || [],
+    enabled: ![false, 0, "0", "false"].includes(enabled),
+    unlockAt:
+      settings.unlockAt ||
+      settings.unlock_at ||
+      module.mainQuizUnlockAt ||
+      module.main_quiz_unlock_at ||
+      "",
+    lockAt:
+      settings.lockAt ||
+      settings.lock_at ||
+      module.mainQuizLockAt ||
+      module.main_quiz_lock_at ||
+      "",
+  };
 }
 
 function normalizeContentModule(module, index) {
@@ -298,26 +335,38 @@ function normalizeContentModule(module, index) {
     module?.lesson_pages,
     module?.lessonContent,
     module?.lesson_content,
-    module?.lesson_contents
+    module?.lesson_contents,
   );
 
   const quizItems = readList(
     module?.quizItems,
     module?.quiz_items,
     module?.quizModule,
-    module?.quiz_contents
+    module?.quiz_contents,
   );
 
   return {
-    id: module?.id || module?.lesson_id || module?.module_id || `module-${index + 1}`,
+    id:
+      module?.id ||
+      module?.lesson_id ||
+      module?.module_id ||
+      `module-${index + 1}`,
     mainQuizSettings: getMainQuizSettings(module),
     lesson_id: module?.lesson_id || null,
     module_id: module?.module_id || module?.id || null,
     title: cleanText(module?.title) || `Module ${index + 1}`,
-    description: cleanText(module?.description || module?.module_description || module?.summary),
-    summary: cleanText(module?.description || module?.module_description || module?.summary),
-    learningObjectives: cleanText(module?.learningObjectives || module?.learning_objectives),
-    learning_objectives: cleanText(module?.learning_objectives || module?.learningObjectives),
+    description: cleanText(
+      module?.description || module?.module_description || module?.summary,
+    ),
+    summary: cleanText(
+      module?.description || module?.module_description || module?.summary,
+    ),
+    learningObjectives: cleanText(
+      module?.learningObjectives || module?.learning_objectives,
+    ),
+    learning_objectives: cleanText(
+      module?.learning_objectives || module?.learningObjectives,
+    ),
     lessonPages,
     lesson_pages: lessonPages,
     quizItems,
@@ -336,12 +385,13 @@ function getPayloadContentModules(body) {
         module.description ||
         module.learningObjectives ||
         module.lessonPages.length ||
-        module.quizItems.length
+        module.quizItems.length,
     );
 }
 
 function getModuleMeta(module, index) {
-  const moduleId = module.id || module.module_id || module.lesson_id || `module-${index + 1}`;
+  const moduleId =
+    module.id || module.module_id || module.lesson_id || `module-${index + 1}`;
 
   return {
     mainQuizSettings: getMainQuizSettings(module),
@@ -365,7 +415,7 @@ function flattenModuleLessonPages(contentModules) {
       ...getModuleMeta(module, moduleIndex),
       pageIndex,
       page_index: pageIndex,
-    }))
+    })),
   );
 }
 
@@ -374,7 +424,7 @@ function flattenModuleQuizItems(contentModules) {
     module.quizItems.map((item) => ({
       ...item,
       ...getModuleMeta(module, moduleIndex),
-    }))
+    })),
   );
 }
 
@@ -392,7 +442,11 @@ function getModuleKeyFromItem(item, fallbackIndex = 0) {
   return "legacy-module";
 }
 
-function buildContentModulesFromFlatContent(lessonPages, quizItems, fallback = {}) {
+function buildContentModulesFromFlatContent(
+  lessonPages,
+  quizItems,
+  fallback = {},
+) {
   const modules = new Map();
 
   const ensureModule = (item, fallbackIndex = 0) => {
@@ -402,15 +456,18 @@ function buildContentModulesFromFlatContent(lessonPages, quizItems, fallback = {
     if (!modules.has(key)) {
       const moduleIndex = Number(item?.moduleIndex ?? item?.module_index);
       const order = Number.isInteger(moduleIndex) ? moduleIndex : modules.size;
-      const moduleId = item?.moduleId || item?.module_id || `module-${order + 1}`;
-      const title = cleanText(item?.moduleTitle || item?.module_title) || `Module ${order + 1}`;
+      const moduleId =
+        item?.moduleId || item?.module_id || `module-${order + 1}`;
+      const title =
+        cleanText(item?.moduleTitle || item?.module_title) ||
+        `Module ${order + 1}`;
       const description = cleanText(
-        item?.moduleDescription || item?.module_description || fallback.summary
+        item?.moduleDescription || item?.module_description || fallback.summary,
       );
       const learningObjectives = cleanText(
         item?.moduleLearningObjectives ||
           item?.module_learning_objectives ||
-          fallback.learningObjectives
+          fallback.learningObjectives,
       );
 
       modules.set(key, {
@@ -454,7 +511,12 @@ function buildContentModulesFromFlatContent(lessonPages, quizItems, fallback = {
     .map(({ order, ...module }) => module);
 }
 
-function buildCourseContentModules(learningModules, lessonPages, quizItems, fallback = {}) {
+function buildCourseContentModules(
+  learningModules,
+  lessonPages,
+  quizItems,
+  fallback = {},
+) {
   if (lessonPages.length || quizItems.length) {
     return buildContentModulesFromFlatContent(lessonPages, quizItems, fallback);
   }
@@ -469,8 +531,8 @@ function buildCourseContentModules(learningModules, lessonPages, quizItems, fall
           lessonPages: module.lessonPages,
           quizItems: module.quizItems,
         },
-        index
-      )
+        index,
+      ),
     );
   }
 
@@ -488,7 +550,9 @@ function normalizeStatus(status) {
 }
 
 function normalizeVisibility(visibility) {
-  return cleanText(visibility).toLowerCase() === "public" ? "public" : "private";
+  return cleanText(visibility).toLowerCase() === "public"
+    ? "public"
+    : "private";
 }
 
 function formatDate(value) {
@@ -507,7 +571,7 @@ async function getCourseIdColumn() {
      FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE()
        AND TABLE_NAME = 'courses'
-       AND COLUMN_NAME IN ('course_id', 'id')`
+       AND COLUMN_NAME IN ('course_id', 'id')`,
   );
   const columnNames = new Set(columns.map((column) => column.COLUMN_NAME));
 
@@ -523,14 +587,27 @@ function rowToCourse(row, learningModules = []) {
   const courseId = getCourseId(row);
   const storedLessonPages = parseJsonList(row.lesson_pages);
   const storedQuizItems = parseJsonList(row.quiz_items);
-  const contentModules = buildCourseContentModules(learningModules, storedLessonPages, storedQuizItems, {
-    summary: row.summary || row.description || "",
-    learningObjectives: row.learning_objectives || "",
-  });
-  const fallbackLessonPages = contentModules.flatMap((module) => module.lessonPages || []);
-  const fallbackQuizItems = contentModules.flatMap((module) => module.quizItems || []);
-  const lessonPages = storedLessonPages.length ? storedLessonPages : fallbackLessonPages;
-  const quizItems = storedQuizItems.length ? storedQuizItems : fallbackQuizItems;
+  const contentModules = buildCourseContentModules(
+    learningModules,
+    storedLessonPages,
+    storedQuizItems,
+    {
+      summary: row.summary || row.description || "",
+      learningObjectives: row.learning_objectives || "",
+    },
+  );
+  const fallbackLessonPages = contentModules.flatMap(
+    (module) => module.lessonPages || [],
+  );
+  const fallbackQuizItems = contentModules.flatMap(
+    (module) => module.quizItems || [],
+  );
+  const lessonPages = storedLessonPages.length
+    ? storedLessonPages
+    : fallbackLessonPages;
+  const quizItems = storedQuizItems.length
+    ? storedQuizItems
+    : fallbackQuizItems;
   const courseCode = row.course_code || row.code || "";
   const courseName = row.course_name || row.title || row.subject || courseCode;
   const summary = row.summary || row.description || "";
@@ -578,17 +655,31 @@ function rowToCourse(row, learningModules = []) {
     archived: row.archived === 1 || row.archived === true,
     professorId: row.professor_id || null,
     professorDisplayName:
-      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+      row.professor_name ||
+      row.database_professor_display_name ||
+      row.database_professor_name ||
+      "",
     professor_display_name:
-      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+      row.professor_name ||
+      row.database_professor_display_name ||
+      row.database_professor_name ||
+      "",
     professorName:
-      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+      row.professor_name ||
+      row.database_professor_display_name ||
+      row.database_professor_name ||
+      "",
     professor_name:
-      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+      row.professor_name ||
+      row.database_professor_display_name ||
+      row.database_professor_name ||
+      "",
     professorEmail: row.professor_email || row.database_professor_email || "",
     professor_email: row.professor_email || row.database_professor_email || "",
-    professorDepartment: row.professor_department || row.database_professor_department || "",
-    professor_department: row.professor_department || row.database_professor_department || "",
+    professorDepartment:
+      row.professor_department || row.database_professor_department || "",
+    professor_department:
+      row.professor_department || row.database_professor_department || "",
     professorProfileImage:
       row.professor_profile_image || row.database_professor_profile_image || "",
     professor_profile_image:
@@ -603,7 +694,8 @@ function rowToModule(row) {
   const lessonPages = parseJsonList(row.lesson_contents);
   const quizItems = parseJsonList(row.quiz_contents);
   const courseCode = row.course_code || row.code || "";
-  const courseName = row.course_name || row.course_subject || row.course_title || courseCode;
+  const courseName =
+    row.course_name || row.course_subject || row.course_title || courseCode;
   const updatedAt = formatDate(row.updated_at || row.created_at);
 
   return {
@@ -642,17 +734,31 @@ function rowToModule(row) {
     professorId: row.professor_id || null,
     professor_id: row.professor_id || null,
     professorDisplayName:
-      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+      row.professor_name ||
+      row.database_professor_display_name ||
+      row.database_professor_name ||
+      "",
     professor_display_name:
-      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+      row.professor_name ||
+      row.database_professor_display_name ||
+      row.database_professor_name ||
+      "",
     professorName:
-      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+      row.professor_name ||
+      row.database_professor_display_name ||
+      row.database_professor_name ||
+      "",
     professor_name:
-      row.professor_name || row.database_professor_display_name || row.database_professor_name || "",
+      row.professor_name ||
+      row.database_professor_display_name ||
+      row.database_professor_name ||
+      "",
     professorEmail: row.professor_email || row.database_professor_email || "",
     professor_email: row.professor_email || row.database_professor_email || "",
-    professorDepartment: row.professor_department || row.database_professor_department || "",
-    professor_department: row.professor_department || row.database_professor_department || "",
+    professorDepartment:
+      row.professor_department || row.database_professor_department || "",
+    professor_department:
+      row.professor_department || row.database_professor_department || "",
     professorProfileImage:
       row.professor_profile_image || row.database_professor_profile_image || "",
     professor_profile_image:
@@ -663,12 +769,21 @@ function rowToModule(row) {
 }
 
 function payloadToModuleFields(body) {
-  const courseCode = cleanText(body.courseCode || body.course_code || body.code).toUpperCase();
+  const courseCode = cleanText(
+    body.courseCode || body.course_code || body.code,
+  ).toUpperCase();
   const courseName = cleanText(
-    body.courseName || body.course_name || body.courseTitle || body.subject || courseCode
+    body.courseName ||
+      body.course_name ||
+      body.courseTitle ||
+      body.subject ||
+      courseCode,
   );
   const courseDescription = cleanText(
-    body.courseDescription || body.course_description || body.courseSummary || body.summary
+    body.courseDescription ||
+      body.course_description ||
+      body.courseSummary ||
+      body.summary,
   );
   const lessonPages = Array.isArray(body.lessonPages)
     ? body.lessonPages
@@ -682,19 +797,27 @@ function payloadToModuleFields(body) {
     courseCode,
     courseName,
     courseDescription,
-    courseStatus: normalizeStatus(body.courseStatus || body.course_status || body.status),
+    courseStatus: normalizeStatus(
+      body.courseStatus || body.course_status || body.status,
+    ),
     courseVisibility: normalizeVisibility(body.visibility),
     professorId: body.professorId || body.professor_id || null,
     professorName: cleanText(body.professorName || body.professor_name),
     professorEmail: cleanText(body.professorEmail || body.professor_email),
-    professorDepartment: cleanText(body.professorDepartment || body.professor_department),
+    professorDepartment: cleanText(
+      body.professorDepartment || body.professor_department,
+    ),
     professorProfileImage: cleanText(
-      body.professorProfileImage || body.professor_profile_image
+      body.professorProfileImage || body.professor_profile_image,
     ),
     title: cleanText(body.title),
-    description: cleanText(body.description || body.module_description || body.summary),
+    description: cleanText(
+      body.description || body.module_description || body.summary,
+    ),
     subject: cleanText(body.subject || courseName),
-    learningObjectives: cleanText(body.learningObjectives || body.learning_objectives),
+    learningObjectives: cleanText(
+      body.learningObjectives || body.learning_objectives,
+    ),
     status: normalizeStatus(body.status),
     lessonPages,
     quizItems,
@@ -712,22 +835,29 @@ function payloadToCourseFields(body) {
     cleanText(body.courseCode || body.course_code || body.code).toUpperCase() ||
     generateCourseCode();
   const title = cleanText(
-    body.title || body.courseTitle || body.course_title || body.courseName || body.course_name
+    body.title ||
+      body.courseTitle ||
+      body.course_title ||
+      body.courseName ||
+      body.course_name,
   );
   const summary = cleanText(
-    body.summary || body.description || body.courseDescription || body.course_description
+    body.summary ||
+      body.description ||
+      body.courseDescription ||
+      body.course_description,
   );
   const providedLessonPages = readList(
     body.lessonPages,
     body.lessonContent,
     body.lesson_content,
-    body.lesson_pages
+    body.lesson_pages,
   );
   const providedQuizItems = readList(
     body.quizItems,
     body.quizModule,
     body.quiz_contents,
-    body.quiz_items
+    body.quiz_items,
   );
   const lessonPages = providedLessonPages.length
     ? providedLessonPages
@@ -741,7 +871,11 @@ function payloadToCourseFields(body) {
       .map((module) => module.learningObjectives)
       .filter(Boolean)
       .join("\n\n");
-  const countedModuleCount = countContentModules(contentModules, lessonPages, quizItems);
+  const countedModuleCount = countContentModules(
+    contentModules,
+    lessonPages,
+    quizItems,
+  );
   const moduleCount =
     countedModuleCount ||
     Number(body.moduleCount || body.module_count || body.modules) ||
@@ -758,9 +892,11 @@ function payloadToCourseFields(body) {
     professorId: body.professorId || body.professor_id || null,
     professorName: cleanText(body.professorName || body.professor_name),
     professorEmail: cleanText(body.professorEmail || body.professor_email),
-    professorDepartment: cleanText(body.professorDepartment || body.professor_department),
+    professorDepartment: cleanText(
+      body.professorDepartment || body.professor_department,
+    ),
     professorProfileImage: cleanText(
-      body.professorProfileImage || body.professor_profile_image
+      body.professorProfileImage || body.professor_profile_image,
     ),
     contentModules,
     lessonPages,
@@ -793,21 +929,32 @@ function validateModule(fields) {
 }
 
 function validateCourse(fields) {
-  if (!fields.courseCode) return 'Course code is required.';
-  if (!fields.title) return 'Course title is required.';
-  if (fields.status !== 'published') return '';
-  if (!fields.summary || !fields.subject) return 'Course description and subject are required to publish.';
+  if (!fields.courseCode) return "Course code is required.";
+  if (!fields.title) return "Course title is required.";
+  if (fields.status !== "published") return "";
+  if (!fields.summary || !fields.subject)
+    return "Course description and subject are required to publish.";
   if (!fields.learningObjectives || fields.lessonPages.length === 0) {
-    return 'Learning objectives and at least one lesson page are required to publish.';
+    return "Learning objectives and at least one lesson page are required to publish.";
   }
-  if (fields.contentModules.some(module => !module.title || !module.learningObjectives || !module.lessonPages.length)) {
-    return 'Complete every module before publishing the course.';
+  if (
+    fields.contentModules.some(
+      (module) =>
+        !module.title ||
+        !module.learningObjectives ||
+        !module.lessonPages.length,
+    )
+  ) {
+    return "Complete every module before publishing the course.";
   }
-  return '';
+  return "";
 }
 
 function duplicateCourseCode(error) {
-  return error?.code === "ER_DUP_ENTRY" && String(error?.message || "").includes("code");
+  return (
+    error?.code === "ER_DUP_ENTRY" &&
+    String(error?.message || "").includes("code")
+  );
 }
 
 async function sendCourseWriteError(res, error, fallbackMessage) {
@@ -828,9 +975,10 @@ async function getOrCreateCourse(fields) {
   const idColumn = await getCourseIdColumn();
 
   if (fields.courseId) {
-    const [rows] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [
-      fields.courseId,
-    ]);
+    const [rows] = await db.execute(
+      `SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`,
+      [fields.courseId],
+    );
 
     if (rows.length > 0) return rows[0];
   }
@@ -840,7 +988,7 @@ async function getOrCreateCourse(fields) {
      FROM courses
      WHERE course_code = ? OR code = ?
      LIMIT 1`,
-    [fields.courseCode, fields.courseCode]
+    [fields.courseCode, fields.courseCode],
   );
 
   if (existing.length > 0) {
@@ -884,12 +1032,13 @@ async function getOrCreateCourse(fields) {
         fields.professorProfileImage,
         `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`,
         getCourseId(existing[0]),
-      ]
+      ],
     );
 
-    const [updated] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [
-      getCourseId(existing[0]),
-    ]);
+    const [updated] = await db.execute(
+      `SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`,
+      [getCourseId(existing[0])],
+    );
     return updated[0];
   }
 
@@ -915,12 +1064,13 @@ async function getOrCreateCourse(fields) {
       fields.professorEmail,
       fields.professorDepartment,
       fields.professorProfileImage,
-    ]
+    ],
   );
 
-  const [rows] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [
-    result.insertId,
-  ]);
+  const [rows] = await db.execute(
+    `SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`,
+    [result.insertId],
+  );
   return rows[0];
 }
 
@@ -928,7 +1078,10 @@ async function getCourseLearningModules(courseIds) {
   if (!courseIds.length) return new Map();
 
   const placeholders = courseIds.map(() => "?").join(", ");
-  const rows = await getModuleRows(`WHERE lm.course_id IN (${placeholders})`, courseIds);
+  const rows = await getModuleRows(
+    `WHERE lm.course_id IN (${placeholders})`,
+    courseIds,
+  );
   const grouped = new Map();
 
   rows.forEach((row) => {
@@ -973,7 +1126,7 @@ async function getModuleRows(where = "", params = []) {
      LEFT JOIN users u ON u.userId = c.professor_id
      ${where}
      ORDER BY lm.updated_at DESC, lm.lesson_id DESC`,
-    params
+    params,
   );
 
   return rows;
@@ -1021,7 +1174,7 @@ export async function getCourses(req, res) {
        LEFT JOIN users u ON u.userId = c.professor_id
        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
        ORDER BY c.updated_at DESC, c.${idColumn} DESC`,
-      params
+      params,
     );
 
     const modulesByCourse = summaryOnly
@@ -1041,7 +1194,7 @@ export async function getCourses(req, res) {
            AND course_id IN (${placeholders})
            AND archived = 0
            AND status IN ('pending', 'approved')`,
-        [requestUserId, ...courseIds]
+        [requestUserId, ...courseIds],
       );
 
       enrollmentRows.forEach((enrollment) => {
@@ -1053,7 +1206,7 @@ export async function getCourses(req, res) {
       const courseId = getCourseId(courseRow);
       const course = rowToCourse(
         courseRow,
-        modulesByCourse.get(String(courseId)) || []
+        modulesByCourse.get(String(courseId)) || [],
       );
       const enrollment = enrollmentByCourseId.get(String(courseId));
 
@@ -1107,10 +1260,7 @@ export async function getEnrolledCourses(req, res) {
     const summaryOnly = wantsCourseSummary(req);
     const courseSelect = getCourseSelect(idColumn, summaryOnly);
 
-    const where = [
-      "ce.user_id = ?",
-      "ce.status = 'approved'",
-    ];
+    const where = ["ce.user_id = ?", "ce.status = 'approved'"];
 
     const params = [userId];
 
@@ -1147,21 +1297,17 @@ export async function getEnrolledCourses(req, res) {
          ce.created_at DESC,
          c.updated_at DESC,
          c.${idColumn} DESC`,
-      params
+      params,
     );
 
     const modulesByCourse = summaryOnly
       ? new Map()
-      : await getCourseLearningModules(
-          courseRows.map(getCourseId)
-        );
+      : await getCourseLearningModules(courseRows.map(getCourseId));
 
     const courses = courseRows.map((course) => ({
       ...rowToCourse(
         course,
-        modulesByCourse.get(
-          String(getCourseId(course))
-        ) || []
+        modulesByCourse.get(String(getCourseId(course))) || [],
       ),
 
       enrollmentId: course.enrollment_id,
@@ -1216,22 +1362,18 @@ export async function getArchivedCourses(req, res) {
        ORDER BY ce.created_at DESC,
                 c.updated_at DESC,
                 c.${idColumn} DESC`,
-      [userId]
+      [userId],
     );
 
     const modulesByCourse = summaryOnly
       ? new Map()
-      : await getCourseLearningModules(
-          courseRows.map(getCourseId)
-        );
+      : await getCourseLearningModules(courseRows.map(getCourseId));
 
     const courses = courseRows.map((course) =>
       rowToCourse(
         course,
-        modulesByCourse.get(
-          String(getCourseId(course))
-        ) || []
-      )
+        modulesByCourse.get(String(getCourseId(course))) || [],
+      ),
     );
 
     return res.json({
@@ -1239,10 +1381,7 @@ export async function getArchivedCourses(req, res) {
       courses,
     });
   } catch (error) {
-    console.error(
-      "Get archived courses error:",
-      error
-    );
+    console.error("Get archived courses error:", error);
 
     return res.status(500).json({
       success: false,
@@ -1267,7 +1406,7 @@ export async function enrollCourse(req, res) {
       req.body?.id ||
       req.query?.courseId ||
       req.query?.course_id ||
-      req.query?.id
+      req.query?.id,
   );
 
   const courseCode = cleanText(
@@ -1276,7 +1415,7 @@ export async function enrollCourse(req, res) {
       req.body?.code ||
       req.query?.courseCode ||
       req.query?.course_code ||
-      req.query?.code
+      req.query?.code,
   ).toUpperCase();
 
   if (!courseId && !courseCode) {
@@ -1289,10 +1428,7 @@ export async function enrollCourse(req, res) {
   try {
     const idColumn = await getCourseIdColumn();
 
-    const conditions = [
-      "c.archived = 0",
-      "c.status = 'published'",
-    ];
+    const conditions = ["c.archived = 0", "c.status = 'published'"];
 
     const params = [];
 
@@ -1300,9 +1436,7 @@ export async function enrollCourse(req, res) {
       conditions.push(`c.${idColumn} = ?`);
       params.push(courseId);
     } else {
-      conditions.push(
-        "(c.course_code = ? OR c.code = ?)"
-      );
+      conditions.push("(c.course_code = ? OR c.code = ?)");
       params.push(courseCode, courseCode);
     }
 
@@ -1312,20 +1446,18 @@ export async function enrollCourse(req, res) {
        FROM courses c
        WHERE ${conditions.join(" AND ")}
        LIMIT 1`,
-      params
+      params,
     );
 
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message:
-          "Course not found or unavailable for enrollment.",
+        message: "Course not found or unavailable for enrollment.",
       });
     }
 
     const selectedCourse = rows[0];
-    const selectedCourseId =
-      getCourseId(selectedCourse);
+    const selectedCourseId = getCourseId(selectedCourse);
 
     // Get student
     const [studentRows] = await db.execute(
@@ -1337,15 +1469,12 @@ export async function enrollCourse(req, res) {
        FROM users
        WHERE userId = ?
        LIMIT 1`,
-      [userId]
+      [userId],
     );
 
     const student = studentRows[0];
 
-    const studentName =
-      student?.display_name ||
-      student?.name ||
-      "A student";
+    const studentName = student?.display_name || student?.name || "A student";
 
     // Get professor
     let professor = null;
@@ -1354,8 +1483,7 @@ export async function enrollCourse(req, res) {
      * Your courses use professor_id.
      */
     const professorId =
-      selectedCourse.professor_id ||
-      selectedCourse.professor_user_id;
+      selectedCourse.professor_id || selectedCourse.professor_user_id;
 
     if (professorId) {
       const [professorRows] = await db.execute(
@@ -1367,17 +1495,14 @@ export async function enrollCourse(req, res) {
          FROM users
          WHERE userId = ?
          LIMIT 1`,
-        [professorId]
+        [professorId],
       );
 
       professor = professorRows[0] || null;
     }
 
     // Fallback to professor email
-    if (
-      !professor &&
-      selectedCourse.professor_email
-    ) {
+    if (!professor && selectedCourse.professor_email) {
       const [professorRows] = await db.execute(
         `SELECT
            userId,
@@ -1387,16 +1512,14 @@ export async function enrollCourse(req, res) {
          FROM users
          WHERE LOWER(email) = LOWER(?)
          LIMIT 1`,
-        [selectedCourse.professor_email]
+        [selectedCourse.professor_email],
       );
 
       professor = professorRows[0] || null;
     }
 
     const professorEmail =
-      professor?.email ||
-      selectedCourse.professor_email ||
-      "";
+      professor?.email || selectedCourse.professor_email || "";
 
     const professorName =
       professor?.display_name ||
@@ -1406,48 +1529,40 @@ export async function enrollCourse(req, res) {
       "Professor";
 
     const courseName =
-      selectedCourse.course_name ||
-      selectedCourse.title ||
-      "your course";
+      selectedCourse.course_name || selectedCourse.title || "your course";
 
     /*
      * Sends BOTH:
      * 1. professor email
      * 2. professor in-app notification
      */
-    const notifyProfessor = async (
-      enrollmentId
-    ) => {
+    const notifyProfessor = async (enrollmentId) => {
       let emailSent = false;
       let emailError = null;
 
       // EMAIL
       if (!professorEmail) {
-        emailError =
-          "Professor email address was not found.";
+        emailError = "Professor email address was not found.";
       } else {
         try {
           await sendEnrollmentRequestEmail(
             professorEmail,
             professorName,
             studentName,
-            courseName
+            courseName,
           );
 
           emailSent = true;
 
-          console.log(
-            `Enrollment request email sent to ${professorEmail}`
-          );
+          console.log(`Enrollment request email sent to ${professorEmail}`);
         } catch (error) {
           console.error(
             "Failed to send professor enrollment request email:",
-            error
+            error,
           );
 
           emailError =
-            error?.message ||
-            "Professor email notification could not be sent.";
+            error?.message || "Professor email notification could not be sent.";
         }
       }
 
@@ -1455,49 +1570,39 @@ export async function enrollCourse(req, res) {
       if (professor?.userId) {
         try {
           await createNotification({
-            recipientUserId:
-              professor.userId,
+            recipientUserId: professor.userId,
 
-            courseId:
-              selectedCourseId,
+            courseId: selectedCourseId,
 
-            enrollmentId:
-              Number(enrollmentId),
+            enrollmentId: Number(enrollmentId),
 
-            title:
-              "New Enrollment Request",
+            title: "New Enrollment Request",
 
-            message:
-              `${studentName} requested to enroll in ${courseName}.`,
+            message: `${studentName} requested to enroll in ${courseName}.`,
 
-            target:
-              "professor",
+            target: "professor",
 
-            type:
-              "enrollment_request",
+            type: "enrollment_request",
 
-            createdByUserId:
-              userId,
+            createdByUserId: userId,
 
-            createdByName:
-              studentName,
+            createdByName: studentName,
 
-            createdByRole:
-              "student",
+            createdByRole: "student",
           });
 
           console.log(
-            `Enrollment request notification created for professor ${professor.userId}`
+            `Enrollment request notification created for professor ${professor.userId}`,
           );
         } catch (notificationError) {
           console.error(
             "Failed to create enrollment request notification:",
-            notificationError
+            notificationError,
           );
         }
       } else {
         console.warn(
-          "Professor user ID not found. In-app notification was not created."
+          "Professor user ID not found. In-app notification was not created.",
         );
       }
 
@@ -1514,33 +1619,25 @@ export async function enrollCourse(req, res) {
        WHERE course_id = ?
          AND user_id = ?
        LIMIT 1`,
-      [selectedCourseId, userId]
+      [selectedCourseId, userId],
     );
 
     if (existingRows.length > 0) {
       const existing = existingRows[0];
 
-      if (
-        existing.status === "approved" &&
-        !existing.archived
-      ) {
+      if (existing.status === "approved" && !existing.archived) {
         return res.status(409).json({
           success: false,
           status: "approved",
-          message:
-            "You are already enrolled in this course.",
+          message: "You are already enrolled in this course.",
         });
       }
 
-      if (
-        existing.status === "pending" &&
-        !existing.archived
-      ) {
+      if (existing.status === "pending" && !existing.archived) {
         return res.status(409).json({
           success: false,
           status: "pending",
-          message:
-            "Your enrollment request is already pending approval.",
+          message: "Your enrollment request is already pending approval.",
         });
       }
 
@@ -1554,13 +1651,10 @@ export async function enrollCourse(req, res) {
            rejection_reason = NULL,
            created_at = CURRENT_TIMESTAMP
          WHERE enrollment_id = ?`,
-        [existing.enrollment_id]
+        [existing.enrollment_id],
       );
 
-      const notificationResult =
-        await notifyProfessor(
-          result.insertId
-        );
+      const notificationResult = await notifyProfessor(result.insertId);
 
       /* =====================================================
         AUDIT LOG - REQUEST ENROLLMENT
@@ -1571,9 +1665,7 @@ export async function enrollCourse(req, res) {
         action: "Requested Enrollment",
         target: courseName,
         status: "Success",
-        details:
-          `${studentName} requested enrollment in ` +
-          `"${courseName}".`,
+        details: `${studentName} requested enrollment in ` + `"${courseName}".`,
       });
 
       return res.status(201).json({
@@ -1581,19 +1673,15 @@ export async function enrollCourse(req, res) {
         pending: true,
         enrolled: false,
 
-        enrollmentId:
-          existing.enrollment_id,
+        enrollmentId: existing.enrollment_id,
 
-        emailSent:
-          notificationResult.emailSent,
+        emailSent: notificationResult.emailSent,
 
-        emailError:
-          notificationResult.emailError,
+        emailError: notificationResult.emailError,
 
-        message:
-          notificationResult.emailSent
-            ? "Enrollment request sent. The professor has been notified."
-            : "Enrollment request sent. Waiting for professor approval.",
+        message: notificationResult.emailSent
+          ? "Enrollment request sent. The professor has been notified."
+          : "Enrollment request sent. Waiting for professor approval.",
       });
     }
 
@@ -1607,53 +1695,38 @@ export async function enrollCourse(req, res) {
          archived
        )
        VALUES (?, ?, 'pending', NULL, 0)`,
-      [selectedCourseId, userId]
+      [selectedCourseId, userId],
     );
 
-    const notificationResult =
-      await notifyProfessor(
-        result.insertId
-      );
+    const notificationResult = await notifyProfessor(result.insertId);
 
     return res.status(201).json({
       success: true,
       pending: true,
       enrolled: false,
 
-      enrollmentId:
-        result.insertId,
+      enrollmentId: result.insertId,
 
-      emailSent:
-        notificationResult.emailSent,
+      emailSent: notificationResult.emailSent,
 
-      emailError:
-        notificationResult.emailError,
+      emailError: notificationResult.emailError,
 
-      message:
-        notificationResult.emailSent
-          ? "Enrollment request sent. The professor has been notified."
-          : "Enrollment request sent. Waiting for professor approval.",
+      message: notificationResult.emailSent
+        ? "Enrollment request sent. The professor has been notified."
+        : "Enrollment request sent. Waiting for professor approval.",
     });
   } catch (error) {
-    console.error(
-      "Enrollment request error:",
-      error
-    );
+    console.error("Enrollment request error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        error?.message ||
-        "Failed to send enrollment request.",
+      message: error?.message || "Failed to send enrollment request.",
     });
   }
 }
 
 export async function getCourseEnrollments(req, res) {
-  const courseId = cleanText(
-    req.params.courseId ||
-    req.params.id
-  );
+  const courseId = cleanText(req.params.courseId || req.params.id);
 
   if (!courseId) {
     return res.status(400).json({
@@ -1685,10 +1758,7 @@ export async function getCourseEnrollments(req, res) {
      * Make sure this course belongs
      * to the logged-in professor.
      */
-    const owner = getProfessorOwnerCondition(
-      "c",
-      currentUser
-    );
+    const owner = getProfessorOwnerCondition("c", currentUser);
 
     const [courseRows] = await db.execute(
       `SELECT c.${idColumn} AS course_id
@@ -1696,10 +1766,7 @@ export async function getCourseEnrollments(req, res) {
        WHERE c.${idColumn} = ?
          AND ${owner.sql}
        LIMIT 1`,
-      [
-        courseId,
-        ...owner.params,
-      ]
+      [courseId, ...owner.params],
     );
 
     if (courseRows.length === 0) {
@@ -1743,20 +1810,14 @@ export async function getCourseEnrollments(req, res) {
            ELSE 1
          END,
          ce.created_at DESC`,
-      [courseId]
+      [courseId],
     );
 
-    const pending = rows.filter(
-      (row) => row.status === "pending"
-    );
+    const pending = rows.filter((row) => row.status === "pending");
 
-    const enrolled = rows.filter(
-      (row) => row.status === "approved"
-    );
+    const enrolled = rows.filter((row) => row.status === "approved");
 
-    const declined = rows.filter(
-      (row) => row.status === "declined"
-    );
+    const declined = rows.filter((row) => row.status === "declined");
 
     return res.json({
       success: true,
@@ -1773,10 +1834,7 @@ export async function getCourseEnrollments(req, res) {
       },
     });
   } catch (error) {
-    console.error(
-      "Get course enrollments error:",
-      error
-    );
+    console.error("Get course enrollments error:", error);
 
     return res.status(500).json({
       success: false,
@@ -1786,9 +1844,7 @@ export async function getCourseEnrollments(req, res) {
 }
 
 export async function unenrollStudentFromCourse(req, res) {
-  const enrollmentId = cleanText(
-    req.params.enrollmentId
-  );
+  const enrollmentId = cleanText(req.params.enrollmentId);
 
   const reason = cleanText(req.body?.reason);
 
@@ -1814,8 +1870,7 @@ export async function unenrollStudentFromCourse(req, res) {
   }
 
   try {
-    const currentUser =
-      await getRequestUserProfile(req);
+    const currentUser = await getRequestUserProfile(req);
 
     if (!currentUser) {
       return res.status(401).json({
@@ -1833,10 +1888,7 @@ export async function unenrollStudentFromCourse(req, res) {
 
     const idColumn = await getCourseIdColumn();
 
-    const owner = getProfessorOwnerCondition(
-      "c",
-      currentUser
-    );
+    const owner = getProfessorOwnerCondition("c", currentUser);
 
     /*
      * Get enrollment, student, and course
@@ -1871,10 +1923,7 @@ export async function unenrollStudentFromCourse(req, res) {
          AND ${owner.sql}
 
        LIMIT 1`,
-      [
-        enrollmentId,
-        ...owner.params,
-      ]
+      [enrollmentId, ...owner.params],
     );
 
     if (rows.length === 0) {
@@ -1889,18 +1938,14 @@ export async function unenrollStudentFromCourse(req, res) {
     if (enrollment.status !== "approved") {
       return res.status(409).json({
         success: false,
-        message:
-          "Only enrolled students can be unenrolled.",
+        message: "Only enrolled students can be unenrolled.",
       });
     }
 
     const studentName =
-      enrollment.student_display_name ||
-      enrollment.student_name ||
-      "Student";
+      enrollment.student_display_name || enrollment.student_name || "Student";
 
-    const studentEmail =
-      cleanText(enrollment.student_email);
+    const studentEmail = cleanText(enrollment.student_email);
 
     const courseName =
       enrollment.course_name ||
@@ -1911,9 +1956,9 @@ export async function unenrollStudentFromCourse(req, res) {
     const professorName =
       cleanText(
         currentUser.displayName ||
-        currentUser.display_name ||
-        currentUser.name ||
-        enrollment.professor_name
+          currentUser.display_name ||
+          currentUser.name ||
+          enrollment.professor_name,
       ) || "Professor";
 
     /*
@@ -1923,7 +1968,7 @@ export async function unenrollStudentFromCourse(req, res) {
       `UPDATE course_enrollments
        SET archived = 1
        WHERE enrollment_id = ?`,
-      [enrollmentId]
+      [enrollmentId],
     );
 
     /*
@@ -1939,10 +1984,7 @@ export async function unenrollStudentFromCourse(req, res) {
            AND archived = 0
        )
        WHERE ${idColumn} = ?`,
-      [
-        enrollment.course_id,
-        enrollment.course_id,
-      ]
+      [enrollment.course_id, enrollment.course_id],
     );
 
     /*
@@ -1955,8 +1997,7 @@ export async function unenrollStudentFromCourse(req, res) {
     let emailError = null;
 
     if (!studentEmail) {
-      emailError =
-        "Student email address was not found.";
+      emailError = "Student email address was not found.";
     } else {
       try {
         await sendStudentUnenrolledEmail(
@@ -1964,79 +2005,70 @@ export async function unenrollStudentFromCourse(req, res) {
           studentName,
           courseName,
           reason,
-          professorName
+          professorName,
         );
 
         emailSent = true;
 
-        console.log(
-          `Unenrollment email sent to ${studentEmail}`
-        );
+        console.log(`Unenrollment email sent to ${studentEmail}`);
       } catch (error) {
-        console.error(
-          "Failed to send unenrollment email:",
-          error
-        );
+        console.error("Failed to send unenrollment email:", error);
 
         emailError =
-          error?.message ||
-          "Student email notification could not be sent.";
+          error?.message || "Student email notification could not be sent.";
       }
     }
 
     // Create in-app notification for the student
-try {
-  await createNotification({
-    recipientUserId: enrollment.user_id,
+    try {
+      await createNotification({
+        recipientUserId: enrollment.user_id,
 
-    courseId: enrollment.course_id,
+        courseId: enrollment.course_id,
 
-    enrollmentId: Number(enrollmentId),
+        enrollmentId: Number(enrollmentId),
 
-    title: "Course Unenrollment",
+        title: "Course Unenrollment",
 
-    message:
-      `You have been unenrolled from ${courseName}. ` +
-      `Reason: ${reason}`,
+        message:
+          `You have been unenrolled from ${courseName}. ` + `Reason: ${reason}`,
 
-    target: "student",
+        target: "student",
 
-    type: "student_unenrolled",
+        type: "student_unenrolled",
 
-    createdByUserId: currentUser.userId,
+        createdByUserId: currentUser.userId,
 
-    createdByName: professorName,
+        createdByName: professorName,
 
-    createdByRole: "professor",
-  });
+        createdByRole: "professor",
+      });
 
-  console.log(
-    `Unenrollment notification created for user ${enrollment.user_id}`
-  );
+      console.log(
+        `Unenrollment notification created for user ${enrollment.user_id}`,
+      );
     } catch (notificationError) {
-        console.error(
-          "Failed to create unenrollment notification:",
-          notificationError
-        );
-      }
+      console.error(
+        "Failed to create unenrollment notification:",
+        notificationError,
+      );
+    }
 
-
-      /* =====================================================
+    /* =====================================================
         AUDIT LOG - UNENROLL STUDENT
       ===================================================== */
 
-      await logAuditFromRequest(req, {
-        category: "Enrollment Management",
-        action: "Unenrolled Student",
-        target: studentName,
-        status: "Success",
-        details:
-          `Unenrolled ${studentName} from ` +
-          `"${courseName}". Reason: ${reason}`,
-      });
+    await logAuditFromRequest(req, {
+      category: "Enrollment Management",
+      action: "Unenrolled Student",
+      target: studentName,
+      status: "Success",
+      details:
+        `Unenrolled ${studentName} from ` +
+        `"${courseName}". Reason: ${reason}`,
+    });
 
-
-      return res.json({
+    return res.json({
       success: true,
 
       message: emailSent
@@ -2054,10 +2086,7 @@ try {
       emailError,
     });
   } catch (error) {
-    console.error(
-      "Professor unenroll student error:",
-      error
-    );
+    console.error("Professor unenroll student error:", error);
 
     return res.status(500).json({
       success: false,
@@ -2081,7 +2110,7 @@ export async function unenrollCourse(req, res) {
       req.body?.courseId ||
       req.body?.course_id ||
       req.query?.courseId ||
-      req.query?.course_id
+      req.query?.course_id,
   );
 
   if (!courseId) {
@@ -2095,7 +2124,7 @@ export async function unenrollCourse(req, res) {
     const idColumn = await getCourseIdColumn();
 
     const [courseRows] = await db.execute(
-        `SELECT
+      `SELECT
           course_name,
           title,
           course_code,
@@ -2103,24 +2132,24 @@ export async function unenrollCourse(req, res) {
         FROM courses
         WHERE ${idColumn} = ?
         LIMIT 1`,
-        [courseId]
-      );
+      [courseId],
+    );
 
-      if (courseRows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: "Course not found.",
-        });
-      }
+    if (courseRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found.",
+      });
+    }
 
-      const selectedCourse = courseRows[0];
+    const selectedCourse = courseRows[0];
 
-      const courseName =
-        selectedCourse.course_name ||
-        selectedCourse.title ||
-        selectedCourse.course_code ||
-        selectedCourse.code ||
-        `Course ${courseId}`;
+    const courseName =
+      selectedCourse.course_name ||
+      selectedCourse.title ||
+      selectedCourse.course_code ||
+      selectedCourse.code ||
+      `Course ${courseId}`;
 
     const [result] = await db.execute(
       `UPDATE course_enrollments
@@ -2129,14 +2158,13 @@ export async function unenrollCourse(req, res) {
          AND user_id = ?
          AND status = 'approved'
          AND archived = 0`,
-      [courseId, userId]
+      [courseId, userId],
     );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        message:
-          "You are not actively enrolled in this course.",
+        message: "You are not actively enrolled in this course.",
       });
     }
 
@@ -2150,7 +2178,7 @@ export async function unenrollCourse(req, res) {
            AND archived = 0
        )
        WHERE ${idColumn} = ?`,
-      [courseId, courseId]
+      [courseId, courseId],
     );
     /* =====================================================
       AUDIT LOG - STUDENT LEFT COURSE
@@ -2161,8 +2189,7 @@ export async function unenrollCourse(req, res) {
       action: "Left Course",
       target: courseName,
       status: "Success",
-      details:
-        `Student left "${courseName}".`,
+      details: `Student left "${courseName}".`,
     });
 
     return res.json({
@@ -2171,10 +2198,7 @@ export async function unenrollCourse(req, res) {
       courseId,
     });
   } catch (error) {
-    console.error(
-      "Unenroll course error:",
-      error
-    );
+    console.error("Unenroll course error:", error);
 
     return res.status(500).json({
       success: false,
@@ -2208,7 +2232,7 @@ export async function getCourseById(req, res) {
        LEFT JOIN users u ON u.userId = c.professor_id
        WHERE ${where.join(" AND ")}
        LIMIT 1`,
-      params
+      params,
     );
 
     if (rows.length === 0) {
@@ -2220,7 +2244,10 @@ export async function getCourseById(req, res) {
 
     const courseId = getCourseId(rows[0]);
     const modulesByCourse = await getCourseLearningModules([courseId]);
-    const course = rowToCourse(rows[0], modulesByCourse.get(String(courseId)) || []);
+    const course = rowToCourse(
+      rows[0],
+      modulesByCourse.get(String(courseId)) || [],
+    );
 
     return res.json({
       success: true,
@@ -2242,7 +2269,7 @@ export async function joinCourseByCode(req, res) {
       req.body?.course_code ||
       req.body?.code ||
       req.query.courseCode ||
-      req.query.code
+      req.query.code,
   ).toUpperCase();
 
   if (!courseCode) {
@@ -2275,7 +2302,7 @@ export async function joinCourseByCode(req, res) {
            OR c.code = ?
          )
        LIMIT 1`,
-      [courseCode, courseCode]
+      [courseCode, courseCode],
     );
 
     if (rows.length === 0) {
@@ -2288,36 +2315,30 @@ export async function joinCourseByCode(req, res) {
 
     const userId = getRequestUserId(req);
 
-let enrolled = false;
-let pending = false;
-let enrollmentCreated = false;
+    let enrolled = false;
+    let pending = false;
+    let enrollmentCreated = false;
 
-if (userId) {
-  const [existingRows] = await db.execute(
-    `SELECT *
+    if (userId) {
+      const [existingRows] = await db.execute(
+        `SELECT *
      FROM course_enrollments
      WHERE course_id = ?
        AND user_id = ?
      LIMIT 1`,
-    [courseId, userId]
-  );
+        [courseId, userId],
+      );
 
-  if (existingRows.length > 0) {
-    const existing = existingRows[0];
+      if (existingRows.length > 0) {
+        const existing = existingRows[0];
 
-    if (
-      existing.status === "approved" &&
-      !existing.archived
-    ) {
-      enrolled = true;
-    } else if (
-      existing.status === "pending" &&
-      !existing.archived
-    ) {
-      pending = true;
-    } else {
-      await db.execute(
-        `UPDATE course_enrollments
+        if (existing.status === "approved" && !existing.archived) {
+          enrolled = true;
+        } else if (existing.status === "pending" && !existing.archived) {
+          pending = true;
+        } else {
+          await db.execute(
+            `UPDATE course_enrollments
          SET
          status = 'pending',
          approved_at = NULL,
@@ -2325,14 +2346,14 @@ if (userId) {
          archived = 0,
          created_at = CURRENT_TIMESTAMP
        WHERE enrollment_id = ?`,
-        [existing.enrollment_id]
-      );
+            [existing.enrollment_id],
+          );
 
-      pending = true;
-    }
-  } else {
-    await db.execute(
-      `INSERT INTO course_enrollments (
+          pending = true;
+        }
+      } else {
+        await db.execute(
+          `INSERT INTO course_enrollments (
          course_id,
          user_id,
          status,
@@ -2340,23 +2361,20 @@ if (userId) {
          archived
        )
        VALUES (?, ?, 'pending', NULL, 0)`,
-      [courseId, userId]
-    );
+          [courseId, userId],
+        );
 
-    pending = true;
-    enrollmentCreated = true;
-  }
-}
+        pending = true;
+        enrollmentCreated = true;
+      }
+    }
 
     const modulesByCourse = summaryOnly
       ? new Map()
-      : await getCourseLearningModules([
-          courseId,
-        ]);
+      : await getCourseLearningModules([courseId]);
 
-    const [updatedRows] =
-      await db.execute(
-        `SELECT
+    const [updatedRows] = await db.execute(
+      `SELECT
            ${courseSelect},
            u.display_name AS database_professor_display_name,
            u.name AS database_professor_name,
@@ -2368,35 +2386,30 @@ if (userId) {
            ON u.userId = c.professor_id
          WHERE c.${idColumn} = ?
          LIMIT 1`,
-        [courseId]
-      );
+      [courseId],
+    );
 
     const course = rowToCourse(
       updatedRows[0] || rows[0],
-      modulesByCourse.get(
-        String(courseId)
-      ) || []
+      modulesByCourse.get(String(courseId)) || [],
     );
 
     return res.json({
-        success: true,
-        enrolled,
-        pending,
-        enrollmentCreated,
+      success: true,
+      enrolled,
+      pending,
+      enrollmentCreated,
 
-        message: enrolled
-          ? "You are already enrolled in this course."
-          : pending
-            ? "Enrollment request sent. Waiting for professor approval."
-            : "Course found.",
+      message: enrolled
+        ? "You are already enrolled in this course."
+        : pending
+          ? "Enrollment request sent. Waiting for professor approval."
+          : "Course found.",
 
-        course,
-      });
+      course,
+    });
   } catch (error) {
-    console.error(
-      "Join course by code error:",
-      error
-    );
+    console.error("Join course by code error:", error);
 
     return res.status(500).json({
       success: false,
@@ -2434,7 +2447,7 @@ export async function getLearningModules(req, res) {
 
     const rows = await getModuleRows(
       where.length ? `WHERE ${where.join(" AND ")}` : "",
-      params
+      params,
     );
     const modules = rows.map(rowToModule);
 
@@ -2541,23 +2554,24 @@ export async function createCourse(req, res) {
         fields.professorEmail,
         fields.professorDepartment,
         fields.professorProfileImage,
-      ]
+      ],
     );
 
-    const [rows] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [
-      result.insertId,
-    ]);
+    const [rows] = await db.execute(
+      `SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`,
+      [result.insertId],
+    );
     const course = rowToCourse(rows[0], []);
 
     await logAuditFromRequest(req, {
-        category: "Course Management",
-        action: "Created Course",
-        target: fields.title,
-        status: "Success",
-        details:
-          `Created course "${fields.title}" ` +
-          `with course code ${fields.courseCode}.`,
-      });
+      category: "Course Management",
+      action: "Created Course",
+      target: fields.title,
+      status: "Success",
+      details:
+        `Created course "${fields.title}" ` +
+        `with course code ${fields.courseCode}.`,
+    });
 
     return res.status(201).json({
       success: true,
@@ -2582,20 +2596,13 @@ export async function createLearningModule(req, res) {
   }
 
   try {
-    fields = await applyAuthenticatedProfessorFields(
-      req,
-      fields
-    );
+    fields = await applyAuthenticatedProfessorFields(req, fields);
 
     const course = await getOrCreateCourse(fields);
 
-    const quizContents = toJsonList(
-      fields.quizItems
-    );
+    const quizContents = toJsonList(fields.quizItems);
 
-    const lessonContents = toJsonList(
-      fields.lessonPages
-    );
+    const lessonContents = toJsonList(fields.lessonPages);
 
     const [result] = await db.execute(
       `INSERT INTO learning_modules
@@ -2621,13 +2628,12 @@ export async function createLearningModule(req, res) {
         fields.learningObjectives,
         lessonContents,
         fields.quizItems.length > 0 ? 1 : 0,
-      ]
+      ],
     );
 
-    const rows = await getModuleRows(
-      "WHERE lm.lesson_id = ?",
-      [result.insertId]
-    );
+    const rows = await getModuleRows("WHERE lm.lesson_id = ?", [
+      result.insertId,
+    ]);
 
     const module = rowToModule(rows[0]);
 
@@ -2640,10 +2646,7 @@ export async function createLearningModule(req, res) {
 
       action: "Created Learning Module",
 
-      target:
-        module.title ||
-        fields.title ||
-        `Module ${result.insertId}`,
+      target: module.title || fields.title || `Module ${result.insertId}`,
 
       status: "Success",
 
@@ -2655,22 +2658,14 @@ export async function createLearningModule(req, res) {
 
     return res.status(201).json({
       success: true,
-      message:
-        "Learning module added successfully.",
+      message: "Learning module added successfully.",
       module,
       course: module,
     });
   } catch (error) {
-    console.error(
-      "Create learning module error:",
-      error
-    );
+    console.error("Create learning module error:", error);
 
-    return sendCourseWriteError(
-      res,
-      error,
-      "Failed to add learning module."
-    );
+    return sendCourseWriteError(res, error, "Failed to add learning module.");
   }
 }
 
@@ -2759,7 +2754,7 @@ export async function updateCourse(req, res) {
         fields.professorDepartment,
         fields.professorProfileImage,
         ...whereParams,
-      ]
+      ],
     );
 
     if (result.affectedRows === 0) {
@@ -2769,10 +2764,16 @@ export async function updateCourse(req, res) {
       });
     }
 
-    const [rows] = await db.execute(`SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`, [id]);
+    const [rows] = await db.execute(
+      `SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`,
+      [id],
+    );
     const courseId = getCourseId(rows[0]);
     const modulesByCourse = await getCourseLearningModules([courseId]);
-    const course = rowToCourse(rows[0], modulesByCourse.get(String(courseId)) || []);
+    const course = rowToCourse(
+      rows[0],
+      modulesByCourse.get(String(courseId)) || [],
+    );
 
     await logAuditFromRequest(req, {
       category: "Course Management",
@@ -2798,19 +2799,14 @@ export async function updateCourse(req, res) {
 export async function updateLearningModule(req, res) {
   let fields = payloadToModuleFields(req.body);
 
-  const validationMessage =
-    validateModule(fields);
+  const validationMessage = validateModule(fields);
 
-  const id =
-    req.params.id ||
-    req.body.id ||
-    req.body.lesson_id;
+  const id = req.params.id || req.body.id || req.body.lesson_id;
 
   if (!id) {
     return res.status(400).json({
       success: false,
-      message:
-        "Learning module ID is required.",
+      message: "Learning module ID is required.",
     });
   }
 
@@ -2822,17 +2818,11 @@ export async function updateLearningModule(req, res) {
   }
 
   try {
-    fields =
-      await applyAuthenticatedProfessorFields(
-        req,
-        fields
-      );
+    fields = await applyAuthenticatedProfessorFields(req, fields);
 
-    const course =
-      await getOrCreateCourse(fields);
+    const course = await getOrCreateCourse(fields);
 
-    const currentUser =
-      await getRequestUserProfile(req);
+    const currentUser = await getRequestUserProfile(req);
 
     const where = ["lesson_id = ?"];
     const whereParams = [id];
@@ -2842,14 +2832,9 @@ export async function updateLearningModule(req, res) {
      * only from courses they own.
      */
     if (isProfessorUser(currentUser)) {
-      const idColumn =
-        await getCourseIdColumn();
+      const idColumn = await getCourseIdColumn();
 
-      const owner =
-        getProfessorOwnerCondition(
-          "c",
-          currentUser
-        );
+      const owner = getProfessorOwnerCondition("c", currentUser);
 
       where.push(
         `EXISTS (
@@ -2858,12 +2843,10 @@ export async function updateLearningModule(req, res) {
            WHERE c.${idColumn} =
                  learning_modules.course_id
              AND ${owner.sql}
-         )`
+         )`,
       );
 
-      whereParams.push(
-        ...owner.params
-      );
+      whereParams.push(...owner.params);
     }
 
     const [result] = await db.execute(
@@ -2888,44 +2871,32 @@ export async function updateLearningModule(req, res) {
         toJsonList(fields.quizItems),
         fields.learningObjectives,
         toJsonList(fields.lessonPages),
-        fields.quizItems.length > 0
-          ? 1
-          : 0,
+        fields.quizItems.length > 0 ? 1 : 0,
         ...whereParams,
-      ]
+      ],
     );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        message:
-          "Learning module not found or you do not have access to it.",
+        message: "Learning module not found or you do not have access to it.",
       });
     }
 
-    const rows = await getModuleRows(
-      "WHERE lm.lesson_id = ?",
-      [id]
-    );
+    const rows = await getModuleRows("WHERE lm.lesson_id = ?", [id]);
 
-    const module =
-      rowToModule(rows[0]);
+    const module = rowToModule(rows[0]);
 
     /* =====================================================
        AUDIT LOG - UPDATE LEARNING MODULE
     ===================================================== */
 
     await logAuditFromRequest(req, {
-      category:
-        "Learning Module Management",
+      category: "Learning Module Management",
 
-      action:
-        "Updated Learning Module",
+      action: "Updated Learning Module",
 
-      target:
-        module.title ||
-        fields.title ||
-        `Module ${id}`,
+      target: module.title || fields.title || `Module ${id}`,
 
       status: "Success",
 
@@ -2937,30 +2908,23 @@ export async function updateLearningModule(req, res) {
 
     return res.json({
       success: true,
-      message:
-        "Learning module updated successfully.",
+      message: "Learning module updated successfully.",
       module,
       course: module,
     });
   } catch (error) {
-    console.error(
-      "Update learning module error:",
-      error
-    );
+    console.error("Update learning module error:", error);
 
     return sendCourseWriteError(
       res,
       error,
-      "Failed to update learning module."
+      "Failed to update learning module.",
     );
   }
 }
 
 export async function archiveCourse(req, res) {
-  const id =
-    req.params.id ||
-    req.body?.id ||
-    req.body?.course_id;
+  const id = req.params.id || req.body?.id || req.body?.course_id;
 
   if (!id) {
     return res.status(400).json({
@@ -2969,13 +2933,10 @@ export async function archiveCourse(req, res) {
     });
   }
 
-  const requestedArchived =
-    req.body?.archived ?? req.body?.archive;
+  const requestedArchived = req.body?.archived ?? req.body?.archive;
 
   const archived =
-    requestedArchived === undefined
-      ? true
-      : isTruthy(requestedArchived);
+    requestedArchived === undefined ? true : isTruthy(requestedArchived);
 
   try {
     const idColumn = await getCourseIdColumn();
@@ -2991,12 +2952,7 @@ export async function archiveCourse(req, res) {
 
     const role = normalizeRole(currentUser.role);
 
-    const allowedRoles = [
-      "super_admin",
-      "superadmin",
-      "admin",
-      "professor",
-    ];
+    const allowedRoles = ["super_admin", "superadmin", "admin", "professor"];
 
     if (!allowedRoles.includes(role)) {
       return res.status(403).json({
@@ -3010,10 +2966,7 @@ export async function archiveCourse(req, res) {
 
     // Professors can archive ONLY their own courses.
     if (role === "professor") {
-      const owner = getProfessorOwnerCondition(
-        "",
-        currentUser
-      );
+      const owner = getProfessorOwnerCondition("", currentUser);
 
       where.push(owner.sql);
       params.push(...owner.params);
@@ -3023,7 +2976,7 @@ export async function archiveCourse(req, res) {
       `UPDATE courses
        SET archived = ?
        WHERE ${where.join(" AND ")}`,
-      [archived ? 1 : 0, ...params]
+      [archived ? 1 : 0, ...params],
     );
 
     if (result.affectedRows === 0) {
@@ -3049,41 +3002,35 @@ export async function archiveCourse(req, res) {
          ON u.userId = c.professor_id
        WHERE c.${idColumn} = ?
        LIMIT 1`,
-      [id]
+      [id],
     );
 
     const courseId = getCourseId(rows[0]);
 
-    const modulesByCourse =
-      await getCourseLearningModules([courseId]);
+    const modulesByCourse = await getCourseLearningModules([courseId]);
 
     const course = rowToCourse(
       rows[0],
-      modulesByCourse.get(String(courseId)) || []
+      modulesByCourse.get(String(courseId)) || [],
     );
 
     /* =====================================================
         AUDIT LOG - ARCHIVE / RESTORE COURSE
       ===================================================== */
 
-      await logAuditFromRequest(req, {
-        category: "Course Management",
+    await logAuditFromRequest(req, {
+      category: "Course Management",
 
-        action: archived
-          ? "Archived Course"
-          : "Restored Course",
+      action: archived ? "Archived Course" : "Restored Course",
 
-        target:
-          course.title ||
-          course.courseName ||
-          `Course ${id}`,
+      target: course.title || course.courseName || `Course ${id}`,
 
-        status: "Success",
+      status: "Success",
 
-        details: archived
-          ? `Archived course "${course.title || course.courseName || id}".`
-          : `Restored course "${course.title || course.courseName || id}".`,
-      });
+      details: archived
+        ? `Archived course "${course.title || course.courseName || id}".`
+        : `Restored course "${course.title || course.courseName || id}".`,
+    });
 
     return res.json({
       success: true,
@@ -3097,14 +3044,13 @@ export async function archiveCourse(req, res) {
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to update course archive status.",
+      message: "Failed to update course archive status.",
     });
   }
 }
 
 export async function deleteCourse(req, res) {
-  if (!await authenticateDeletion(req, res)) return;
+  if (!(await authenticateDeletion(req, res))) return;
   const id = req.params.id || req.body.id || req.body.course_id;
 
   if (!id) {
@@ -3118,7 +3064,7 @@ export async function deleteCourse(req, res) {
     const idColumn = await getCourseIdColumn();
     await assertCourseAccess(req.user, Number(id));
     const currentUser = await getRequestUserProfile(req);
-        if (!currentUser) {
+    if (!currentUser) {
       return res.status(401).json({
         success: false,
         message: "Authentication required.",
@@ -3129,12 +3075,7 @@ export async function deleteCourse(req, res) {
       .trim()
       .toLowerCase();
 
-    const allowedRoles = [
-      "super_admin",
-      "superadmin",
-      "admin",
-      "professor",
-    ];
+    const allowedRoles = ["super_admin", "superadmin", "admin", "professor"];
 
     if (!allowedRoles.includes(role)) {
       return res.status(403).json({
@@ -3151,8 +3092,12 @@ export async function deleteCourse(req, res) {
       params.push(...owner.params);
     }
 
-    const result = await deleteWithSources({ entity: 'course', id,
-      deleteSql: `DELETE FROM courses WHERE ${where.join(" AND ")}`, parameters: params });
+    const result = await deleteWithSources({
+      entity: "course",
+      id,
+      deleteSql: `DELETE FROM courses WHERE ${where.join(" AND ")}`,
+      parameters: params,
+    });
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
@@ -3180,10 +3125,7 @@ export async function deleteLearningModule(req, res) {
     return;
   }
 
-  const id =
-    req.params.id ||
-    req.body.id ||
-    req.body.lesson_id;
+  const id = req.params.id || req.body.id || req.body.lesson_id;
 
   if (!id) {
     return res.status(400).json({
@@ -3193,8 +3135,7 @@ export async function deleteLearningModule(req, res) {
   }
 
   try {
-    const currentUser =
-      await getRequestUserProfile(req);
+    const currentUser = await getRequestUserProfile(req);
 
     if (!currentUser) {
       return res.status(401).json({
@@ -3208,9 +3149,7 @@ export async function deleteLearningModule(req, res) {
      * We need the module/course information
      * for authorization and the audit log.
      */
-    const where = [
-      "lm.lesson_id = ?",
-    ];
+    const where = ["lm.lesson_id = ?"];
 
     const params = [id];
 
@@ -3219,26 +3158,18 @@ export async function deleteLearningModule(req, res) {
      * from courses they own.
      */
     if (isProfessorUser(currentUser)) {
-      const owner =
-        getProfessorOwnerCondition(
-          "c",
-          currentUser
-        );
+      const owner = getProfessorOwnerCondition("c", currentUser);
 
       where.push(owner.sql);
       params.push(...owner.params);
     }
 
-    const rows = await getModuleRows(
-      `WHERE ${where.join(" AND ")}`,
-      params
-    );
+    const rows = await getModuleRows(`WHERE ${where.join(" AND ")}`, params);
 
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message:
-          "Learning module not found or you do not have access to it.",
+        message: "Learning module not found or you do not have access to it.",
       });
     }
 
@@ -3247,11 +3178,7 @@ export async function deleteLearningModule(req, res) {
     /*
      * Extra RAG/course authorization check.
      */
-    await assertCourseAccess(
-      req.user,
-      Number(module.courseId),
-      Number(id)
-    );
+    await assertCourseAccess(req.user, Number(module.courseId), Number(id));
 
     /*
      * Delete the learning module together
@@ -3260,8 +3187,7 @@ export async function deleteLearningModule(req, res) {
     const result = await deleteWithSources({
       entity: "lesson",
       id,
-      deleteSql:
-        "DELETE FROM learning_modules WHERE lesson_id = ?",
+      deleteSql: "DELETE FROM learning_modules WHERE lesson_id = ?",
       parameters: [id],
     });
 
@@ -3277,15 +3203,11 @@ export async function deleteLearningModule(req, res) {
     ===================================================== */
 
     await logAuditFromRequest(req, {
-      category:
-        "Learning Module Management",
+      category: "Learning Module Management",
 
-      action:
-        "Deleted Learning Module",
+      action: "Deleted Learning Module",
 
-      target:
-        module.title ||
-        `Module ${id}`,
+      target: module.title || `Module ${id}`,
 
       status: "Success",
 
@@ -3297,25 +3219,18 @@ export async function deleteLearningModule(req, res) {
 
     return res.json({
       success: true,
-      message:
-        "Learning module deleted successfully.",
+      message: "Learning module deleted successfully.",
       moduleId: Number(id),
     });
   } catch (error) {
-    console.error(
-      "Delete learning module error:",
-      error
-    );
+    console.error("Delete learning module error:", error);
 
-    return res
-      .status(error.statusCode || 500)
-      .json({
-        success: false,
-        message:
-          error.statusCode
-            ? error.message
-            : "Failed to delete learning module.",
-      });
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode
+        ? error.message
+        : "Failed to delete learning module.",
+    });
   }
 }
 
@@ -3339,9 +3254,7 @@ export async function handleLegacyLearningModule(req, res) {
 }
 
 export async function approveEnrollment(req, res) {
-  const enrollmentId = cleanText(
-    req.params.enrollmentId
-  );
+  const enrollmentId = cleanText(req.params.enrollmentId);
 
   if (!enrollmentId) {
     return res.status(400).json({
@@ -3351,8 +3264,7 @@ export async function approveEnrollment(req, res) {
   }
 
   try {
-    const currentUser =
-      await getRequestUserProfile(req);
+    const currentUser = await getRequestUserProfile(req);
 
     if (!currentUser) {
       return res.status(401).json({
@@ -3368,14 +3280,9 @@ export async function approveEnrollment(req, res) {
       });
     }
 
-    const idColumn =
-      await getCourseIdColumn();
+    const idColumn = await getCourseIdColumn();
 
-    const owner =
-      getProfessorOwnerCondition(
-        "c",
-        currentUser
-      );
+    const owner = getProfessorOwnerCondition("c", currentUser);
 
     /*
      * Get enrollment + course information.
@@ -3407,39 +3314,29 @@ export async function approveEnrollment(req, res) {
          AND ${owner.sql}
 
        LIMIT 1`,
-      [
-        enrollmentId,
-        ...owner.params,
-      ]
+      [enrollmentId, ...owner.params],
     );
 
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message:
-          "Enrollment request not found.",
+        message: "Enrollment request not found.",
       });
     }
 
     const enrollment = rows[0];
 
-    if (
-      enrollment.status === "approved"
-    ) {
+    if (enrollment.status === "approved") {
       return res.status(409).json({
         success: false,
-        message:
-          "Student is already approved.",
+        message: "Student is already approved.",
       });
     }
 
-    if (
-      enrollment.status !== "pending"
-    ) {
+    if (enrollment.status !== "pending") {
       return res.status(409).json({
         success: false,
-        message:
-          "Only pending enrollment requests can be approved.",
+        message: "Only pending enrollment requests can be approved.",
       });
     }
 
@@ -3456,9 +3353,7 @@ export async function approveEnrollment(req, res) {
 
     const professorName =
       cleanText(
-        currentUser.displayName ||
-        currentUser.display_name ||
-        currentUser.name
+        currentUser.displayName || currentUser.display_name || currentUser.name,
       ) || "Professor";
 
     // Approve enrollment
@@ -3470,7 +3365,7 @@ export async function approveEnrollment(req, res) {
          rejection_reason = NULL,
          archived = 0
        WHERE enrollment_id = ?`,
-      [enrollmentId]
+      [enrollmentId],
     );
 
     // Update student count
@@ -3484,10 +3379,7 @@ export async function approveEnrollment(req, res) {
            AND archived = 0
        )
        WHERE ${idColumn} = ?`,
-      [
-        enrollment.course_id,
-        enrollment.course_id,
-      ]
+      [enrollment.course_id, enrollment.course_id],
     );
 
     /*
@@ -3496,45 +3388,34 @@ export async function approveEnrollment(req, res) {
      */
     try {
       await createNotification({
-        recipientUserId:
-          enrollment.user_id,
+        recipientUserId: enrollment.user_id,
 
-        courseId:
-          enrollment.course_id,
+        courseId: enrollment.course_id,
 
-        enrollmentId:
-          Number(enrollmentId),
+        enrollmentId: Number(enrollmentId),
 
-        title:
-          "Enrollment Approved",
+        title: "Enrollment Approved",
 
-        message:
-          `Your enrollment request for ${courseName} has been approved.`,
+        message: `Your enrollment request for ${courseName} has been approved.`,
 
-        target:
-          "student",
+        target: "student",
 
-        type:
-          "enrollment_approved",
+        type: "enrollment_approved",
 
-        createdByUserId:
-          currentUser.userId ||
-          currentUser.id,
+        createdByUserId: currentUser.userId || currentUser.id,
 
-        createdByName:
-          professorName,
+        createdByName: professorName,
 
-        createdByRole:
-          "professor",
+        createdByRole: "professor",
       });
 
       console.log(
-        `Enrollment approval notification created for user ${enrollment.user_id}`
+        `Enrollment approval notification created for user ${enrollment.user_id}`,
       );
     } catch (notificationError) {
       console.error(
         "Failed to create approval notification:",
-        notificationError
+        notificationError,
       );
     }
 
@@ -3542,52 +3423,37 @@ export async function approveEnrollment(req, res) {
         AUDIT LOG - APPROVE ENROLLMENT
       ===================================================== */
 
-      await logAuditFromRequest(req, {
-        category: "Enrollment Management",
-        action: "Approved Enrollment",
-        target: studentName,
-        status: "Success",
-        details:
-          `Approved ${studentName}'s enrollment in ` +
-          `"${courseName}".`,
-      });
+    await logAuditFromRequest(req, {
+      category: "Enrollment Management",
+      action: "Approved Enrollment",
+      target: studentName,
+      status: "Success",
+      details: `Approved ${studentName}'s enrollment in ` + `"${courseName}".`,
+    });
 
     return res.json({
       success: true,
-      message:
-        "Student enrollment approved.",
-      enrollmentId:
-        Number(enrollmentId),
-      courseId:
-        enrollment.course_id,
-      userId:
-        enrollment.user_id,
-      status:
-        "approved",
+      message: "Student enrollment approved.",
+      enrollmentId: Number(enrollmentId),
+      courseId: enrollment.course_id,
+      userId: enrollment.user_id,
+      status: "approved",
     });
   } catch (error) {
-    console.error(
-      "Approve enrollment error:",
-      error
-    );
+    console.error("Approve enrollment error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to approve enrollment.",
+      message: "Failed to approve enrollment.",
     });
   }
 }
 
 export async function declineEnrollment(req, res) {
-  const enrollmentId = cleanText(
-    req.params.enrollmentId
-  );
+  const enrollmentId = cleanText(req.params.enrollmentId);
 
   const rejectionReason = cleanText(
-    req.body?.reason ||
-      req.body?.rejectionReason ||
-      req.body?.rejection_reason
+    req.body?.reason || req.body?.rejectionReason || req.body?.rejection_reason,
   );
 
   if (!enrollmentId) {
@@ -3607,14 +3473,12 @@ export async function declineEnrollment(req, res) {
   if (rejectionReason.length > 500) {
     return res.status(400).json({
       success: false,
-      message:
-        "Decline reason must be 500 characters or fewer.",
+      message: "Decline reason must be 500 characters or fewer.",
     });
   }
 
   try {
-    const currentUser =
-      await getRequestUserProfile(req);
+    const currentUser = await getRequestUserProfile(req);
 
     if (!currentUser) {
       return res.status(401).json({
@@ -3630,14 +3494,9 @@ export async function declineEnrollment(req, res) {
       });
     }
 
-    const idColumn =
-      await getCourseIdColumn();
+    const idColumn = await getCourseIdColumn();
 
-    const owner =
-      getProfessorOwnerCondition(
-        "c",
-        currentUser
-      );
+    const owner = getProfessorOwnerCondition("c", currentUser);
 
     const [rows] = await db.execute(
       `SELECT
@@ -3668,10 +3527,7 @@ export async function declineEnrollment(req, res) {
          AND ${owner.sql}
 
        LIMIT 1`,
-      [
-        enrollmentId,
-        ...owner.params,
-      ]
+      [enrollmentId, ...owner.params],
     );
 
     if (rows.length === 0) {
@@ -3684,13 +3540,10 @@ export async function declineEnrollment(req, res) {
 
     const enrollment = rows[0];
 
-    if (
-      enrollment.status !== "pending"
-    ) {
+    if (enrollment.status !== "pending") {
       return res.status(409).json({
         success: false,
-        message:
-          "Only pending enrollment requests can be declined.",
+        message: "Only pending enrollment requests can be declined.",
       });
     }
 
@@ -3701,35 +3554,22 @@ export async function declineEnrollment(req, res) {
          approved_at = NULL,
          rejection_reason = ?
        WHERE enrollment_id = ?`,
-      [
-        rejectionReason,
-        enrollmentId,
-      ]
+      [rejectionReason, enrollmentId],
     );
 
-    const studentEmail =
-      enrollment.student_email;
+    const studentEmail = enrollment.student_email;
 
     const studentName =
-      enrollment.student_display_name ||
-      enrollment.student_name ||
-      "Student";
+      enrollment.student_display_name || enrollment.student_name || "Student";
 
     const courseName =
-      enrollment.course_name ||
-      enrollment.course_title ||
-      "Course";
+      enrollment.course_name || enrollment.course_title || "Course";
 
-    const courseCode =
-      enrollment.course_code ||
-      enrollment.code ||
-      "";
+    const courseCode = enrollment.course_code || enrollment.code || "";
 
     const professorName =
       cleanText(
-        currentUser.displayName ||
-        currentUser.display_name ||
-        currentUser.name
+        currentUser.displayName || currentUser.display_name || currentUser.name,
       ) || "Professor";
 
     /*
@@ -3748,23 +3588,18 @@ export async function declineEnrollment(req, res) {
           studentName,
           courseName,
           courseCode,
-          rejectionReason
+          rejectionReason,
         );
 
         emailSent = true;
 
         console.log(
-          `Enrollment decline email sent successfully to ${studentEmail}`
+          `Enrollment decline email sent successfully to ${studentEmail}`,
         );
       } catch (error) {
-        console.error(
-          "Failed to send enrollment decline email:",
-          error
-        );
+        console.error("Failed to send enrollment decline email:", error);
 
-        emailError =
-          error?.message ||
-          "The email could not be sent.";
+        emailError = error?.message || "The email could not be sent.";
       }
     }
 
@@ -3773,61 +3608,51 @@ export async function declineEnrollment(req, res) {
      */
     try {
       await createNotification({
-        recipientUserId:
-          enrollment.user_id,
+        recipientUserId: enrollment.user_id,
 
-        courseId:
-          enrollment.course_id,
+        courseId: enrollment.course_id,
 
-        enrollmentId:
-          Number(enrollmentId),
+        enrollmentId: Number(enrollmentId),
 
-        title:
-          "Enrollment Request Declined",
+        title: "Enrollment Request Declined",
 
         message:
           `Your enrollment request for ${courseName} was declined. ` +
           `Reason: ${rejectionReason}`,
 
-        target:
-          "student",
+        target: "student",
 
-        type:
-          "enrollment_declined",
+        type: "enrollment_declined",
 
-        createdByUserId:
-          currentUser.userId ||
-          currentUser.id,
+        createdByUserId: currentUser.userId || currentUser.id,
 
-        createdByName:
-          professorName,
+        createdByName: professorName,
 
-        createdByRole:
-          "professor",
+        createdByRole: "professor",
       });
 
       console.log(
-        `Enrollment decline notification created for user ${enrollment.user_id}`
+        `Enrollment decline notification created for user ${enrollment.user_id}`,
       );
     } catch (notificationError) {
       console.error(
         "Failed to create decline notification:",
-        notificationError
+        notificationError,
       );
     }
     /* =====================================================
         AUDIT LOG - DECLINE ENROLLMENT
       ===================================================== */
 
-      await logAuditFromRequest(req, {
-        category: "Enrollment Management",
-        action: "Declined Enrollment",
-        target: studentName,
-        status: "Success",
-        details:
-          `Declined ${studentName}'s enrollment in ` +
-          `"${courseName}". Reason: ${rejectionReason}`,
-      });
+    await logAuditFromRequest(req, {
+      category: "Enrollment Management",
+      action: "Declined Enrollment",
+      target: studentName,
+      status: "Success",
+      details:
+        `Declined ${studentName}'s enrollment in ` +
+        `"${courseName}". Reason: ${rejectionReason}`,
+    });
 
     return res.status(200).json({
       success: true,
@@ -3840,34 +3665,25 @@ export async function declineEnrollment(req, res) {
 
       emailError,
 
-      enrollmentId:
-        Number(enrollmentId),
+      enrollmentId: Number(enrollmentId),
 
-      courseId:
-        enrollment.course_id,
+      courseId: enrollment.course_id,
 
-      userId:
-        enrollment.user_id,
+      userId: enrollment.user_id,
 
-      status:
-        "declined",
+      status: "declined",
 
       rejectionReason,
     });
   } catch (error) {
-    console.error(
-      "Decline enrollment error:",
-      error
-    );
+    console.error("Decline enrollment error:", error);
 
     return res.status(500).json({
       success: false,
       declined: false,
       emailSent: false,
 
-      message:
-        error?.message ||
-        "Failed to decline enrollment request.",
+      message: error?.message || "Failed to decline enrollment request.",
     });
   }
 }

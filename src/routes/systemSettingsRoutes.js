@@ -24,7 +24,7 @@ router.get(
   "/",
   authenticateUser,
   requireRole("super_admin"),
-  getSystemSettings
+  getSystemSettings,
 );
 
 /*
@@ -36,7 +36,7 @@ router.put(
   "/",
   authenticateUser,
   requireRole("super_admin"),
-  updateSystemSettings
+  updateSystemSettings,
 );
 
 export default router;

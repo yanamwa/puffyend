@@ -2,10 +2,7 @@ export function normalizeTextValue(value) {
   if (Array.isArray(value)) {
     return value
       .map((item) => {
-        if (
-          item !== null &&
-          typeof item === "object"
-        ) {
+        if (item !== null && typeof item === "object") {
           return JSON.stringify(item);
         }
 
@@ -15,10 +12,7 @@ export function normalizeTextValue(value) {
       .join("\n");
   }
 
-  if (
-    value !== null &&
-    typeof value === "object"
-  ) {
+  if (value !== null && typeof value === "object") {
     return JSON.stringify(value);
   }
 
@@ -32,11 +26,7 @@ export function normalizeLessonPages(lessonPages) {
 
   return lessonPages
     .filter((page) => {
-      return (
-        page !== null &&
-        typeof page === "object" &&
-        !Array.isArray(page)
-      );
+      return page !== null && typeof page === "object" && !Array.isArray(page);
     })
     .map((page) => ({
       title: normalizeTextValue(page.title),

@@ -26,7 +26,7 @@ const uploadDirectory = path.resolve(
   __dirname,
   "..",
   "uploads",
-  "profile-images"
+  "profile-images",
 );
 
 /* =========================================
@@ -39,10 +39,7 @@ if (!fs.existsSync(uploadDirectory)) {
   });
 }
 
-console.log(
-  "Profile image upload directory:",
-  uploadDirectory
-);
+console.log("Profile image upload directory:", uploadDirectory);
 
 /* =========================================
    MULTER STORAGE
@@ -59,18 +56,13 @@ const storage = multer.diskStorage({
     */
 
     const userId =
-      req.user?.id ||
-      req.user?.userId ||
-      req.user?.user_id ||
-      "user";
+      req.user?.id || req.user?.userId || req.user?.user_id || "user";
 
     /*
       Determine safe extension.
     */
 
-    let extension = path
-      .extname(file.originalname)
-      .toLowerCase();
+    let extension = path.extname(file.originalname).toLowerCase();
 
     /*
       If browser doesn't provide a useful
@@ -101,8 +93,7 @@ const storage = multer.diskStorage({
       Generate unique filename.
     */
 
-    const filename =
-      `profile-${userId}-${Date.now()}${extension}`;
+    const filename = `profile-${userId}-${Date.now()}${extension}`;
 
     cb(null, filename);
   },
@@ -112,11 +103,7 @@ const storage = multer.diskStorage({
    IMAGE VALIDATION
 ========================================= */
 
-const fileFilter = (
-  req,
-  file,
-  cb
-) => {
+const fileFilter = (req, file, cb) => {
   const allowedMimeTypes = [
     "image/jpeg",
     "image/jpg",
@@ -124,18 +111,12 @@ const fileFilter = (
     "image/webp",
   ];
 
-  if (
-    allowedMimeTypes.includes(
-      file.mimetype
-    )
-  ) {
+  if (allowedMimeTypes.includes(file.mimetype)) {
     cb(null, true);
     return;
   }
 
-  const error = new Error(
-    "Only JPG, JPEG, PNG, and WEBP images are allowed."
-  );
+  const error = new Error("Only JPG, JPEG, PNG, and WEBP images are allowed.");
 
   error.statusCode = 400;
 

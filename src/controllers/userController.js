@@ -112,20 +112,22 @@ function getTemporaryAccountSettings(body = {}) {
     body.temporaryExpiresAt ||
       body.temporary_expires_at ||
       body.expiresAt ||
-      body.expires_at
+      body.expires_at,
   );
   const rawDays = cleanText(
     body.temporaryDurationDays ||
       body.temporary_duration_days ||
       body.durationDays ||
-      body.duration_days
+      body.duration_days,
   );
   let temporaryExpiresAt = null;
 
   if (rawExpiresAt) {
     temporaryExpiresAt = new Date(rawExpiresAt);
   } else {
-    const durationDays = rawDays ? Number(rawDays) : DEFAULT_TEMPORARY_ACCOUNT_DAYS;
+    const durationDays = rawDays
+      ? Number(rawDays)
+      : DEFAULT_TEMPORARY_ACCOUNT_DAYS;
 
     if (
       !Number.isFinite(durationDays) ||
@@ -138,7 +140,7 @@ function getTemporaryAccountSettings(body = {}) {
     }
 
     temporaryExpiresAt = new Date(
-      Date.now() + durationDays * 24 * 60 * 60 * 1000
+      Date.now() + durationDays * 24 * 60 * 60 * 1000,
     );
   }
 
@@ -176,7 +178,9 @@ function getAccountStatus(user) {
   if (Number(user.is_archived) === 1) return "Archived";
   if (isTemporaryAccountExpired(user)) return "Expired";
 
-  const verificationStatus = normalizeVerificationStatus(user.verification_status);
+  const verificationStatus = normalizeVerificationStatus(
+    user.verification_status,
+  );
 
   if (verificationStatus === "declined") return "Declined";
   if (user.role === "professor" && verificationStatus === "pending") {
@@ -208,13 +212,11 @@ function generateTemporaryPassword() {
 
   while (requiredCharacters.length < 14) {
     requiredCharacters.push(
-      allCharacters[crypto.randomInt(allCharacters.length)]
+      allCharacters[crypto.randomInt(allCharacters.length)],
     );
   }
 
-  return requiredCharacters
-    .sort(() => crypto.randomInt(3) - 1)
-    .join("");
+  return requiredCharacters.sort(() => crypto.randomInt(3) - 1).join("");
 }
 
 function rowToUser(user) {
@@ -229,11 +231,11 @@ function rowToUser(user) {
     role: user.role,
     name: user.name,
 
-      profileImage: user.profile_image || "",
-      profile_image: user.profile_image || "",
+    profileImage: user.profile_image || "",
+    profile_image: user.profile_image || "",
 
-      displayName,
-      display_name: displayName,
+    displayName,
+    display_name: displayName,
     yearLevel: user.year_level || "",
     year_level: user.year_level || "",
     sectionName: user.section_name || "",
@@ -285,7 +287,7 @@ function rowToUser(user) {
 
     lastActive: user.last_active || null,
     last_active: user.last_active || null,
-      };
+  };
 }
 
 async function getUserByEmail(email) {
@@ -319,7 +321,7 @@ async function getUserByEmail(email) {
      FROM users
      WHERE email = ?
      LIMIT 1`,
-    [email]
+    [email],
   );
 
   return rows[0] || null;
@@ -352,7 +354,7 @@ export async function getUsers(_req, res) {
       archived_at, must_change_password, is_temporary, temporary_expires_at,
       created_at, last_active
       FROM users
-      ORDER BY userId DESC`
+      ORDER BY userId DESC`,
     );
 
     return res.json({
@@ -384,7 +386,7 @@ export async function getUserById(req, res) {
        FROM users
        WHERE userId = ?
        LIMIT 1`,
-      [id]
+      [id],
     );
 
     if (rows.length === 0) {
@@ -408,40 +410,28 @@ export async function getUserById(req, res) {
   }
 }
 
- export async function createStudentAccount(req, res) {
+export async function createStudentAccount(req, res) {
   const email = cleanEmail(req.body.email);
   const name = cleanText(req.body.name || req.body.displayName);
-  const studentId = cleanText(
-    req.body.studentId || req.body.student_id
-  );
+  const studentId = cleanText(req.body.studentId || req.body.student_id);
 
   const gender = normalizeGender(req.body.gender);
 
   const yearLevel = normalizeYearLevel(
-    req.body.yearLevel || req.body.year_level
+    req.body.yearLevel || req.body.year_level,
   );
 
   const sectionName = normalizeSectionName(
-    req.body.sectionName ||
-      req.body.section_name ||
-      req.body.section
+    req.body.sectionName || req.body.section_name || req.body.section,
   );
 
-  const temporaryAccount =
-    getTemporaryAccountSettings(req.body);
+  const temporaryAccount = getTemporaryAccountSettings(req.body);
 
   /* ===================================================
      VALIDATION
   =================================================== */
 
-  if (
-    !name ||
-    !email ||
-    !studentId ||
-    !gender ||
-    !yearLevel ||
-    !sectionName
-  ) {
+  if (!name || !email || !studentId || !gender || !yearLevel || !sectionName) {
     return res.status(400).json({
       success: false,
       message:
@@ -466,8 +456,7 @@ export async function getUserById(req, res) {
   if (sectionName.charAt(0) !== yearNumber) {
     return res.status(400).json({
       success: false,
-      message:
-        `Please choose a ${yearNumber}A-${yearNumber}F section for ${yearLevel}.`,
+      message: `Please choose a ${yearNumber}A-${yearNumber}F section for ${yearLevel}.`,
     });
   }
 
@@ -485,7 +474,7 @@ export async function getUserById(req, res) {
 
     const [existingEmail] = await db.execute(
       "SELECT userId FROM users WHERE email = ? LIMIT 1",
-      [email]
+      [email],
     );
 
     if (existingEmail.length > 0) {
@@ -504,7 +493,7 @@ export async function getUserById(req, res) {
        FROM users
        WHERE student_id = ?
        LIMIT 1`,
-      [studentId]
+      [studentId],
     );
 
     if (existingStudentId.length > 0) {
@@ -518,13 +507,9 @@ export async function getUserById(req, res) {
        CREATE TEMPORARY PASSWORD
     ================================================= */
 
-    const temporaryPassword =
-      generateTemporaryPassword();
+    const temporaryPassword = generateTemporaryPassword();
 
-    const hashedPassword = await bcrypt.hash(
-      temporaryPassword,
-      10
-    );
+    const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
 
     /*
       Account is created directly by Admin/Super Admin.
@@ -588,7 +573,7 @@ export async function getUserById(req, res) {
         sectionName,
         temporaryAccount.isTemporary,
         temporaryAccount.temporaryExpiresAt,
-      ]
+      ],
     );
 
     /* =================================================
@@ -626,7 +611,7 @@ export async function getUserById(req, res) {
        FROM users
        WHERE userId = ?
        LIMIT 1`,
-      [result.insertId]
+      [result.insertId],
     );
 
     /* =================================================
@@ -640,32 +625,25 @@ export async function getUserById(req, res) {
         temporaryPassword,
       });
     } catch (emailError) {
-      console.error(
-        "Student temporary password email error:",
-        emailError
-      );
+      console.error("Student temporary password email error:", emailError);
     }
-
-    
 
     /* =================================================
        AUDIT LOG
     ================================================= */
 
-    
-
-      await logAuditFromRequest(req, {
-        category: "User Management",
-        action: "Created student account",
-        target: name,
-        status: "Success",
-        details:
-          `Student ID: ${studentId}; ` +
-          `Email: ${email}; ` +
-          `Gender: ${gender}; ` +
-          `Year Level: ${yearLevel}; ` +
-          `Section: ${sectionName}`,
-      });
+    await logAuditFromRequest(req, {
+      category: "User Management",
+      action: "Created student account",
+      target: name,
+      status: "Success",
+      details:
+        `Student ID: ${studentId}; ` +
+        `Email: ${email}; ` +
+        `Gender: ${gender}; ` +
+        `Year Level: ${yearLevel}; ` +
+        `Section: ${sectionName}`,
+    });
 
     /* =================================================
        RESPONSE
@@ -678,10 +656,7 @@ export async function getUserById(req, res) {
       user: rowToUser(rows[0]),
     });
   } catch (error) {
-    console.error(
-      "Create student account error:",
-      error
-    );
+    console.error("Create student account error:", error);
 
     return res.status(500).json({
       success: false,
@@ -690,15 +665,11 @@ export async function getUserById(req, res) {
   }
 }
 
-
 export async function createAdminAccount(req, res) {
   const email = cleanEmail(req.body.email);
-  const name = cleanText(
-    req.body.name || req.body.displayName
-  );
+  const name = cleanText(req.body.name || req.body.displayName);
 
-  const temporaryAccount =
-    getTemporaryAccountSettings(req.body);
+  const temporaryAccount = getTemporaryAccountSettings(req.body);
 
   if (!name || !email) {
     return res.status(400).json({
@@ -717,7 +688,7 @@ export async function createAdminAccount(req, res) {
   try {
     const [existingEmail] = await db.execute(
       "SELECT userId FROM users WHERE email = ? LIMIT 1",
-      [email]
+      [email],
     );
 
     if (existingEmail.length > 0) {
@@ -727,13 +698,9 @@ export async function createAdminAccount(req, res) {
       });
     }
 
-    const temporaryPassword =
-      generateTemporaryPassword();
+    const temporaryPassword = generateTemporaryPassword();
 
-    const hashedPassword = await bcrypt.hash(
-      temporaryPassword,
-      10
-    );
+    const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
 
     const [result] = await db.execute(
       `INSERT INTO users (
@@ -771,7 +738,7 @@ export async function createAdminAccount(req, res) {
         name,
         temporaryAccount.isTemporary,
         temporaryAccount.temporaryExpiresAt,
-      ]
+      ],
     );
 
     const [rows] = await db.execute(
@@ -805,25 +772,23 @@ export async function createAdminAccount(req, res) {
        FROM users
        WHERE userId = ?
        LIMIT 1`,
-      [result.insertId]
+      [result.insertId],
     );
 
     /* =================================================
           AUDIT LOG
         ================================================= */
 
-        await logAuditFromRequest(req, {
-          category: "User Management",
-          action: "Created administrator account",
-          target: name,
-          status: "Success",
-          details:
-            `Admin ID: ${result.insertId}; ` +
-            `Email: ${email}; ` +
-            `Temporary Account: ${
-              temporaryAccount.isTemporary ? "Yes" : "No"
-            }`,
-        });
+    await logAuditFromRequest(req, {
+      category: "User Management",
+      action: "Created administrator account",
+      target: name,
+      status: "Success",
+      details:
+        `Admin ID: ${result.insertId}; ` +
+        `Email: ${email}; ` +
+        `Temporary Account: ${temporaryAccount.isTemporary ? "Yes" : "No"}`,
+    });
 
     return res.status(201).json({
       success: true,
@@ -832,10 +797,7 @@ export async function createAdminAccount(req, res) {
       user: rowToUser(rows[0]),
     });
   } catch (error) {
-    console.error(
-      "Create admin error:",
-      error
-    );
+    console.error("Create admin error:", error);
 
     return res.status(500).json({
       success: false,
@@ -847,63 +809,53 @@ export async function createAdminAccount(req, res) {
 export async function createProfessorAccount(req, res) {
   const email = cleanEmail(req.body.email);
 
-  const name = cleanText(
-    req.body.name ||
-    req.body.displayName
-  );
+  const name = cleanText(req.body.name || req.body.displayName);
 
   const facultyId = cleanText(
     req.body.facultyId ||
-    req.body.faculty_id ||
-    req.body.employeeId ||
-    req.body.employee_id
+      req.body.faculty_id ||
+      req.body.employeeId ||
+      req.body.employee_id,
   );
 
   const department = cleanText(
     req.body.department ||
-    req.body.professorDepartment ||
-    req.body.professor_department
+      req.body.professorDepartment ||
+      req.body.professor_department,
   );
 
   const position = cleanText(
     req.body.position ||
-    req.body.professorPosition ||
-    req.body.professor_position
+      req.body.professorPosition ||
+      req.body.professor_position,
   );
 
   const specialization = cleanText(
     req.body.specialization ||
-    req.body.professorSpecialization ||
-    req.body.professor_specialization
+      req.body.professorSpecialization ||
+      req.body.professor_specialization,
   );
 
   const uploadedProofUrl = getUploadedProfessorProofUrl(req.file);
   const employmentProof = cleanText(
     uploadedProofUrl ||
-    req.body.employmentProof ||
-    req.body.proofOfEmployment ||
-    req.body.professorEmploymentProof ||
-    req.body.professor_employment_proof
+      req.body.employmentProof ||
+      req.body.proofOfEmployment ||
+      req.body.professorEmploymentProof ||
+      req.body.professor_employment_proof,
   );
 
-  const temporaryAccount =
-    getTemporaryAccountSettings(req.body);
+  const temporaryAccount = getTemporaryAccountSettings(req.body);
 
-        if (
-      !name ||
-      !email ||
-      !facultyId ||
-      !department ||
-      !employmentProof
-    ) {
-      await removeUploadedProfessorProof(req.file);
+  if (!name || !email || !facultyId || !department || !employmentProof) {
+    await removeUploadedProfessorProof(req.file);
 
-      return res.status(400).json({
-        success: false,
-        message:
-          "Professor name, email, faculty ID, department, and ID photo are required.",
-      });
-    }
+    return res.status(400).json({
+      success: false,
+      message:
+        "Professor name, email, faculty ID, department, and ID photo are required.",
+    });
+  }
 
   if (!facultyId) {
     await removeUploadedProfessorProof(req.file);
@@ -956,7 +908,7 @@ export async function createProfessorAccount(req, res) {
        FROM users
        WHERE email = ?
        LIMIT 1`,
-      [email]
+      [email],
     );
 
     if (existingEmail.length > 0) {
@@ -964,19 +916,13 @@ export async function createProfessorAccount(req, res) {
 
       return res.status(409).json({
         success: false,
-        message:
-          "Email is already registered.",
+        message: "Email is already registered.",
       });
     }
 
-    const temporaryPassword =
-      generateTemporaryPassword();
+    const temporaryPassword = generateTemporaryPassword();
 
-    const hashedPassword =
-      await bcrypt.hash(
-        temporaryPassword,
-        10
-      );
+    const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
 
     const [result] = await db.execute(
       `INSERT INTO users (
@@ -1038,7 +984,7 @@ export async function createProfessorAccount(req, res) {
 
         temporaryAccount.isTemporary,
         temporaryAccount.temporaryExpiresAt,
-      ]
+      ],
     );
 
     const [rows] = await db.execute(
@@ -1074,51 +1020,48 @@ export async function createProfessorAccount(req, res) {
       FROM users
       WHERE userId = ?
       LIMIT 1`,
-      [result.insertId]
+      [result.insertId],
     );
 
     /* =================================================
           AUDIT LOG
         ================================================= */
 
-        await logAuditFromRequest(req, {
-          category: "User Management",
-          action: "Created professor account",
-          target: name,
-          status: "Success",
-          details:
-            `Professor ID: ${result.insertId}; ` +
-            `Faculty ID: ${facultyId}; ` +
-            `Email: ${email}; ` +
-            `Department: ${department}; ` +
-            `Position: ${position}; ` +
-            `Specialization: ${specialization}`,
-        });
+    await logAuditFromRequest(req, {
+      category: "User Management",
+      action: "Created professor account",
+      target: name,
+      status: "Success",
+      details:
+        `Professor ID: ${result.insertId}; ` +
+        `Faculty ID: ${facultyId}; ` +
+        `Email: ${email}; ` +
+        `Department: ${department}; ` +
+        `Position: ${position}; ` +
+        `Specialization: ${specialization}`,
+    });
 
     return res.status(201).json({
       success: true,
-      message:
-        "Professor account created.",
+      message: "Professor account created.",
       temporaryPassword,
       user: rowToUser(rows[0]),
     });
   } catch (error) {
-    console.error(
-      "Create professor error:",
-      error
-    );
+    console.error("Create professor error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to create professor account.",
+      message: "Failed to create professor account.",
     });
   }
 }
 
 export async function updateProfessorRegistration(req, res) {
   const { id } = req.params;
-  const status = normalizeVerificationStatus(req.body.status || req.body.action);
+  const status = normalizeVerificationStatus(
+    req.body.status || req.body.action,
+  );
 
   if (!status || status === "pending") {
     return res.status(400).json({
@@ -1129,7 +1072,7 @@ export async function updateProfessorRegistration(req, res) {
 
   try {
     const [existing] = await db.execute(
-        `SELECT
+      `SELECT
           userId,
           role,
           name,
@@ -1138,8 +1081,8 @@ export async function updateProfessorRegistration(req, res) {
         FROM users
         WHERE userId = ?
         LIMIT 1`,
-        [id]
-      );
+      [id],
+    );
     const user = existing[0];
 
     if (!user) {
@@ -1158,7 +1101,7 @@ export async function updateProfessorRegistration(req, res) {
 
     await db.execute(
       "UPDATE users SET verification_status = ? WHERE userId = ?",
-      [status, id]
+      [status, id],
     );
 
     const [rows] = await db.execute(
@@ -1172,36 +1115,33 @@ export async function updateProfessorRegistration(req, res) {
        FROM users
        WHERE userId = ?
        LIMIT 1`,
-      [id]
+      [id],
     );
 
-      /* =================================================
+    /* =================================================
           AUDIT LOG
         ================================================= */
 
-        const targetName =
-          user.name ||
-          user.display_name ||
-          user.email ||
-          `Professor #${id}`;
+    const targetName =
+      user.name || user.display_name || user.email || `Professor #${id}`;
 
-        await logAuditFromRequest(req, {
-          category: "User Management",
+    await logAuditFromRequest(req, {
+      category: "User Management",
 
-          action:
-            status === "approved"
-              ? "Approved professor registration"
-              : "Declined professor registration",
+      action:
+        status === "approved"
+          ? "Approved professor registration"
+          : "Declined professor registration",
 
-          target: targetName,
+      target: targetName,
 
-          status: "Success",
+      status: "Success",
 
-          details:
-            `Professor ID: ${id}; ` +
-            `Email: ${user.email || "N/A"}; ` +
-            `Registration Status: ${status}`,
-        });
+      details:
+        `Professor ID: ${id}; ` +
+        `Email: ${user.email || "N/A"}; ` +
+        `Registration Status: ${status}`,
+    });
 
     return res.json({
       success: true,
@@ -1236,7 +1176,7 @@ export async function updateAccountArchive(req, res) {
       FROM users
       WHERE userId = ?
       LIMIT 1`,
-      [id]
+      [id],
     );
 
     const user = existing[0];
@@ -1259,7 +1199,7 @@ export async function updateAccountArchive(req, res) {
       `UPDATE users
        SET is_archived = ?, archived_at = ?
        WHERE userId = ?`,
-      [archive ? 1 : 0, archive ? new Date() : null, id]
+      [archive ? 1 : 0, archive ? new Date() : null, id],
     );
 
     const [rows] = await db.execute(
@@ -1273,35 +1213,30 @@ export async function updateAccountArchive(req, res) {
        FROM users
        WHERE userId = ?
        LIMIT 1`,
-      [id]
+      [id],
     );
 
     /* =================================================
           AUDIT LOG
         ================================================= */
 
-        const targetName =
-          user.name ||
-          user.display_name ||
-          user.email ||
-          `User #${id}`;
+    const targetName =
+      user.name || user.display_name || user.email || `User #${id}`;
 
-        await logAuditFromRequest(req, {
-          category: "User Management",
+    await logAuditFromRequest(req, {
+      category: "User Management",
 
-          action: archive
-            ? "Archived user account"
-            : "Restored user account",
+      action: archive ? "Archived user account" : "Restored user account",
 
-          target: targetName,
+      target: targetName,
 
-          status: "Success",
+      status: "Success",
 
-          details:
-            `User ID: ${id}; ` +
-            `Role: ${user.role}; ` +
-            `Email: ${user.email || "N/A"}`,
-        });
+      details:
+        `User ID: ${id}; ` +
+        `Role: ${user.role}; ` +
+        `Email: ${user.email || "N/A"}`,
+    });
 
     return res.json({
       success: true,
@@ -1332,7 +1267,7 @@ export async function resetUserCredentials(req, res) {
       FROM users
       WHERE userId = ?
       LIMIT 1`,
-      [id]
+      [id],
     );
 
     const user = existing[0];
@@ -1358,29 +1293,24 @@ export async function resetUserCredentials(req, res) {
       `UPDATE users
        SET password = ?, must_change_password = 1, is_verified = 1
        WHERE userId = ?`,
-      [hashedPassword, id]
+      [hashedPassword, id],
     );
 
     /* =================================================
         AUDIT LOG
       ================================================= */
 
-      const targetName =
-        user.name ||
-        user.display_name ||
-        user.email ||
-        `User #${id}`;
+    const targetName =
+      user.name || user.display_name || user.email || `User #${id}`;
 
-      await logAuditFromRequest(req, {
-        category: "Security",
-        action: "Reset user credentials",
-        target: targetName,
-        status: "Success",
-        details:
-          `User ID: ${id}; ` +
-          `Role: ${user.role}; ` +
-          `Email: ${user.email}`,
-      });
+    await logAuditFromRequest(req, {
+      category: "Security",
+      action: "Reset user credentials",
+      target: targetName,
+      status: "Success",
+      details:
+        `User ID: ${id}; ` + `Role: ${user.role}; ` + `Email: ${user.email}`,
+    });
 
     return res.json({
       success: true,
@@ -1398,7 +1328,7 @@ export async function resetUserCredentials(req, res) {
   }
 }
 
-  export async function permanentlyRemoveArchivedAccount(req, res) {
+export async function permanentlyRemoveArchivedAccount(req, res) {
   const { id } = req.params;
 
   try {
@@ -1417,7 +1347,7 @@ export async function resetUserCredentials(req, res) {
        FROM users
        WHERE userId = ?
        LIMIT 1`,
-      [id]
+      [id],
     );
 
     const user = existing[0];
@@ -1436,8 +1366,7 @@ export async function resetUserCredentials(req, res) {
     if (user.role === "super_admin") {
       return res.status(400).json({
         success: false,
-        message:
-          "The Super Admin account cannot be removed.",
+        message: "The Super Admin account cannot be removed.",
       });
     }
 
@@ -1448,8 +1377,7 @@ export async function resetUserCredentials(req, res) {
     if (Number(user.is_archived) !== 1) {
       return res.status(400).json({
         success: false,
-        message:
-          "Only archived accounts can be permanently removed.",
+        message: "Only archived accounts can be permanently removed.",
       });
     }
 
@@ -1458,10 +1386,7 @@ export async function resetUserCredentials(req, res) {
     ================================================= */
 
     const targetName =
-      user.name ||
-      user.display_name ||
-      user.email ||
-      `User #${id}`;
+      user.name || user.display_name || user.email || `User #${id}`;
 
     const deletedUserDetails =
       `User ID: ${id}; ` +
@@ -1472,10 +1397,7 @@ export async function resetUserCredentials(req, res) {
        DELETE USER
     ================================================= */
 
-    await db.execute(
-      "DELETE FROM users WHERE userId = ?",
-      [id]
-    );
+    await db.execute("DELETE FROM users WHERE userId = ?", [id]);
 
     /* =================================================
        AUDIT LOG
@@ -1495,31 +1417,26 @@ export async function resetUserCredentials(req, res) {
 
     return res.json({
       success: true,
-      message:
-        "Archived account permanently removed.",
+      message: "Archived account permanently removed.",
       userId: Number(id),
     });
   } catch (error) {
-    console.error(
-      "Remove archived account error:",
-      error
-    );
+    console.error("Remove archived account error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to remove archived account.",
+      message: "Failed to remove archived account.",
     });
   }
 }
 
 export async function changeUserPassword(req, res) {
   const currentPassword = String(
-    req.body.currentPassword || req.body.current_password || ""
+    req.body.currentPassword || req.body.current_password || "",
   );
 
   const newPassword = String(
-    req.body.newPassword || req.body.new_password || ""
+    req.body.newPassword || req.body.new_password || "",
   );
 
   const authenticatedUserId = req.user?.id || req.user?.userId;
@@ -1556,7 +1473,8 @@ export async function changeUserPassword(req, res) {
   if (currentPassword === newPassword) {
     return res.status(400).json({
       success: false,
-      message: "Your new password must be different from your current password.",
+      message:
+        "Your new password must be different from your current password.",
     });
   }
 
@@ -1569,7 +1487,7 @@ export async function changeUserPassword(req, res) {
          FROM users
          WHERE userId = ?
          LIMIT 1`,
-        [authenticatedUserId]
+        [authenticatedUserId],
       );
     } else {
       [rows] = await db.execute(
@@ -1577,7 +1495,7 @@ export async function changeUserPassword(req, res) {
          FROM users
          WHERE email = ?
          LIMIT 1`,
-        [authenticatedEmail]
+        [authenticatedEmail],
       );
     }
 
@@ -1599,7 +1517,7 @@ export async function changeUserPassword(req, res) {
 
     const currentPasswordIsValid = await bcrypt.compare(
       currentPassword,
-      user.password
+      user.password,
     );
 
     if (!currentPasswordIsValid) {
@@ -1611,13 +1529,14 @@ export async function changeUserPassword(req, res) {
 
     const newPasswordMatchesOldPassword = await bcrypt.compare(
       newPassword,
-      user.password
+      user.password,
     );
 
     if (newPasswordMatchesOldPassword) {
       return res.status(400).json({
         success: false,
-        message: "Your new password must be different from your current password.",
+        message:
+          "Your new password must be different from your current password.",
       });
     }
 
@@ -1630,7 +1549,7 @@ export async function changeUserPassword(req, res) {
            password_reset_token = NULL,
            password_reset_expires = NULL
        WHERE userId = ?`,
-      [hashedPassword, user.userId]
+      [hashedPassword, user.userId],
     );
 
     return res.status(200).json({
@@ -1671,11 +1590,9 @@ export async function getProfile(req, res) {
 
 export async function getCurrentUser(req, res) {
   try {
-    const authenticatedUserId =
-      req.user?.id || req.user?.userId;
+    const authenticatedUserId = req.user?.id || req.user?.userId;
 
-    const authenticatedEmail =
-      cleanEmail(req.user?.email);
+    const authenticatedEmail = cleanEmail(req.user?.email);
 
     let rows = [];
 
@@ -1713,7 +1630,7 @@ export async function getCurrentUser(req, res) {
         FROM users
         WHERE userId = ?
         LIMIT 1`,
-        [authenticatedUserId]
+        [authenticatedUserId],
       );
     } else if (authenticatedEmail) {
       [rows] = await db.execute(
@@ -1749,7 +1666,7 @@ export async function getCurrentUser(req, res) {
         FROM users
         WHERE email = ?
         LIMIT 1`,
-        [authenticatedEmail]
+        [authenticatedEmail],
       );
     } else {
       return res.status(401).json({
@@ -1790,7 +1707,9 @@ export async function getCurrentUser(req, res) {
 
 export async function updateOnboardingName(req, res) {
   const email = cleanEmail(req.body.email);
-  const displayName = cleanText(req.body.displayName || req.body.display_name || req.body.name);
+  const displayName = cleanText(
+    req.body.displayName || req.body.display_name || req.body.name,
+  );
 
   if (!email || !displayName) {
     return res.status(400).json({
@@ -1811,7 +1730,7 @@ export async function updateOnboardingName(req, res) {
       `UPDATE users
        SET name = ?, display_name = ?
        WHERE email = ?`,
-      [displayName, displayName, email]
+      [displayName, displayName, email],
     );
 
     if (result.affectedRows === 0) {
@@ -1834,7 +1753,9 @@ export async function updateOnboardingName(req, res) {
 
 export async function updateOnboardingYear(req, res) {
   const email = cleanEmail(req.body.email);
-  const yearLevel = normalizeYearLevel(req.body.yearLevel || req.body.year_level);
+  const yearLevel = normalizeYearLevel(
+    req.body.yearLevel || req.body.year_level,
+  );
 
   if (!email || !yearLevel) {
     return res.status(400).json({
@@ -1848,7 +1769,7 @@ export async function updateOnboardingYear(req, res) {
       `UPDATE users
        SET year_level = ?, section_name = NULL
        WHERE email = ?`,
-      [yearLevel, email]
+      [yearLevel, email],
     );
 
     if (result.affectedRows === 0) {
@@ -1872,9 +1793,11 @@ export async function updateOnboardingYear(req, res) {
 export async function updateOnboardingSection(req, res) {
   const email = cleanEmail(req.body.email);
   const sectionName = normalizeSectionName(
-    req.body.sectionName || req.body.section_name || req.body.section
+    req.body.sectionName || req.body.section_name || req.body.section,
   );
-  const requestedYear = normalizeYearLevel(req.body.yearLevel || req.body.year_level);
+  const requestedYear = normalizeYearLevel(
+    req.body.yearLevel || req.body.year_level,
+  );
 
   if (!email || !sectionName) {
     return res.status(400).json({
@@ -1914,7 +1837,7 @@ export async function updateOnboardingSection(req, res) {
       `UPDATE users
        SET year_level = ?, section_name = ?
        WHERE email = ?`,
-      [yearLevel, sectionName, email]
+      [yearLevel, sectionName, email],
     );
 
     return sendUpdatedProfile(email, res);
@@ -1952,7 +1875,11 @@ export async function completeOnboarding(req, res) {
     const sectionName = normalizeSectionName(user.section_name);
     const yearNumber = getYearNumber(yearLevel);
 
-    if (!cleanText(user.display_name || user.name) || !yearLevel || !sectionName) {
+    if (
+      !cleanText(user.display_name || user.name) ||
+      !yearLevel ||
+      !sectionName
+    ) {
       return res.status(400).json({
         success: false,
         message: "Please finish your name, year, and section first.",
@@ -1968,7 +1895,7 @@ export async function completeOnboarding(req, res) {
 
     await db.execute(
       "UPDATE users SET onboarding_completed = 1 WHERE email = ?",
-      [email]
+      [email],
     );
 
     const updatedUser = await getUserByEmail(email);
@@ -1991,17 +1918,11 @@ export async function completeOnboarding(req, res) {
 export async function updateProfileImage(req, res) {
   try {
     const authenticatedUserId =
-      req.user?.id ||
-      req.user?.userId ||
-      req.user?.user_id;
+      req.user?.id || req.user?.userId || req.user?.user_id;
 
-    const authenticatedEmail =
-      cleanEmail(req.user?.email);
+    const authenticatedEmail = cleanEmail(req.user?.email);
 
-    if (
-      !authenticatedUserId &&
-      !authenticatedEmail
-    ) {
+    if (!authenticatedUserId && !authenticatedEmail) {
       return res.status(401).json({
         success: false,
         message: "You are not authenticated.",
@@ -2011,13 +1932,11 @@ export async function updateProfileImage(req, res) {
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message:
-          "Please select a profile picture.",
+        message: "Please select a profile picture.",
       });
     }
 
-    const profileImage =
-      `/uploads/profile-images/${req.file.filename}`;
+    const profileImage = `/uploads/profile-images/${req.file.filename}`;
 
     let result;
 
@@ -2028,10 +1947,7 @@ export async function updateProfileImage(req, res) {
           SET profile_image = ?
           WHERE userId = ?
         `,
-        [
-          profileImage,
-          authenticatedUserId,
-        ]
+        [profileImage, authenticatedUserId],
       );
     } else {
       [result] = await db.execute(
@@ -2040,18 +1956,14 @@ export async function updateProfileImage(req, res) {
           SET profile_image = ?
           WHERE email = ?
         `,
-        [
-          profileImage,
-          authenticatedEmail,
-        ]
+        [profileImage, authenticatedEmail],
       );
     }
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        message:
-          "User account was not found.",
+        message: "User account was not found.",
       });
     }
 
@@ -2090,7 +2002,7 @@ export async function updateProfileImage(req, res) {
           WHERE userId = ?
           LIMIT 1
         `,
-        [authenticatedUserId]
+        [authenticatedUserId],
       );
     } else {
       [rows] = await db.execute(
@@ -2125,7 +2037,7 @@ export async function updateProfileImage(req, res) {
           WHERE email = ?
           LIMIT 1
         `,
-        [authenticatedEmail]
+        [authenticatedEmail],
       );
     }
 
@@ -2134,31 +2046,25 @@ export async function updateProfileImage(req, res) {
     if (!updatedUser) {
       return res.status(404).json({
         success: false,
-        message:
-          "Updated user account could not be loaded.",
+        message: "Updated user account could not be loaded.",
       });
     }
 
     return res.status(200).json({
       success: true,
-      message:
-        "Profile picture updated successfully.",
+      message: "Profile picture updated successfully.",
       user: rowToUser(updatedUser),
     });
   } catch (error) {
-    console.error(
-      "Update profile image error:",
-      error
-    );
+    console.error("Update profile image error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to update profile picture.",
+      message: "Failed to update profile picture.",
     });
   }
 }
-  export async function logBulkStudentImport(req, res) {
+export async function logBulkStudentImport(req, res) {
   const fileName = cleanText(req.body.fileName);
   const importedCount = Number(req.body.importedCount || 0);
   const failedCount = Number(req.body.failedCount || 0);
@@ -2176,10 +2082,7 @@ export async function updateProfileImage(req, res) {
       category: "User Management",
       action: "Bulk student import",
       target: fileName,
-      status:
-        failedCount > 0
-          ? "Partial Success"
-          : "Success",
+      status: failedCount > 0 ? "Partial Success" : "Success",
       details:
         `Total Records: ${totalCount}; ` +
         `Imported: ${importedCount}; ` +
@@ -2191,16 +2094,11 @@ export async function updateProfileImage(req, res) {
       message: "Bulk student import recorded.",
     });
   } catch (error) {
-    console.error(
-      "Bulk student import audit error:",
-      error
-    );
+    console.error("Bulk student import audit error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to record bulk student import.",
+      message: "Failed to record bulk student import.",
     });
   }
 }
-

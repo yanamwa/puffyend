@@ -1,0 +1,79 @@
+{
+  "attempts": [
+    {
+      "attempts_id": 36,
+      "user_id": 38,
+      "lesson_id": null,
+      "course_id": 12,
+      "score": 0,
+      "total": 4,
+      "source": "module",
+      "quiz_mode": "multiple",
+      "time_spent": 0,
+      "created_at": "2026-10-10T17:29:20.000Z"
+    },
+    {
+      "attempts_id": 37,
+      "user_id": 38,
+      "lesson_id": null,
+      "course_id": 12,
+      "score": 0,
+      "total": 4,
+      "source": "module",
+      "quiz_mode": "multiple",
+      "time_spent": 0,
+      "created_at": "2026-10-10T17:29:21.000Z"
+    },
+    {
+      "attempts_id": 39,
+      "user_id": 39,
+      "lesson_id": null,
+      "course_id": 12,
+      "score": 0,
+      "total": 4,
+      "source": "module",
+      "quiz_mode": "multiple",
+      "time_spent": 0,
+      "created_at": "2026-10-10T17:49:36.000Z"
+    },
+    {
+      "attempts_id": 40,
+      "user_id": 39,
+      "lesson_id": null,
+      "course_id": 12,
+      "score": 0,
+      "total": 4,
+      "source": "module",
+      "quiz_mode": "multiple",
+      "time_spent": 0,
+      "created_at": "2026-10-10T17:49:36.000Z"
+    }
+  ],
+  "details": [
+    {
+      "attempts_id": 36,
+      "assessment_type": "practice",
+      "answers_json": "[]",
+      "module_index": null
+    },
+    {
+      "attempts_id": 37,
+      "assessment_type": "practice",
+      "answers_json": "[{\"cardId\":\"quiz-1791651504193-pydoovu\",\"question\":\"Which of the following is a stated limitation of Subjective Relativism?\",\"userAnswer\":\"B. It promotes universal moral standards across all cultures.\",\"correctAnswer\":\"Personal belief does not automatically provide moral justification.\",\"explanation\":\"A limitation of Subjective Relativism is that personal belief does not automatically provide moral justification, as individuals may rationalize bad behavior or confuse personal desire with morality.\",\"isCorrect\":false,\"topic\":\"Subjective Relativism\",\"cognitive_level\":\"Understand\",\"thinking_skill\":\"LOTS\"},{\"cardId\":\"quiz-1791651504193-h1unfex\",\"question\":\"A software developer is deciding whether to release a new feature that could significantly improve user experience but also has a small chance of a data breach. Which ethical theory would primarily ask \\\"What result will this produce?\\\" when evaluating this decision?\",\"userAnswer\":\"B. Kantianism\",\"correctAnswer\":\"Consequentialism\",\"explanation\":\"Consequentialism judges the morality of an action by its consequences, focusing on results and outcomes, and asks \\\"What result will this produce?\\\". Kantianism, in contrast, asks \\\"What is my duty?\\\".\",\"isCorrect\":false,\"topic\":\"Comparing Ethical Theories\",\"cognitive_level\":\"Analyze\",\"thinking_skill\":\"HOTS\"},{\"cardId\":\"quiz-1791651504193-6pjedl8\",\"question\":\"What is the primary purpose of ethical theories according to the lesson content?\",\"userAnswer\":\"C. To dictate personal desires and preferences.\",\"correctAnswer\":\"To provide frameworks for moral decision-making.\",\"explanation\":\"Ethical theories guide moral reasoning and provide frameworks for moral decision-making, helping to examine problems and reach conclusions.\",\"isCorrect\":false,\"topic\":\"Introduction to Ethics\",\"cognitive_level\":\"Remember\",\"thinking_skill\":\"LOTS\"},{\"cardId\":\"quiz-1791651504193-143zd9k\",\"question\":\"An IT professional chooses to volunteer for a community coding project, not purely out of altruism, but because they believe it will enhance their professional reputation, develop new skills, and potentially lead to future career opportunities. Which ethical theory best describes this motivation?\",\"userAnswer\":\"Ego\",\"correctAnswer\":\"Ethical Egoism\",\"explanation\":\"Ethical Egoism defines the morally right action as one that promotes long-term self-interest. Helping others can still benefit the helper by improving relationships, building reputation, developing skills, or creating future advantages.\",\"isCorrect\":false,\"topic\":\"Ethical Egoism\",\"cognitive_level\":\"Analyze\",\"thinking_skill\":\"HOTS\"}]",
+      "module_index": 0
+    },
+    {
+      "attempts_id": 39,
+      "assessment_type": "practice",
+      "answers_json": "[]",
+      "module_index": null
+    },
+    {
+      "attempts_id": 40,
+      "assessment_type": "practice",
+      "answers_json": "[{\"cardId\":\"quiz-1791651504193-6pjedl8\",\"question\":\"What is the primary purpose of ethical theories according to the lesson content?\",\"userAnswer\":\"C. To enforce legal obligations with penalties.\",\"correctAnswer\":\"To provide frameworks for moral decision-making.\",\"explanation\":\"Ethical theories guide moral reasoning and provide frameworks for moral decision-making, helping to examine problems and reach conclusions.\",\"isCorrect\":false,\"topic\":\"Introduction to Ethics\",\"cognitive_level\":\"Remember\",\"thinking_skill\":\"LOTS\"},{\"cardId\":\"quiz-1791651504193-pydoovu\",\"question\":\"Which of the following is a stated limitation of Subjective Relativism?\",\"userAnswer\":\"B. It strictly adheres to divine will and religious guidance.\",\"correctAnswer\":\"Personal belief does not automatically provide moral justification.\",\"explanation\":\"A limitation of Subjective Relativism is that personal belief does not automatically provide moral justification, as individuals may rationalize bad behavior or confuse personal desire with morality.\",\"isCorrect\":false,\"topic\":\"Subjective Relativism\",\"cognitive_level\":\"Understand\",\"thinking_skill\":\"LOTS\"},{\"cardId\":\"quiz-1791651504193-h1unfex\",\"question\":\"A software developer is deciding whether to release a new feature that could significantly improve user experience but also has a small chance of a data breach. Which ethical theory would primarily ask \\\"What result will this produce?\\\" when evaluating this decision?\",\"userAnswer\":\"A. Kantianism\",\"correctAnswer\":\"Consequentialism\",\"explanation\":\"Consequentialism judges the morality of an action by its consequences, focusing on results and outcomes, and asks \\\"What result will this produce?\\\". Kantianism, in contrast, asks \\\"What is my duty?\\\".\",\"isCorrect\":false,\"topic\":\"Comparing Ethical Theories\",\"cognitive_level\":\"Analyze\",\"thinking_skill\":\"HOTS\"},{\"cardId\":\"quiz-1791651504193-h1unfex\",\"question\":\"A software developer is deciding whether to release a new feature that could significantly improve user experience but also has a small chance of a data breach. Which ethical theory would primarily ask \\\"What result will this produce?\\\" when evaluating this decision?\",\"userAnswer\":\"B. Subjective Relativism\",\"correctAnswer\":\"Consequentialism\",\"explanation\":\"Consequentialism judges the morality of an action by its consequences, focusing on results and outcomes, and asks \\\"What result will this produce?\\\". Kantianism, in contrast, asks \\\"What is my duty?\\\".\",\"isCorrect\":false,\"topic\":\"Comparing Ethical Theories\",\"cognitive_level\":\"Analyze\",\"thinking_skill\":\"HOTS\"}]",
+      "module_index": 0
+    }
+  ],
+  "feedback": []
+}

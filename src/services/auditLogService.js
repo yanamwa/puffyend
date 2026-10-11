@@ -1,6 +1,5 @@
 import { db } from "../db.js";
 
-
 /* =====================================================
    HELPERS
 ===================================================== */
@@ -14,7 +13,6 @@ function cleanText(value) {
 
   return text || null;
 }
-
 
 function normalizeStatus(status) {
   const value = String(status || "Success")
@@ -32,7 +30,6 @@ function normalizeStatus(status) {
   return "Success";
 }
 
-
 /* =====================================================
    GET REQUEST IP ADDRESS
 ===================================================== */
@@ -42,22 +39,14 @@ export function getRequestIp(req) {
     return null;
   }
 
-  const forwarded =
-    req.headers?.["x-forwarded-for"];
+  const forwarded = req.headers?.["x-forwarded-for"];
 
   if (forwarded) {
-    return String(forwarded)
-      .split(",")[0]
-      .trim();
+    return String(forwarded).split(",")[0].trim();
   }
 
-  return (
-    req.ip ||
-    req.socket?.remoteAddress ||
-    null
-  );
+  return req.ip || req.socket?.remoteAddress || null;
 }
-
 
 /* =====================================================
    CREATE AUDIT LOG
@@ -75,9 +64,7 @@ export async function createAuditLog({
   details = null,
 }) {
   if (!category || !action) {
-    console.warn(
-      "Audit log skipped: category and action are required."
-    );
+    console.warn("Audit log skipped: category and action are required.");
 
     return null;
   }
@@ -106,7 +93,7 @@ export async function createAuditLog({
         cleanText(ipAddress),
         normalizeStatus(status),
         cleanText(details),
-      ]
+      ],
     );
 
     return {
@@ -122,15 +109,11 @@ export async function createAuditLog({
       fails, we don't want to report that student
       creation itself failed.
     */
-    console.error(
-      "Create audit log error:",
-      error
-    );
+    console.error("Create audit log error:", error);
 
     return null;
   }
 }
-
 
 /* =====================================================
    CREATE AUDIT LOG FROM EXPRESS REQUEST
@@ -147,7 +130,7 @@ export async function logAuditFromRequest(
     userId = null,
     userName = null,
     userRole = null,
-  }
+  },
 ) {
   /*
     authMiddleware normally puts the authenticated
@@ -157,8 +140,7 @@ export async function logAuditFromRequest(
     slightly different property names.
   */
 
-  const authenticatedUser =
-    req?.user || {};
+  const authenticatedUser = req?.user || {};
 
   const resolvedUserId =
     userId ||
@@ -175,10 +157,7 @@ export async function logAuditFromRequest(
     authenticatedUser.email ||
     "System";
 
-  const resolvedUserRole =
-    userRole ||
-    authenticatedUser.role ||
-    "System";
+  const resolvedUserRole = userRole || authenticatedUser.role || "System";
 
   return createAuditLog({
     userId: resolvedUserId,
@@ -189,8 +168,7 @@ export async function logAuditFromRequest(
     action,
     target,
 
-    ipAddress:
-      getRequestIp(req),
+    ipAddress: getRequestIp(req),
 
     status,
     details,

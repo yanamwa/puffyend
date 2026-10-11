@@ -1,6 +1,5 @@
 import { db } from "../db.js";
 
-
 /* =====================================================
    HELPERS
 ===================================================== */
@@ -8,7 +7,6 @@ import { db } from "../db.js";
 function cleanText(value) {
   return String(value || "").trim();
 }
-
 
 function normalizeRole(role = "") {
   const normalized = cleanText(role)
@@ -34,10 +32,8 @@ function normalizeRole(role = "") {
   return normalized;
 }
 
-
 function formatRoleLabel(role = "") {
-  const normalizedRole =
-    normalizeRole(role);
+  const normalizedRole = normalizeRole(role);
 
   if (normalizedRole === "super_admin") {
     return "Super admin";
@@ -58,30 +54,18 @@ function formatRoleLabel(role = "") {
   return "User";
 }
 
-
 function normalizeLabel(value = "") {
   return cleanText(value)
     .toLowerCase()
     .replace(/[\s_-]+/g, "");
 }
 
-
 function isEmailLike(value = "") {
-  return /\S+@\S+/.test(
-    cleanText(value)
-  );
+  return /\S+@\S+/.test(cleanText(value));
 }
 
-
-function getCreatorDisplayName(
-  currentUser,
-  tokenUser = {}
-) {
-  const roleLabel =
-    formatRoleLabel(
-      currentUser?.role ||
-      tokenUser?.role
-    );
+function getCreatorDisplayName(currentUser, tokenUser = {}) {
+  const roleLabel = formatRoleLabel(currentUser?.role || tokenUser?.role);
 
   const candidates = [
     currentUser?.display_name,
@@ -92,14 +76,12 @@ function getCreatorDisplayName(
   ];
 
   for (const candidate of candidates) {
-    const name = cleanText(candidate)
-      .replace(/^@+/, "");
+    const name = cleanText(candidate).replace(/^@+/, "");
 
     if (
       name &&
       !isEmailLike(name) &&
-      normalizeLabel(name) !==
-        normalizeLabel(roleLabel)
+      normalizeLabel(name) !== normalizeLabel(roleLabel)
     ) {
       return name;
     }
@@ -108,17 +90,12 @@ function getCreatorDisplayName(
   return roleLabel;
 }
 
-
 function normalizeTarget(target = "all") {
   const normalized = cleanText(target)
     .toLowerCase()
     .replace(/[\s-]+/g, "_");
 
-  if (
-    !normalized ||
-    normalized === "everyone" ||
-    normalized === "all_users"
-  ) {
+  if (!normalized || normalized === "everyone" || normalized === "all_users") {
     return "all";
   }
 
@@ -130,73 +107,44 @@ function normalizeTarget(target = "all") {
     return "student";
   }
 
-  if (
-    normalized === "professors" ||
-    normalized === "instructors"
-  ) {
+  if (normalized === "professors" || normalized === "instructors") {
     return "professor";
   }
 
-  if (
-    normalized === "admins" ||
-    normalized === "administrators"
-  ) {
+  if (normalized === "admins" || normalized === "administrators") {
     return "admin";
   }
 
-  if (
-    normalized === "superadmin" ||
-    normalized === "super_admins"
-  ) {
+  if (normalized === "superadmin" || normalized === "super_admins") {
     return "super_admin";
   }
 
   return normalized;
 }
 
-
 function isNotificationManager(role) {
-  return [
-    "admin",
-    "super_admin",
-  ].includes(normalizeRole(role));
+  return ["admin", "super_admin"].includes(normalizeRole(role));
 }
 
+function targetMatchesRole(target, role) {
+  const normalizedTarget = normalizeTarget(target);
 
-function targetMatchesRole(
-  target,
-  role
-) {
-  const normalizedTarget =
-    normalizeTarget(target);
-
-  const normalizedRole =
-    normalizeRole(role);
+  const normalizedRole = normalizeRole(role);
 
   if (normalizedTarget === "all") {
     return true;
   }
 
   if (normalizedTarget === "user") {
-    return [
-      "student",
-      "professor",
-    ].includes(normalizedRole);
+    return ["student", "professor"].includes(normalizedRole);
   }
 
   if (normalizedTarget === "admin") {
-    return [
-      "admin",
-      "super_admin",
-    ].includes(normalizedRole);
+    return ["admin", "super_admin"].includes(normalizedRole);
   }
 
-  return (
-    normalizedTarget ===
-    normalizedRole
-  );
+  return normalizedTarget === normalizedRole;
 }
-
 
 /* =====================================================
    FORMAT MANAGED / ADMIN NOTIFICATION
@@ -206,56 +154,39 @@ function rowToManagedNotification(row) {
   return {
     id: `managed-${row.notification_id}`,
 
-    notificationId:
-      row.notification_id,
+    notificationId: row.notification_id,
 
-    title:
-      row.title,
+    title: row.title,
 
-    message:
-      row.message,
+    message: row.message,
 
-    target:
-      row.target,
+    target: row.target,
 
-    type:
-      row.type || "announcement",
+    type: row.type || "announcement",
 
-    isRead:
-      false,
+    isRead: false,
 
-    is_read:
-      false,
+    is_read: false,
 
-    source:
-      "managed",
+    source: "managed",
 
-    createdByUserId:
-      row.created_by_user_id,
+    createdByUserId: row.created_by_user_id,
 
-    created_by_user_id:
-      row.created_by_user_id,
+    created_by_user_id: row.created_by_user_id,
 
-    createdByName:
-      row.created_by_name || "",
+    createdByName: row.created_by_name || "",
 
-    created_by_name:
-      row.created_by_name || "",
+    created_by_name: row.created_by_name || "",
 
-    createdByRole:
-      row.created_by_role || "",
+    createdByRole: row.created_by_role || "",
 
-    created_by_role:
-      row.created_by_role || "",
+    created_by_role: row.created_by_role || "",
 
-    createdAt:
-      row.created_at,
+    createdAt: row.created_at,
 
-    created_at:
-      row.created_at,
+    created_at: row.created_at,
   };
 }
-
 
 /* =====================================================
    FORMAT USER-SPECIFIC NOTIFICATION
@@ -263,105 +194,70 @@ function rowToManagedNotification(row) {
 
 function rowToUserNotification(row) {
   return {
-    id: String(
-      row.notification_id
-    ),
+    id: String(row.notification_id),
 
-    notificationId:
-      row.notification_id,
+    notificationId: row.notification_id,
 
-    recipientUserId:
-      row.recipient_user_id,
+    recipientUserId: row.recipient_user_id,
 
-    recipient_user_id:
-      row.recipient_user_id,
+    recipient_user_id: row.recipient_user_id,
 
-    courseId:
-      row.course_id,
+    courseId: row.course_id,
 
-    course_id:
-      row.course_id,
+    course_id: row.course_id,
 
-    enrollmentId:
-      row.enrollment_id,
+    enrollmentId: row.enrollment_id,
 
-    enrollment_id:
-      row.enrollment_id,
+    enrollment_id: row.enrollment_id,
 
-    title:
-      row.title,
+    title: row.title,
 
-    message:
-      row.message,
+    message: row.message,
 
-    target:
-      row.target,
+    target: row.target,
 
-    type:
-      row.type ||
-      "notification",
+    type: row.type || "notification",
 
-    isRead:
-      Boolean(row.is_read),
+    isRead: Boolean(row.is_read),
 
-    is_read:
-      Boolean(row.is_read),
+    is_read: Boolean(row.is_read),
 
-    readAt:
-      row.read_at,
+    readAt: row.read_at,
 
-    read_at:
-      row.read_at,
+    read_at: row.read_at,
 
-    source:
-      "user",
+    source: "user",
 
-    createdByUserId:
-      row.created_by_user_id,
+    createdByUserId: row.created_by_user_id,
 
-    created_by_user_id:
-      row.created_by_user_id,
+    created_by_user_id: row.created_by_user_id,
 
-    createdByName:
-      row.created_by_name || "",
+    createdByName: row.created_by_name || "",
 
-    created_by_name:
-      row.created_by_name || "",
+    created_by_name: row.created_by_name || "",
 
-    createdByRole:
-      row.created_by_role || "",
+    createdByRole: row.created_by_role || "",
 
-    created_by_role:
-      row.created_by_role || "",
+    created_by_role: row.created_by_role || "",
 
-    createdAt:
-      row.created_at,
+    createdAt: row.created_at,
 
-    created_at:
-      row.created_at,
+    created_at: row.created_at,
   };
 }
-
 
 /* =====================================================
    AUTHENTICATED USER
 ===================================================== */
 
 async function getAuthenticatedUser(req) {
-  const userId =
-    req.user?.id ||
-    req.user?.userId ||
-    req.user?.user_id;
+  const userId = req.user?.id || req.user?.userId || req.user?.user_id;
 
-  const email =
-    cleanText(
-      req.user?.email
-    ).toLowerCase();
+  const email = cleanText(req.user?.email).toLowerCase();
 
   if (userId) {
-    const [rows] =
-      await db.execute(
-        `SELECT
+    const [rows] = await db.execute(
+      `SELECT
            userId,
            email,
            role,
@@ -370,8 +266,8 @@ async function getAuthenticatedUser(req) {
          FROM users
          WHERE userId = ?
          LIMIT 1`,
-        [userId]
-      );
+      [userId],
+    );
 
     if (rows[0]) {
       return rows[0];
@@ -379,9 +275,8 @@ async function getAuthenticatedUser(req) {
   }
 
   if (email) {
-    const [rows] =
-      await db.execute(
-        `SELECT
+    const [rows] = await db.execute(
+      `SELECT
            userId,
            email,
            role,
@@ -390,8 +285,8 @@ async function getAuthenticatedUser(req) {
          FROM users
          WHERE email = ?
          LIMIT 1`,
-        [email]
-      );
+      [email],
+    );
 
     if (rows[0]) {
       return rows[0];
@@ -400,7 +295,6 @@ async function getAuthenticatedUser(req) {
 
   return null;
 }
-
 
 /* =====================================================
    GET MANAGED NOTIFICATIONS
@@ -422,7 +316,7 @@ async function getManagedNotifications() {
      ORDER BY
        created_at DESC,
        notification_id DESC
-     LIMIT 100`
+     LIMIT 100`,
   );
 
   return rows;
@@ -515,14 +409,7 @@ export async function getNotifications(req, res) {
 
       LIMIT 100
       `,
-      [
-        userId,
-        userId,
-        userId,
-        role,
-        role,
-        role,
-      ]
+      [userId, userId, userId, role, role, role],
     );
 
     const notifications = rows.map((row) => {
@@ -533,8 +420,7 @@ export async function getNotifications(req, res) {
        * Broadcast notification:
        * use notification_reads
        */
-      const isBroadcast =
-        row.recipient_user_id === null;
+      const isBroadcast = row.recipient_user_id === null;
 
       const isRead = isBroadcast
         ? Boolean(row.broadcast_read_id)
@@ -543,105 +429,65 @@ export async function getNotifications(req, res) {
       return {
         id: String(row.notification_id),
 
-        notificationId:
-          row.notification_id,
+        notificationId: row.notification_id,
 
-        notification_id:
-          row.notification_id,
+        notification_id: row.notification_id,
 
-        recipientUserId:
-          row.recipient_user_id,
+        recipientUserId: row.recipient_user_id,
 
-        recipient_user_id:
-          row.recipient_user_id,
+        recipient_user_id: row.recipient_user_id,
 
-        courseId:
-          row.course_id,
+        courseId: row.course_id,
 
-        course_id:
-          row.course_id,
+        course_id: row.course_id,
 
-        enrollmentId:
-          row.enrollment_id,
+        enrollmentId: row.enrollment_id,
 
-        enrollment_id:
-          row.enrollment_id,
+        enrollment_id: row.enrollment_id,
 
-        title:
-          row.title || "Notification",
+        title: row.title || "Notification",
 
-        message:
-          row.message || "",
+        message: row.message || "",
 
-        target:
-          normalizeTarget(
-            row.target || "all"
-          ),
+        target: normalizeTarget(row.target || "all"),
 
-        type:
-          cleanText(row.type) ||
-          "announcement",
+        type: cleanText(row.type) || "announcement",
 
         isRead,
 
-        is_read:
-          isRead,
+        is_read: isRead,
 
-        unread:
-          !isRead,
+        unread: !isRead,
 
-        readAt: isBroadcast
-          ? row.broadcast_read_at
-          : row.read_at,
+        readAt: isBroadcast ? row.broadcast_read_at : row.read_at,
 
-        read_at: isBroadcast
-          ? row.broadcast_read_at
-          : row.read_at,
+        read_at: isBroadcast ? row.broadcast_read_at : row.read_at,
 
-        createdByUserId:
-          row.created_by_user_id,
+        createdByUserId: row.created_by_user_id,
 
-        created_by_user_id:
-          row.created_by_user_id,
+        created_by_user_id: row.created_by_user_id,
 
-        createdByName:
-          row.created_by_name || "",
+        createdByName: row.created_by_name || "",
 
-        created_by_name:
-          row.created_by_name || "",
+        created_by_name: row.created_by_name || "",
 
-        createdByRole:
-          normalizeRole(
-            row.created_by_role
-          ),
+        createdByRole: normalizeRole(row.created_by_role),
 
-        created_by_role:
-          normalizeRole(
-            row.created_by_role
-          ),
+        created_by_role: normalizeRole(row.created_by_role),
 
-        createdAt:
-          row.created_at,
+        createdAt: row.created_at,
 
-        created_at:
-          row.created_at,
+        created_at: row.created_at,
 
-        source: isBroadcast
-          ? "managed"
-          : "user",
+        source: isBroadcast ? "managed" : "user",
 
-        icon:
-          row.type === "announcement"
-            ? "announcement"
-            : "course",
+        icon: row.type === "announcement" ? "announcement" : "course",
       };
     });
 
-    const unreadCount =
-      notifications.filter(
-        (notification) =>
-          !notification.isRead
-      ).length;
+    const unreadCount = notifications.filter(
+      (notification) => !notification.isRead,
+    ).length;
 
     return res.json({
       success: true,
@@ -649,45 +495,33 @@ export async function getNotifications(req, res) {
       unreadCount,
     });
   } catch (error) {
-    console.error(
-      "Get notifications error:",
-      error
-    );
+    console.error("Get notifications error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to fetch notifications.",
+      message: "Failed to fetch notifications.",
     });
   }
 }
-
 
 /* =====================================================
    GET UNREAD NOTIFICATION COUNT
 ===================================================== */
 
-export async function getUnreadNotificationCount(
-  req,
-  res
-) {
+export async function getUnreadNotificationCount(req, res) {
   try {
-    const currentUser =
-      await getAuthenticatedUser(req);
+    const currentUser = await getAuthenticatedUser(req);
 
     if (!currentUser) {
       return res.status(401).json({
         success: false,
-        message:
-          "You are not authenticated.",
+        message: "You are not authenticated.",
       });
     }
 
-    const userId =
-      Number(currentUser.userId);
+    const userId = Number(currentUser.userId);
 
-    const role =
-      normalizeRole(currentUser.role);
+    const role = normalizeRole(currentUser.role);
 
     const [rows] = await db.execute(
       `
@@ -736,82 +570,55 @@ export async function getUnreadNotificationCount(
           )
         )
       `,
-      [
-        userId,
-        userId,
-        role,
-        role,
-        role,
-      ]
+      [userId, userId, role, role, role],
     );
 
-    const unreadCount =
-      Number(
-        rows[0]?.unreadCount || 0
-      );
+    const unreadCount = Number(rows[0]?.unreadCount || 0);
 
     return res.json({
       success: true,
       unreadCount,
     });
   } catch (error) {
-    console.error(
-      "Get unread notification count error:",
-      error
-    );
+    console.error("Get unread notification count error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to fetch unread notification count.",
+      message: "Failed to fetch unread notification count.",
     });
   }
 }
-
 
 /* =====================================================
    MARK ONE NOTIFICATION AS READ
 ===================================================== */
 
-export async function markNotificationAsRead(
-  req,
-  res
-) {
+export async function markNotificationAsRead(req, res) {
   try {
-    const currentUser =
-      await getAuthenticatedUser(req);
+    const currentUser = await getAuthenticatedUser(req);
 
     if (!currentUser) {
       return res.status(401).json({
         success: false,
-        message:
-          "You are not authenticated.",
+        message: "You are not authenticated.",
       });
     }
 
-    const userId =
-      Number(currentUser.userId);
+    const userId = Number(currentUser.userId);
 
-    const role =
-      normalizeRole(currentUser.role);
+    const role = normalizeRole(currentUser.role);
 
-    const notificationId =
-      Number(
-        String(
-          req.params.notificationId ||
-          req.params.id ||
-          ""
-        ).replace(/^managed-/, "")
-      );
+    const notificationId = Number(
+      String(req.params.notificationId || req.params.id || "").replace(
+        /^managed-/,
+        "",
+      ),
+    );
 
-    if (
-      !Number.isFinite(notificationId) ||
-      notificationId <= 0
-    ) {
+    if (!Number.isFinite(notificationId) || notificationId <= 0) {
       return res.status(400).json({
         success: false,
-        message:
-          "Notification id is invalid.",
+        message: "Notification id is invalid.",
       });
     }
 
@@ -828,7 +635,7 @@ export async function markNotificationAsRead(
 
       LIMIT 1
       `,
-      [notificationId]
+      [notificationId],
     );
 
     const notification = rows[0];
@@ -836,27 +643,18 @@ export async function markNotificationAsRead(
     if (!notification) {
       return res.status(404).json({
         success: false,
-        message:
-          "Notification not found.",
+        message: "Notification not found.",
       });
     }
 
     /*
      * DIRECT NOTIFICATION
      */
-    if (
-      notification.recipient_user_id !==
-      null
-    ) {
-      if (
-        Number(
-          notification.recipient_user_id
-        ) !== userId
-      ) {
+    if (notification.recipient_user_id !== null) {
+      if (Number(notification.recipient_user_id) !== userId) {
         return res.status(403).json({
           success: false,
-          message:
-            "You cannot update this notification.",
+          message: "You cannot update this notification.",
         });
       }
 
@@ -874,10 +672,7 @@ export async function markNotificationAsRead(
         WHERE notification_id = ?
           AND recipient_user_id = ?
         `,
-        [
-          notificationId,
-          userId,
-        ]
+        [notificationId, userId],
       );
     }
 
@@ -885,16 +680,10 @@ export async function markNotificationAsRead(
      * BROADCAST / ANNOUNCEMENT
      */
     else {
-      if (
-        !targetMatchesRole(
-          notification.target,
-          role
-        )
-      ) {
+      if (!targetMatchesRole(notification.target, role)) {
         return res.status(403).json({
           success: false,
-          message:
-            "You cannot update this notification.",
+          message: "You cannot update this notification.",
         });
       }
 
@@ -911,63 +700,46 @@ export async function markNotificationAsRead(
         ON DUPLICATE KEY UPDATE
           read_at = VALUES(read_at)
         `,
-        [
-          notificationId,
-          userId,
-        ]
+        [notificationId, userId],
       );
     }
 
     return res.json({
       success: true,
-      message:
-        "Notification marked as read.",
+      message: "Notification marked as read.",
     });
   } catch (error) {
-    console.error(
-      "Mark notification as read error:",
-      error
-    );
+    console.error("Mark notification as read error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to mark notification as read.",
+      message: "Failed to mark notification as read.",
     });
   }
 }
-
 
 /* =====================================================
    MARK ALL NOTIFICATIONS AS READ
 ===================================================== */
 
-export async function markAllNotificationsAsRead(
-  req,
-  res
-) {
-  const connection =
-    await db.getConnection();
+export async function markAllNotificationsAsRead(req, res) {
+  const connection = await db.getConnection();
 
   try {
-    const currentUser =
-      await getAuthenticatedUser(req);
+    const currentUser = await getAuthenticatedUser(req);
 
     if (!currentUser) {
       connection.release();
 
       return res.status(401).json({
         success: false,
-        message:
-          "You are not authenticated.",
+        message: "You are not authenticated.",
       });
     }
 
-    const userId =
-      Number(currentUser.userId);
+    const userId = Number(currentUser.userId);
 
-    const role =
-      normalizeRole(currentUser.role);
+    const role = normalizeRole(currentUser.role);
 
     await connection.beginTransaction();
 
@@ -988,15 +760,14 @@ export async function markAllNotificationsAsRead(
       WHERE recipient_user_id = ?
         AND is_read = 0
       `,
-      [userId]
+      [userId],
     );
 
     /*
      * Find broadcasts visible to this role.
      */
-    const [broadcastRows] =
-      await connection.execute(
-        `
+    const [broadcastRows] = await connection.execute(
+      `
         SELECT notification_id
 
         FROM notifications
@@ -1025,17 +796,10 @@ export async function markAllNotificationsAsRead(
             OR target = ?
           )
         `,
-        [
-          role,
-          role,
-          role,
-        ]
-      );
+      [role, role, role],
+    );
 
-    for (
-      const notification
-      of broadcastRows
-    ) {
+    for (const notification of broadcastRows) {
       await connection.execute(
         `
         INSERT IGNORE INTO
@@ -1047,10 +811,7 @@ export async function markAllNotificationsAsRead(
 
         VALUES (?, ?, NOW())
         `,
-        [
-          notification.notification_id,
-          userId,
-        ]
+        [notification.notification_id, userId],
       );
     }
 
@@ -1058,8 +819,7 @@ export async function markAllNotificationsAsRead(
 
     return res.json({
       success: true,
-      message:
-        "All notifications marked as read.",
+      message: "All notifications marked as read.",
       unreadCount: 0,
     });
   } catch (error) {
@@ -1069,78 +829,46 @@ export async function markAllNotificationsAsRead(
       // Ignore rollback errors.
     }
 
-    console.error(
-      "Mark all notifications as read error:",
-      error
-    );
+    console.error("Mark all notifications as read error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to mark notifications as read.",
+      message: "Failed to mark notifications as read.",
     });
   } finally {
     connection.release();
   }
 }
 
-
 /* =====================================================
    CREATE ADMIN / SUPER ADMIN ANNOUNCEMENT
 ===================================================== */
 
-export async function createNotification(
-  req,
-  res
-) {
+export async function createNotification(req, res) {
   try {
-    const currentUser =
-      await getAuthenticatedUser(req);
+    const currentUser = await getAuthenticatedUser(req);
 
-    if (
-      !currentUser ||
-      !isNotificationManager(
-        currentUser.role
-      )
-    ) {
+    if (!currentUser || !isNotificationManager(currentUser.role)) {
       return res.status(403).json({
         success: false,
-        message:
-          "Only admins and super admins can create notifications.",
+        message: "Only admins and super admins can create notifications.",
       });
     }
 
-    const title =
-      cleanText(req.body?.title);
+    const title = cleanText(req.body?.title);
 
-    const message =
-      cleanText(
-        req.body?.message ||
-        req.body?.body
-      );
+    const message = cleanText(req.body?.message || req.body?.body);
 
-    const target =
-      normalizeTarget(
-        req.body?.target || "all"
-      );
+    const target = normalizeTarget(req.body?.target || "all");
 
-    const createdByName =
-      getCreatorDisplayName(
-        currentUser,
-        req.user
-      );
+    const createdByName = getCreatorDisplayName(currentUser, req.user);
 
-    const createdByRole =
-      normalizeRole(
-        currentUser.role ||
-        req.user?.role
-      );
+    const createdByRole = normalizeRole(currentUser.role || req.user?.role);
 
     if (!title || !message) {
       return res.status(400).json({
         success: false,
-        message:
-          "Title and message are required.",
+        message: "Title and message are required.",
       });
     }
 
@@ -1153,13 +881,10 @@ export async function createNotification(
       "super_admin",
     ];
 
-    if (
-      !allowedTargets.includes(target)
-    ) {
+    if (!allowedTargets.includes(target)) {
       return res.status(400).json({
         success: false,
-        message:
-          "Notification target is invalid.",
+        message: "Notification target is invalid.",
       });
     }
 
@@ -1206,7 +931,7 @@ export async function createNotification(
         currentUser.userId || null,
         createdByName,
         createdByRole,
-      ]
+      ],
     );
 
     /*
@@ -1234,94 +959,67 @@ export async function createNotification(
 
       LIMIT 1
       `,
-      [result.insertId]
+      [result.insertId],
     );
 
     const row = rows[0];
 
     const notification = {
-      id: String(
-        row.notification_id
-      ),
+      id: String(row.notification_id),
 
-      notificationId:
-        row.notification_id,
+      notificationId: row.notification_id,
 
-      notification_id:
-        row.notification_id,
+      notification_id: row.notification_id,
 
       recipientUserId: null,
       recipient_user_id: null,
 
-      courseId:
-        row.course_id,
+      courseId: row.course_id,
 
-      course_id:
-        row.course_id,
+      course_id: row.course_id,
 
-      enrollmentId:
-        row.enrollment_id,
+      enrollmentId: row.enrollment_id,
 
-      enrollment_id:
-        row.enrollment_id,
+      enrollment_id: row.enrollment_id,
 
-      title:
-        row.title,
+      title: row.title,
 
-      message:
-        row.message,
+      message: row.message,
 
-      target:
-        normalizeTarget(row.target),
+      target: normalizeTarget(row.target),
 
-      type:
-        row.type ||
-        "announcement",
+      type: row.type || "announcement",
 
       isRead: false,
       is_read: false,
       unread: true,
 
-      createdByUserId:
-        row.created_by_user_id,
+      createdByUserId: row.created_by_user_id,
 
-      created_by_user_id:
-        row.created_by_user_id,
+      created_by_user_id: row.created_by_user_id,
 
-      createdByName:
-        row.created_by_name || "",
+      createdByName: row.created_by_name || "",
 
-      created_by_name:
-        row.created_by_name || "",
+      created_by_name: row.created_by_name || "",
 
-      createdByRole:
-        normalizeRole(
-          row.created_by_role
-        ),
+      createdByRole: normalizeRole(row.created_by_role),
 
-      created_by_role:
-        normalizeRole(
-          row.created_by_role
-        ),
+      created_by_role: normalizeRole(row.created_by_role),
 
-      createdAt:
-        row.created_at,
+      createdAt: row.created_at,
 
-      created_at:
-        row.created_at,
+      created_at: row.created_at,
 
       source: "managed",
       icon: "announcement",
     };
 
-      await logAuditFromRequest(req, {
+    await logAuditFromRequest(req, {
       category: "Notification Management",
       action: "Created Announcement",
       target: title,
       status: "Success",
-      details:
-        `Created announcement "${title}" ` +
-        `for target "${target}".`,
+      details: `Created announcement "${title}" ` + `for target "${target}".`,
       userId: currentUser.userId || null,
       userName: createdByName,
       userRole: createdByRole,
@@ -1329,32 +1027,24 @@ export async function createNotification(
 
     return res.status(201).json({
       success: true,
-      message:
-        "Notification posted.",
+      message: "Notification posted.",
       notification,
 
       /*
        * Keep this for compatibility
        * with your existing React utility.
        */
-      notifications: [
-        notification,
-      ],
+      notifications: [notification],
     });
   } catch (error) {
-    console.error(
-      "Create notification error:",
-      error
-    );
+    console.error("Create notification error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to create notification.",
+      message: "Failed to create notification.",
     });
   }
 }
-
 
 /* =====================================================
    DELETE ANNOUNCEMENT
@@ -1362,40 +1052,28 @@ export async function createNotification(
 
 export async function deleteNotification(req, res) {
   try {
-    const currentUser =
-      await getAuthenticatedUser(req);
+    const currentUser = await getAuthenticatedUser(req);
 
-    if (
-      !currentUser ||
-      !isNotificationManager(currentUser.role)
-    ) {
+    if (!currentUser || !isNotificationManager(currentUser.role)) {
       return res.status(403).json({
         success: false,
-        message:
-          "Only admins and super admins can delete notifications.",
+        message: "Only admins and super admins can delete notifications.",
       });
     }
 
-    const currentRole =
-      normalizeRole(currentUser.role);
+    const currentRole = normalizeRole(currentUser.role);
 
-    const notificationId =
-      Number(
-        String(
-          req.params.id ||
-          req.params.notificationId ||
-          ""
-        ).replace(/^managed-/, "")
-      );
+    const notificationId = Number(
+      String(req.params.id || req.params.notificationId || "").replace(
+        /^managed-/,
+        "",
+      ),
+    );
 
-    if (
-      !Number.isFinite(notificationId) ||
-      notificationId <= 0
-    ) {
+    if (!Number.isFinite(notificationId) || notificationId <= 0) {
       return res.status(400).json({
         success: false,
-        message:
-          "Notification id is invalid.",
+        message: "Notification id is invalid.",
       });
     }
 
@@ -1425,23 +1103,19 @@ export async function deleteNotification(req, res) {
           AND type = 'announcement'
         LIMIT 1
       `,
-      [notificationId]
+      [notificationId],
     );
 
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message:
-          "Announcement not found.",
+        message: "Announcement not found.",
       });
     }
 
     const notification = rows[0];
 
-    const creatorRole =
-      normalizeRole(
-        notification.created_by_role
-      );
+    const creatorRole = normalizeRole(notification.created_by_role);
 
     /*
      * SECURITY RULE:
@@ -1449,14 +1123,10 @@ export async function deleteNotification(req, res) {
      * Admin cannot delete announcements
      * created by a Super Admin.
      */
-    if (
-      currentRole === "admin" &&
-      creatorRole === "super_admin"
-    ) {
+    if (currentRole === "admin" && creatorRole === "super_admin") {
       return res.status(403).json({
         success: false,
-        message:
-          "Admins cannot delete announcements created by a Super Admin.",
+        message: "Admins cannot delete announcements created by a Super Admin.",
       });
     }
 
@@ -1474,71 +1144,51 @@ export async function deleteNotification(req, res) {
           AND recipient_user_id IS NULL
           AND type = 'announcement'
       `,
-      [notificationId]
+      [notificationId],
     );
 
-    if (
-      Number(result.affectedRows) === 0
-    ) {
+    if (Number(result.affectedRows) === 0) {
       return res.status(404).json({
         success: false,
-        message:
-          "Announcement not found.",
+        message: "Announcement not found.",
       });
     }
 
-    const currentUserName =
-      getCreatorDisplayName(
-        currentUser,
-        req.user
-      );
+    const currentUserName = getCreatorDisplayName(currentUser, req.user);
 
     /*
      * AUDIT LOG
      */
     await logAuditFromRequest(req, {
-      category:
-        "Notification Management",
+      category: "Notification Management",
 
-      action:
-        "Deleted Announcement",
+      action: "Deleted Announcement",
 
-      target:
-        notification.title ||
-        `Announcement #${notificationId}`,
+      target: notification.title || `Announcement #${notificationId}`,
 
-      status:
-        "Success",
+      status: "Success",
 
       details:
         `Deleted announcement "${notification.title || `#${notificationId}`}" ` +
         `targeted to "${normalizeTarget(notification.target)}".`,
 
-      userId:
-        currentUser.userId || null,
+      userId: currentUser.userId || null,
 
-      userName:
-        currentUserName,
+      userName: currentUserName,
 
-      userRole:
-        currentRole,
+      userRole: currentRole,
     });
 
     return res.json({
       success: true,
-      message:
-        "Notification deleted.",
+      message: "Notification deleted.",
     });
   } catch (error) {
-    console.error(
-      "Delete notification error:",
-      error
-    );
+    console.error("Delete notification error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to delete notification.",
+      message: "Failed to delete notification.",
     });
   }
 }

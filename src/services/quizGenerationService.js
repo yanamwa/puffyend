@@ -13,10 +13,7 @@ const quizResponseSchema = {
         properties: {
           type: {
             type: "STRING",
-            enum: [
-              "multiple_choice",
-              "true_false",
-            ],
+            enum: ["multiple_choice", "true_false"],
           },
 
           question: {
@@ -61,8 +58,7 @@ function createQuizPrompt({
   trueFalseCount,
   difficulty,
 }) {
-  const multipleChoiceCount =
-    questionCount - trueFalseCount;
+  const multipleChoiceCount = questionCount - trueFalseCount;
 
   return `
 You are an educational quiz generator.
@@ -114,16 +110,14 @@ Return only the requested JSON object.
 
 function cleanQuestion(question) {
   const type =
-    question?.type === "true_false"
-      ? "true_false"
-      : "multiple_choice";
+    question?.type === "true_false" ? "true_false" : "multiple_choice";
 
   let options = Array.isArray(question?.options)
     ? question.options
         .map((option) =>
           String(option || "")
             .replace(/^[A-D][.)]\s*/i, "")
-            .trim()
+            .trim(),
         )
         .filter(Boolean)
     : [];
@@ -138,32 +132,23 @@ function cleanQuestion(question) {
     }
   }
 
-  let correctAnswer = String(
-    question?.correct_answer || ""
-  )
+  let correctAnswer = String(question?.correct_answer || "")
     .replace(/^[A-D][.)]\s*/i, "")
     .trim();
 
-  if (
-    type === "true_false" &&
-    !["True", "False"].includes(correctAnswer)
-  ) {
+  if (type === "true_false" && !["True", "False"].includes(correctAnswer)) {
     correctAnswer = "";
   }
 
   return {
     type,
-    question: String(
-      question?.question || ""
-    ).trim(),
+    question: String(question?.question || "").trim(),
 
     options,
 
     correct_answer: correctAnswer,
 
-    explanation: String(
-      question?.explanation || ""
-    ).trim(),
+    explanation: String(question?.explanation || "").trim(),
   };
 }
 
@@ -184,7 +169,7 @@ export async function generateQuizWithGemini({
 
   if (!apiKey) {
     const error = new Error(
-      "GEMINI_API_KEY is missing from the backend .env file."
+      "GEMINI_API_KEY is missing from the backend .env file.",
     );
 
     error.statusCode = 500;
@@ -227,65 +212,46 @@ export async function generateQuizWithGemini({
   let response;
 
   try {
-    response = await axios.post(
-      url,
-      payload,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
+    response = await axios.post(url, payload, {
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
 
-        timeout: 120_000,
-      }
-    );
+      timeout: 120_000,
+    });
   } catch (error) {
     const status = error.response?.status;
 
     console.error(
       "Gemini quiz generation error:",
-      error.response?.data || error.message
+      error.response?.data || error.message,
     );
 
-    let message =
-      "Could not connect to the Gemini API.";
+    let message = "Could not connect to the Gemini API.";
 
     if (status === 400) {
-      message =
-        "Gemini rejected the quiz request.";
-    } else if (
-      status === 401 ||
-      status === 403
-    ) {
-      message =
-        "The Gemini API key is invalid or unauthorized.";
+      message = "Gemini rejected the quiz request.";
+    } else if (status === 401 || status === 403) {
+      message = "The Gemini API key is invalid or unauthorized.";
     } else if (status === 429) {
       message =
         "The Gemini request limit has been reached. Please try again later.";
     } else if (status && status >= 500) {
-      message =
-        "Gemini is temporarily unavailable.";
+      message = "Gemini is temporarily unavailable.";
     }
 
-    const serviceError =
-      new Error(message);
+    const serviceError = new Error(message);
 
-    serviceError.statusCode =
-      status || 503;
+    serviceError.statusCode = status || 503;
 
     throw serviceError;
   }
 
-  const output =
-    response.data
-      ?.candidates?.[0]
-      ?.content?.parts?.[0]
-      ?.text;
+  const output = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
   if (!output) {
-    const error = new Error(
-      "Gemini returned no quiz content."
-    );
+    const error = new Error("Gemini returned no quiz content.");
 
     error.statusCode = 502;
     throw error;
@@ -302,35 +268,24 @@ export async function generateQuizWithGemini({
   try {
     parsed = JSON.parse(cleanedOutput);
   } catch {
-    console.error(
-      "Invalid Gemini quiz JSON:",
-      cleanedOutput
-    );
+    console.error("Invalid Gemini quiz JSON:", cleanedOutput);
 
-    const error = new Error(
-      "Gemini returned invalid quiz data."
-    );
+    const error = new Error("Gemini returned invalid quiz data.");
 
     error.statusCode = 502;
     throw error;
   }
 
-  const questions = Array.isArray(
-    parsed.questions
-  )
+  const questions = Array.isArray(parsed.questions)
     ? parsed.questions
         .map(cleanQuestion)
-        .filter(
-          (question) =>
-            question.question &&
-            question.correct_answer
-        )
+        .filter((question) => question.question && question.correct_answer)
         .slice(0, questionCount)
     : [];
 
   if (questions.length !== questionCount) {
     const error = new Error(
-      `Gemini generated ${questions.length} valid questions instead of ${questionCount}. Please try again.`
+      `Gemini generated ${questions.length} valid questions instead of ${questionCount}. Please try again.`,
     );
 
     error.statusCode = 502;

@@ -49,7 +49,6 @@ import authenticateUser from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-
 /* =====================================================
    LEGACY MULTIPART PARSER
 ===================================================== */
@@ -57,25 +56,18 @@ const router = express.Router();
 function parseMultipartText(body, boundary) {
   const result = {};
 
-  const parts = body.split(
-    `--${boundary}`
-  );
+  const parts = body.split(`--${boundary}`);
 
   parts.forEach((part) => {
-    const nameMatch = part.match(
-      /name="([^"]+)"/
-    );
+    const nameMatch = part.match(/name="([^"]+)"/);
 
     if (!nameMatch) {
       return;
     }
 
-    const filenameMatch = part.match(
-      /filename="([^"]*)"/
-    );
+    const filenameMatch = part.match(/filename="([^"]*)"/);
 
-    const valueStart =
-      part.indexOf("\r\n\r\n");
+    const valueStart = part.indexOf("\r\n\r\n");
 
     if (valueStart === -1) {
       return;
@@ -86,46 +78,26 @@ function parseMultipartText(body, boundary) {
       .replace(/\r\n$/, "")
       .trim();
 
-    result[nameMatch[1]] =
-      filenameMatch
-        ? filenameMatch[1]
-        : rawValue;
+    result[nameMatch[1]] = filenameMatch ? filenameMatch[1] : rawValue;
   });
 
   return result;
 }
 
-
 /* =====================================================
    LEGACY MODE BODY PARSER
 ===================================================== */
 
-function parseLegacyModeBody(
-  req,
-  _res,
-  next
-) {
-  if (
-    req.body &&
-    Object.keys(req.body).length > 0
-  ) {
+function parseLegacyModeBody(req, _res, next) {
+  if (req.body && Object.keys(req.body).length > 0) {
     return next();
   }
 
-  const contentType =
-    req.headers["content-type"] || "";
+  const contentType = req.headers["content-type"] || "";
 
-  const boundary =
-    contentType.match(
-      /boundary=(.+)$/
-    )?.[1];
+  const boundary = contentType.match(/boundary=(.+)$/)?.[1];
 
-  if (
-    !contentType.includes(
-      "multipart/form-data"
-    ) ||
-    !boundary
-  ) {
+  if (!contentType.includes("multipart/form-data") || !boundary) {
     return next();
   }
 
@@ -138,17 +110,13 @@ function parseLegacyModeBody(
   });
 
   req.on("end", () => {
-    req.body = parseMultipartText(
-      body,
-      boundary
-    );
+    req.body = parseMultipartText(body, boundary);
 
     next();
   });
 
   req.on("error", next);
 }
-
 
 /* =====================================================
    COURSES
@@ -157,11 +125,7 @@ function parseLegacyModeBody(
 /*
  * Get all courses.
  */
-router.get(
-  "/courses",
-  getCourses
-);
-
+router.get("/courses", getCourses);
 
 /*
  * Create a new course.
@@ -169,12 +133,7 @@ router.get(
  * AUDIT:
  * Created Course
  */
-router.post(
-  "/courses",
-  authenticateUser,
-  createCourse
-);
-
+router.post("/courses", authenticateUser, createCourse);
 
 /* =====================================================
    COURSE ENROLLMENT
@@ -186,12 +145,7 @@ router.post(
  *
  * GET /api/courses/enrolled
  */
-router.get(
-  "/courses/enrolled",
-  authenticateUser,
-  getEnrolledCourses
-);
-
+router.get("/courses/enrolled", authenticateUser, getEnrolledCourses);
 
 /*
  * Student sends an enrollment request.
@@ -206,12 +160,7 @@ router.get(
  *   "courseId": 7
  * }
  */
-router.post(
-  "/courses/enroll",
-  authenticateUser,
-  enrollCourse
-);
-
+router.post("/courses/enroll", authenticateUser, enrollCourse);
 
 /*
  * Professor gets enrollment records
@@ -222,9 +171,8 @@ router.post(
 router.get(
   "/courses/:courseId/enrollments",
   authenticateUser,
-  getCourseEnrollments
+  getCourseEnrollments,
 );
-
 
 /*
  * Professor approves enrollment.
@@ -237,9 +185,8 @@ router.get(
 router.patch(
   "/enrollments/:enrollmentId/approve",
   authenticateUser,
-  approveEnrollment
+  approveEnrollment,
 );
-
 
 /*
  * Professor declines enrollment.
@@ -252,9 +199,8 @@ router.patch(
 router.patch(
   "/enrollments/:enrollmentId/decline",
   authenticateUser,
-  declineEnrollment
+  declineEnrollment,
 );
-
 
 /*
  * Professor removes an enrolled student.
@@ -267,9 +213,8 @@ router.patch(
 router.patch(
   "/enrollments/:enrollmentId/unenroll",
   authenticateUser,
-  unenrollStudentFromCourse
+  unenrollStudentFromCourse,
 );
-
 
 /*
  * Student leaves/un-enrolls from a course.
@@ -279,12 +224,7 @@ router.patch(
  *
  * PUT /api/courses/7/unenroll
  */
-router.put(
-  "/courses/:id/unenroll",
-  authenticateUser,
-  unenrollCourse
-);
-
+router.put("/courses/:id/unenroll", authenticateUser, unenrollCourse);
 
 /* =====================================================
    COURSE JOINING
@@ -293,16 +233,9 @@ router.put(
 /*
  * Find/join a course using a course code.
  */
-router.get(
-  "/courses/join",
-  joinCourseByCode
-);
+router.get("/courses/join", joinCourseByCode);
 
-router.post(
-  "/courses/join",
-  joinCourseByCode
-);
-
+router.post("/courses/join", joinCourseByCode);
 
 /* =====================================================
    ARCHIVED COURSES
@@ -312,12 +245,7 @@ router.post(
  * Get archived courses for the
  * authenticated student.
  */
-router.get(
-  "/courses/archived",
-  authenticateUser,
-  getArchivedCourses
-);
-
+router.get("/courses/archived", authenticateUser, getArchivedCourses);
 
 /* =====================================================
    SINGLE COURSE
@@ -336,11 +264,7 @@ router.get(
  * as "enrolled" as the :id parameter.
  */
 
-router.get(
-  "/courses/:id",
-  getCourseById
-);
-
+router.get("/courses/:id", getCourseById);
 
 /*
  * Update course.
@@ -348,12 +272,7 @@ router.get(
  * AUDIT:
  * Updated Course
  */
-router.put(
-  "/courses/:id",
-  authenticateUser,
-  updateCourse
-);
-
+router.put("/courses/:id", authenticateUser, updateCourse);
 
 /*
  * Archive or restore course.
@@ -362,22 +281,12 @@ router.put(
  * Archived Course
  * Restored Course
  */
-router.patch(
-  "/courses/:id/archive",
-  authenticateUser,
-  archiveCourse
-);
-
+router.patch("/courses/:id/archive", authenticateUser, archiveCourse);
 
 /*
  * Compatibility route for archive/restore.
  */
-router.post(
-  "/courses/:id/archive",
-  authenticateUser,
-  archiveCourse
-);
-
+router.post("/courses/:id/archive", authenticateUser, archiveCourse);
 
 /*
  * NO DELETE COURSE ROUTE.
@@ -385,7 +294,6 @@ router.post(
  * PuffyBrain uses archive/restore instead
  * of permanent course deletion.
  */
-
 
 /* =====================================================
    LEARNING MODULES
@@ -396,11 +304,7 @@ router.post(
  *
  * Reading data does not need an audit entry.
  */
-router.get(
-  "/modules",
-  getLearningModules
-);
-
+router.get("/modules", getLearningModules);
 
 /*
  * Create learning module.
@@ -408,21 +312,12 @@ router.get(
  * AUDIT:
  * Created Learning Module
  */
-router.post(
-  "/modules",
-  authenticateUser,
-  createLearningModule
-);
-
+router.post("/modules", authenticateUser, createLearningModule);
 
 /*
  * Get one learning module.
  */
-router.get(
-  "/modules/:id",
-  getLearningModuleById
-);
-
+router.get("/modules/:id", getLearningModuleById);
 
 /*
  * Update learning module.
@@ -430,12 +325,7 @@ router.get(
  * AUDIT:
  * Updated Learning Module
  */
-router.put(
-  "/modules/:id",
-  authenticateUser,
-  updateLearningModule
-);
-
+router.put("/modules/:id", authenticateUser, updateLearningModule);
 
 /*
  * Delete learning module.
@@ -448,127 +338,75 @@ router.put(
  * instead of permanent deletion, this can
  * later be changed to an archive route.
  */
-router.delete(
-  "/modules/:id",
-  authenticateUser,
-  deleteLearningModule
-);
-
+router.delete("/modules/:id", authenticateUser, deleteLearningModule);
 
 /* =====================================================
    QUIZ MODES
 ===================================================== */
 
-router.get(
-  "/modes",
-  getModes
-);
+router.get("/modes", getModes);
 
-router.post(
-  "/modes",
-  authenticateUser,
-  createMode
-);
+router.post("/modes", authenticateUser, createMode);
 
-router.put(
-  "/modes/:id",
-  authenticateUser,
-  updateMode
-);
+router.put("/modes/:id", authenticateUser, updateMode);
 
-router.delete(
-  "/modes/:id",
-  authenticateUser,
-  deleteMode
-);
-
+router.delete("/modes/:id", authenticateUser, deleteMode);
 
 /* =====================================================
    MONITORING
 ===================================================== */
 
-router.get("/assessment-attempts/:courseId", authenticateUser, getAssessmentAttempts);
-
-
-
 router.get(
-  "/monitoring/:courseId",
-  getCourseMonitoring
-);
-
-router.get(
-  "/getLessonProgress.php",
-  getLessonProgress
-);
-
-router.post(
-  "/saveLessonProgress.php",
-  saveLessonProgress
-);
-
-router.post(
-  "/saveQuizAttempt.php",
+  "/assessment-attempts/:courseId",
   authenticateUser,
-  saveQuizAttempt
+  getAssessmentAttempts,
 );
 
-router.get(
-  "/getQuizAttempts.php",
-  getQuizAttempts
-);
+router.get("/monitoring/:courseId", getCourseMonitoring);
 
-router.post(
-  "/generateAdaptiveFeedback.php",
-  generateAdaptiveFeedback
-);
+router.get("/getLessonProgress.php", getLessonProgress);
 
+router.post("/saveLessonProgress.php", saveLessonProgress);
+
+router.post("/saveQuizAttempt.php", authenticateUser, saveQuizAttempt);
+
+router.get("/getQuizAttempts.php", authenticateUser, getQuizAttempts);
+
+router.post("/generateAdaptiveFeedback.php", generateAdaptiveFeedback);
 
 /* =====================================================
    LEGACY MODE ROUTES
 ===================================================== */
 
-router.get(
-  "/getModes.php",
-  getModes
-);
+router.get("/getModes.php", getModes);
 
-router.post(
-  "/addMode.php",
-  authenticateUser,
-  parseLegacyModeBody,
-  createMode
-);
+router.post("/addMode.php", authenticateUser, parseLegacyModeBody, createMode);
 
 router.post(
   "/updateMode.php",
   authenticateUser,
   parseLegacyModeBody,
-  updateMode
+  updateMode,
 );
 
 router.post(
   "/deleteMode.php",
   authenticateUser,
   parseLegacyModeBody,
-  deleteMode
+  deleteMode,
 );
-
 
 /* =====================================================
    LEGACY LEARNING MODULE ROUTES
 ===================================================== */
 
-router.get(
-  "/adminLearningModule.php",
-  handleLegacyLearningModule
-);
+router.get("/adminLearningModule.php", handleLegacyLearningModule);
 
 router.post(
   "/adminLearningModule.php",
   authenticateUser,
-  handleLegacyLearningModule
+  handleLegacyLearningModule,
 );
-
 
 /* =====================================================
    EXPORT
