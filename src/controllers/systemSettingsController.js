@@ -79,6 +79,212 @@ function validateSettings(settings) {
     return "Invalid semester.";
   }
   return "";
+  if (!row) {
+    return null;
+  }
+  return {
+    settingId: row.setting_id,
+    systemName: row.system_name || "PuffyBrain",
+    academicYear: row.academic_year || "",
+    semester: row.semester || "",
+    maintenanceMode:
+      Boolean(row.maintenance_mode),
+    requirePasswordChange:
+      Boolean(row.require_password_change),
+    professorApproval:
+      Boolean(row.professor_approval),
+    practiceQuizEnabled:
+      Boolean(row.practice_quiz_enabled),
+    mainQuizEnabled:
+      Boolean(row.main_quiz_enabled),
+    recordPracticeQuiz:
+      Boolean(row.record_practice_quiz),
+    recordMainQuiz:
+      Boolean(row.record_main_quiz),
+    adaptiveQuizEnabled:
+      Boolean(row.adaptive_quiz_enabled),
+    quizAnalysisEnabled:
+      Boolean(row.quiz_analysis_enabled),
+    enrollmentApproval:
+      Boolean(row.enrollment_approval),
+    enrollmentAcceptedEmail:
+      Boolean(row.enrollment_accepted_email),
+    enrollmentDeclinedEmail:
+      Boolean(row.enrollment_declined_email),
+    enrollmentSystemNotification:
+      Boolean(row.enrollment_system_notification),
+    professorApprovalNotification:
+      Boolean(
+        row.professor_approval_notification
+      ),
+    announcementsEnabled:
+      Boolean(row.announcements_enabled),
+    updatedBy:
+      row.updated_by || null,
+    createdAt:
+      row.created_at || null,
+    updatedAt:
+      row.updated_at || null,
+
+    passingPercentage:
+  row.passing_percentage == null
+    ? null
+    : Number(row.passing_percentage),
+
+        semesterStartDate:
+        row.semester_start_date || null,
+
+        semesterEndDate:
+        row.semester_end_date || null,
+
+        schoolYearStartDate:
+        row.school_year_start_date || null,
+
+        schoolYearEndDate:
+        row.school_year_end_date || null,
+  };
+}
+function payloadToSettings(body = {}) {
+  return {
+    systemName:
+      cleanText(body.systemName) ||
+      "PuffyBrain",
+    academicYear:
+      cleanText(body.academicYear),
+    semester:
+      cleanText(body.semester),
+    maintenanceMode:
+      toBoolean(body.maintenanceMode),
+    requirePasswordChange:
+      toBoolean(
+        body.requirePasswordChange
+      ),
+    professorApproval:
+      toBoolean(body.professorApproval),
+    practiceQuizEnabled:
+      toBoolean(
+        body.practiceQuizEnabled
+      ),
+    mainQuizEnabled:
+      toBoolean(body.mainQuizEnabled),
+    recordPracticeQuiz:
+      toBoolean(body.recordPracticeQuiz),
+    recordMainQuiz:
+      toBoolean(body.recordMainQuiz),
+    adaptiveQuizEnabled:
+      toBoolean(
+        body.adaptiveQuizEnabled
+      ),
+    quizAnalysisEnabled:
+      toBoolean(
+        body.quizAnalysisEnabled
+      ),
+    enrollmentApproval:
+      toBoolean(body.enrollmentApproval),
+    enrollmentAcceptedEmail:
+      toBoolean(
+        body.enrollmentAcceptedEmail
+      ),
+    enrollmentDeclinedEmail:
+      toBoolean(
+        body.enrollmentDeclinedEmail
+      ),
+    enrollmentSystemNotification:
+      toBoolean(
+        body.enrollmentSystemNotification
+      ),
+    professorApprovalNotification:
+      toBoolean(
+        body.professorApprovalNotification
+      ),
+    announcementsEnabled:
+      toBoolean(
+        body.announcementsEnabled
+      ),
+
+    passingPercentage:
+            body.passingPercentage === "" ||
+            body.passingPercentage == null
+                ? null
+                : Number(body.passingPercentage),
+
+            semesterStartDate:
+            cleanText(body.semesterStartDate) || null,
+
+            semesterEndDate:
+            cleanText(body.semesterEndDate) || null,
+
+            schoolYearStartDate:
+            cleanText(body.schoolYearStartDate) || null,
+
+            schoolYearEndDate:
+            cleanText(body.schoolYearEndDate) || null,
+  };
+}
+function validateSettings(settings) {
+  if (!settings.systemName) {
+    return "System name is required.";
+  }
+  if (!settings.academicYear) {
+    return "Academic year is required.";
+  }
+  const allowedSemesters = [
+    "1st Semester",
+    "2nd Semester",
+    "Summer",
+  ];
+  if (
+    !allowedSemesters.includes(
+      settings.semester
+    )
+  ) {
+    return "Invalid semester.";
+  }
+
+    if (
+        settings.passingPercentage !== null &&
+        (
+            !Number.isFinite(settings.passingPercentage) ||
+            settings.passingPercentage < 0 ||
+            settings.passingPercentage > 100
+        )
+        ) {
+        return "Passing percentage must be between 0 and 100.";
+        }
+
+        const dateFields = [
+        ["semesterStartDate", "semesterEndDate"],
+        ["schoolYearStartDate", "schoolYearEndDate"],
+        ];
+
+        for (const [startKey, endKey] of dateFields) {
+        const start = settings[startKey];
+        const end = settings[endKey];
+
+        if (Boolean(start) !== Boolean(end)) {
+            return "Both start and end dates are required.";
+        }
+
+        for (const value of [start, end]) {
+            if (!value) continue;
+
+            if (
+            !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+            !Number.isFinite(Date.parse(`${value}T00:00:00Z`)) ||
+            new Date(`${value}T00:00:00Z`)
+                .toISOString()
+                .slice(0, 10) !== value
+            ) {
+            return "Invalid academic calendar date.";
+            }
+        }
+
+        if (start && end && start > end) {
+            return "Academic calendar start date must be before end date.";
+        }
+        }
+
+  return "";
 }
 /* =====================================================
    GET CHANGED SETTINGS
