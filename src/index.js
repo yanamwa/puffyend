@@ -12,6 +12,7 @@ import notificationRoutes from "./routes/notificationRoutes.js";
 import systemAnalyticsRoutes from "./routes/systemAnalyticsRoutes.js";
 import backupRoutes from "./routes/backupRoutes.js";
 import systemSettingsRoutes from "./routes/systemSettingsRoutes.js";
+import reportRoutes from "./routes/reportRoutes.js";
 
 import { initDb } from "./db.js";
 import { startLessonWorker } from './services/rag/lessonJobService.js';
@@ -293,6 +294,16 @@ app.use(
   "/api/system-settings",
   systemSettingsRoutes
 );
+
+/* =========================================
+   ADMIN REPORTS
+========================================= */
+
+app.use(
+  "/api/reports",
+  reportRoutes
+);
+
 /* =========================================
    404
 ========================================= */

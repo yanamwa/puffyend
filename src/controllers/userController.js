@@ -341,23 +341,53 @@ async function sendUpdatedProfile(email, res) {
   });
 }
 
+
 export async function getUsers(_req, res) {
   try {
     const [rows] = await db.execute(
-      `SELECT userId AS id, email, role, name, display_name, year_level,
-      section_name, onboarding_completed, is_verified, verification_id,
-      student_id, gender, professor_id, professor_faculty_id, professor_department,
-      professor_position, professor_specialization,
-      professor_employment_proof, verification_status, is_archived,
-      archived_at, must_change_password, is_temporary, temporary_expires_at,
-      created_at, last_active
+      `SELECT
+        userId AS id,
+        email,
+        role,
+        name,
+        display_name,
+        profile_image,
+        year_level,
+        section_name,
+        onboarding_completed,
+        is_verified,
+        verification_id,
+        student_id,
+        gender,
+        professor_id,
+        professor_faculty_id,
+        professor_department,
+        professor_position,
+        professor_specialization,
+        professor_employment_proof,
+        verification_status,
+        is_archived,
+        archived_at,
+        must_change_password,
+        is_temporary,
+        temporary_expires_at,
+        created_at,
+        last_active
       FROM users
       ORDER BY userId DESC`
     );
 
     return res.json({
       success: true,
-      users: rows.map(rowToUser),
+      users: rows.map((row) => {
+        const user = rowToUser(row);
+
+        return {
+          ...user,
+          profileImage: row.profile_image || "",
+          profile_image: row.profile_image || "",
+        };
+      }),
     });
   } catch (error) {
     console.error("Get users error:", error);

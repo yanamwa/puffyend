@@ -61,6 +61,23 @@ function rowToSettings(row) {
       row.created_at || null,
     updatedAt:
       row.updated_at || null,
+
+    passingPercentage:
+  row.passing_percentage == null
+    ? null
+    : Number(row.passing_percentage),
+
+        semesterStartDate:
+        row.semester_start_date || null,
+
+        semesterEndDate:
+        row.semester_end_date || null,
+
+        schoolYearStartDate:
+        row.school_year_start_date || null,
+
+        schoolYearEndDate:
+        row.school_year_end_date || null,
   };
 }
 function payloadToSettings(body = {}) {
@@ -120,6 +137,24 @@ function payloadToSettings(body = {}) {
       toBoolean(
         body.announcementsEnabled
       ),
+
+    passingPercentage:
+            body.passingPercentage === "" ||
+            body.passingPercentage == null
+                ? null
+                : Number(body.passingPercentage),
+
+            semesterStartDate:
+            cleanText(body.semesterStartDate) || null,
+
+            semesterEndDate:
+            cleanText(body.semesterEndDate) || null,
+
+            schoolYearStartDate:
+            cleanText(body.schoolYearStartDate) || null,
+
+            schoolYearEndDate:
+            cleanText(body.schoolYearEndDate) || null,
   };
 }
 function validateSettings(settings) {
@@ -141,6 +176,50 @@ function validateSettings(settings) {
   ) {
     return "Invalid semester.";
   }
+
+    if (
+        settings.passingPercentage !== null &&
+        (
+            !Number.isFinite(settings.passingPercentage) ||
+            settings.passingPercentage < 0 ||
+            settings.passingPercentage > 100
+        )
+        ) {
+        return "Passing percentage must be between 0 and 100.";
+        }
+
+        const dateFields = [
+        ["semesterStartDate", "semesterEndDate"],
+        ["schoolYearStartDate", "schoolYearEndDate"],
+        ];
+
+        for (const [startKey, endKey] of dateFields) {
+        const start = settings[startKey];
+        const end = settings[endKey];
+
+        if (Boolean(start) !== Boolean(end)) {
+            return "Both start and end dates are required.";
+        }
+
+        for (const value of [start, end]) {
+            if (!value) continue;
+
+            if (
+            !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+            !Number.isFinite(Date.parse(`${value}T00:00:00Z`)) ||
+            new Date(`${value}T00:00:00Z`)
+                .toISOString()
+                .slice(0, 10) !== value
+            ) {
+            return "Invalid academic calendar date.";
+            }
+        }
+
+        if (start && end && start > end) {
+            return "Academic calendar start date must be before end date.";
+        }
+        }
+
   return "";
 }
 /* =====================================================
