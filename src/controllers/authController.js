@@ -167,6 +167,8 @@ function authUserPayload(user) {
     sectionName: user.section_name || "",
 
     section_name: user.section_name || "",
+    course: user.course || "",
+    program: user.course || "",
 
     professorDepartment: user.professor_department || "",
 

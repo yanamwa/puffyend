@@ -203,20 +203,39 @@ export async function generateGroundedPage(
   let feedback = "",
     previousDraft = null,
     previousReview = null;
+  let approvedStatements = [];
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const draft = await generate({
+      const coveredIds = new Set(approvedStatements.flatMap(s => s.point_ids));
+      const remainingPoints = topic.key_points.filter(p => !coveredIds.has(p.id));
+      const repairTopic = { title: topic.title, key_points: remainingPoints };
+      const generatedDraft = await generate({
         schema: pageSchema,
-        instruction:
-          "Write one readable lesson page. Cover every required key point. Each statement must contain only claims directly supported by the supplied evidence quotes. Select evidence_ids from the supplied evidence list to cite; cite multiple adjacent passages when a sentence or explanation spans passages. Every detail in the statement must be present in those selected passages; do not write quotes. The key-point text is a coverage target, not evidence: if it overstates the quote, use only the supported meaning. Prefer one short factual statement per point; avoid extra explanations, implications, and absolute claims. During repair, preserve supported statements and correct rejected ones using the reviewer reasons. Use concise paragraphs. Title max 100 characters; total text max 6000 characters. Do not invent examples or facts.",
+        instruction: [
+          "Write one readable lesson page.",
+          "Cover every required key point.",
+          "Each statement must contain only claims directly supported by the supplied evidence quotes.",
+          "Select evidence_ids from the supplied evidence list to cite; cite multiple adjacent passages when a sentence or explanation spans passages.",
+          "Every detail in the statement must be present in those selected passages; do not write quotes.",
+          "The key-point text is a coverage target, not evidence: if it overstates the quote, use only the supported meaning.",
+          "Prefer one short factual statement per point; avoid extra explanations, implications, and absolute claims.",
+          "During repair, write ONLY replacements for the remaining key points. Approved statements are retained by the server; do not repeat them. Correct rejected claims using reviewer reasons. Remove unsupported counts, examples, or absolute claims; state the supported definition instead.",
+          "Use concise paragraphs.",
+          "Title max 100 characters; total text max 6000 characters.",
+          "Do not invent examples or facts.",
+        ].join(" "),
         data: {
-          topic: { title: topic.title, key_points: topic.key_points },
+          topic: repairTopic,
           evidence: buildEvidence(context),
           correction: feedback,
           previous_draft: previousDraft,
           previous_review: previousReview,
         },
       });
+      const draft = {
+        ...generatedDraft,
+        statements: [...approvedStatements, ...(generatedDraft.statements || [])],
+      };
       previousDraft = draft;
       previousReview = null;
       const page = validatePage(
@@ -226,11 +245,26 @@ export async function generateGroundedPage(
       );
       const review = await generate({
         schema: reviewSchema,
-        instruction:
-          "Audit every statement independently. supported is true only when ALL factual claims follow from the exact cited quotes, without relying on prior knowledge. A point is covered only when its essential meaning is stated accurately. Return one verdict per zero-based statement index. Be conservative.",
+        instruction: [
+          "Audit every statement independently.",
+          "supported is true only when ALL factual claims follow from the exact cited quotes, without relying on prior knowledge.",
+          "A point is covered only when its essential meaning is stated accurately.",
+          "Return one verdict per zero-based statement index.",
+          "Be conservative.",
+        ].join(" "),
         data: { key_points: topic.key_points, statements: page.statements },
       });
       previousReview = review;
+      // Lock only complete, unambiguously supported statements. Rejected or
+      // partially covered statements are regenerated without changing good ones.
+      if (Array.isArray(review?.verdicts) && review.verdicts.length === page.statements.length &&
+          new Set(review.verdicts.map(v => v.statement_index)).size === page.statements.length) {
+        approvedStatements = draft.statements.filter((statement, index) => {
+          const verdict = review.verdicts.find(v => v.statement_index === index);
+          return verdict?.supported === true && Array.isArray(verdict.covered_point_ids) &&
+            statement.point_ids.every(id => verdict.covered_point_ids.includes(id));
+        });
+      }
       const covered = validateReview(review, page, topic);
       const sources = [
         ...new Map(
@@ -255,10 +289,9 @@ export async function generateGroundedPage(
       feedback = error.message;
     }
   }
+  console.warn("Lesson grounding repair exhausted", { topic: topic.title, reason: feedback });
   throw Object.assign(
-    new Error(
-      `Lesson failed grounding checks after two repairs for topic "${topic.title}": ${feedback}`,
-    ),
-    { statusCode: 422 },
+    new Error(`We couldn't verify all the source details for "${topic.title}". Your uploaded files are still available. Try generating again, or upload a clearer source that explains this topic.`),
+    { statusCode: 422, code: "LESSON_GROUNDING_FAILED", cause: new Error(feedback) },
   );
 }

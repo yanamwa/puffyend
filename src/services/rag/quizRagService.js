@@ -327,18 +327,60 @@ export async function generateQuizBatch(
         schema,
         instruction: mainPrompt
           ? mainPrompt +
-            "\nThis is a batch of the full quiz: generate only the assigned slots in order. Each slot fixes topic, type, cognitive_level and thinking_skill. Include evidence_ids for each question from the supplied evidence. Do not repeat previous_questions. Keep fields under 500 characters. Repair rejected questions using correction and reviewer reasons."
+            [
+              "\nThis is a batch of the full quiz: generate only the assigned slots in order.",
+              "Each slot fixes topic, type, cognitive_level and thinking_skill.",
+              "Include evidence_ids for each question from the supplied evidence.",
+              "Do not repeat previous_questions.",
+              "Keep fields under 500 characters.",
+              "Repair rejected questions using correction and reviewer reasons.",
+            ].join(" ")
           : skills.length
-            ? `You are an educational practice quiz generator. Generate exactly ${types.length} questions in the assigned types and thinking_skills order for this batch; the quiz-wide distribution is supplied separately. Use ONLY retrieved source evidence and lesson content supported by that evidence. Objectives are learning targets, never evidence. Every question must be directly supported by cited evidence_ids. Avoid duplicate or nearly identical questions. Keep grammar clear and explanations concise and educational. Do not refer to the text above or the provided lesson. LOTS assesses Remember, Understand, Apply; HOTS assesses Analyze, Evaluate, Create. Each question needs exactly one matching cognitive_level and thinking_skill. Assign a short consistent topic supported by the source; use the same topic name for the same concept. Multiple choice: exactly four plain options without letter prefixes, one correct answer, believable but clearly incorrect distractors. Identification: options=[], one unique short expected answer, do not reveal it in the question. True/False: options exactly ["True", "False"], correct_answer exactly True or False. Return question, type, options, correct_answer, explanation, topic, cognitive_level, thinking_skill, evidence_ids in valid JSON. Keep fields under 500 characters and identification answers under 150. Repair rejected questions using reviewer reasons.`
-            : "Generate exactly the requested question types in the supplied order using ONLY evidence. Cite evidence IDs; never write quotes. Multiple choice needs four distinct options with exactly one supported correct answer. Identification asks for one clearly defined term or short phrase, uses options=[], and must not reveal the answer in the question. Keep every field under 500 characters and identification answers under 150. Explanations and correct answers must follow from selected evidence. Cite adjacent passages when needed. Do not invent facts, scenarios, or True/False questions. Avoid duplicates. Difficulty changes reasoning depth, not source fidelity. Objectives are targets, never evidence. Repair rejected questions using reviewer reasons.",
+            ? [
+                `You are an educational practice quiz generator.`,
+                `Generate exactly ${types.length} questions in the assigned types and thinking_skills order for this batch; the quiz-wide distribution is supplied separately.`,
+                `Use ONLY retrieved source evidence and lesson content supported by that evidence.`,
+                `Objectives are learning targets, never evidence.`,
+                `Every question must be directly supported by cited evidence_ids.`,
+                `Avoid duplicate or nearly identical questions.`,
+                `Keep grammar clear and explanations concise and educational.`,
+                `Do not refer to the text above or the provided lesson.`,
+                `LOTS assesses Remember, Understand, Apply; HOTS assesses Analyze, Evaluate, Create.`,
+                `Each question needs exactly one matching cognitive_level and thinking_skill.`,
+                `Assign a short consistent topic supported by the source; use the same topic name for the same concept.`,
+                `Multiple choice: exactly four plain options without letter prefixes, one correct answer, believable but clearly incorrect distractors.`,
+                `Identification: options=[], one unique short expected answer, do not reveal it in the question.`,
+                `True/False: options exactly ["True", "False"], correct_answer exactly True or False.`,
+                `Return question, type, options, correct_answer, explanation, topic, cognitive_level, thinking_skill, evidence_ids in valid JSON.`,
+                `Keep fields under 500 characters and identification answers under 150.`,
+                `Repair rejected questions using reviewer reasons.`,
+              ].join(" ")
+            : [
+                "Generate exactly the requested question types in the supplied order using ONLY evidence.",
+                "Cite evidence IDs; never write quotes.",
+                "Multiple choice needs four distinct options with exactly one supported correct answer.",
+                "Identification asks for one clearly defined term or short phrase, uses options=[], and must not reveal the answer in the question.",
+                "Keep every field under 500 characters and identification answers under 150.",
+                "Explanations and correct answers must follow from selected evidence.",
+                "Cite adjacent passages when needed.",
+                "Do not invent facts, scenarios, or True/False questions.",
+                "Avoid duplicates.",
+                "Difficulty changes reasoning depth, not source fidelity.",
+                "Objectives are targets, never evidence.",
+                "Repair rejected questions using reviewer reasons.",
+              ].join(" "),
         data: {
           title,
           objectives,
           types,
           difficulty,
           assigned_slots: slots,
-          slot_instruction:
-            "Return questions in assigned_slots order. Each slot fixes the type and thinking_skill; use only its allowed cognitive levels. topic must be a short source-supported label (1–100 characters). Do not replace assigned skills with your preferred distribution.",
+          slot_instruction: [
+            "Return questions in assigned_slots order.",
+            "Each slot fixes the type and thinking_skill; use only its allowed cognitive levels.",
+            "topic must be a short source-supported label (1–100 characters).",
+            "Do not replace assigned skills with your preferred distribution.",
+          ].join(" "),
           ...(mainPrompt ? { previous_questions: previousQuestions } : {}),
           ...(skills.length
             ? {
@@ -360,8 +402,15 @@ export async function generateQuizBatch(
         validateAdaptiveQuestions(questions, assignedSlots, previousQuestions);
       const review = await generate({
         schema: reviewSchema,
-        instruction:
-          "Independently audit every question against its exact source quotes. supported=true only if the question is answerable, the correct answer and ALL explanation claims follow from the quotes, and multiple choice has exactly one correct option (check every distractor for ambiguity). Identification must have a unique short answer and must not reveal it. For True/False, check the truth value from evidence. For practice questions also verify that the topic is supported and the cognitive level reflects the actual reasoning required, with LOTS=Remember/Understand/Apply and HOTS=Analyze/Evaluate/Create. Do not rely on prior knowledge. Return one verdict per zero-based question_index with a specific reason for any rejection.",
+        instruction: [
+          "Independently audit every question against its exact source quotes.",
+          "supported=true only if the question is answerable, the correct answer and ALL explanation claims follow from the quotes, and multiple choice has exactly one correct option (check every distractor for ambiguity).",
+          "Identification must have a unique short answer and must not reveal it.",
+          "For True/False, check the truth value from evidence.",
+          "For practice questions also verify that the topic is supported and the cognitive level reflects the actual reasoning required, with LOTS=Remember/Understand/Apply and HOTS=Analyze/Evaluate/Create.",
+          "Do not rely on prior knowledge.",
+          "Return one verdict per zero-based question_index with a specific reason for any rejection.",
+        ].join(" "),
         data: { questions },
       });
       previousReview = review;

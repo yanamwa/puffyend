@@ -26,3 +26,5 @@ Thumbs.db
 
 # Uploads (optional)
 uploads/
+# Private catalog PDFs
+src/private/

@@ -143,7 +143,18 @@ export async function createSemanticOutline(
     for (let attempt = 0; attempt < 3 && !part; attempt++) {
       const raw = await generateJson({
         schema,
-        instruction: `Organize the evidence into meaningful teaching topics, respecting headings and conceptual boundaries. Extract the important definitions, mechanisms, steps, and distinctions as key points. For each point select one supplied evidence_id that directly supports the point. Do not write quotations or invent IDs. Every supplied chunk must contribute at least one key point. Return 1-${topicLimit} topics and 1-16 key points per topic. Prefer 2-6 points per topic. Group related points rather than creating a topic for every sentence. Do not invent facts. Metadata describes this source window.`,
+        instruction: [
+          `Organize the evidence into meaningful teaching topics, respecting headings and conceptual boundaries.`,
+          `Extract the important definitions, mechanisms, steps, and distinctions as key points.`,
+          `For each point select one supplied evidence_id that directly supports the point.`,
+          `Do not write quotations or invent IDs.`,
+          `Every supplied chunk must contribute at least one key point.`,
+          `Return 1-${topicLimit} topics and 1-16 key points per topic.`,
+          `Prefer 2-6 points per topic.`,
+          `Group related points rather than creating a topic for every sentence.`,
+          `Do not invent facts.`,
+          `Metadata describes this source window.`,
+        ].join(" "),
         data: { evidence: buildEvidence(window), correction: feedback },
       });
       try {

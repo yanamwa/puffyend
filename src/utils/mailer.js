@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { renderQuizResultEmail } from "./quizResultEmail.js";
 
 function getSmtpConfig() {
   const port = Number(process.env.OTP_SMTP_PORT);
@@ -60,6 +61,19 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+export async function sendQuizResultEmail(email, subject, report, result) {
+  const { transporter, from } = createSmtpMailer();
+  const info = await transporter.sendMail({
+    from,
+    to: email,
+    subject,
+    text: report,
+    html: renderQuizResultEmail(result),
+  });
+  if (!info.accepted?.length)
+    throw new Error("The mail server did not accept the recipient.");
 }
 
 export async function sendOtpEmail(email, name, otp) {

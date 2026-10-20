@@ -1,3 +1,6 @@
+import { studentCourseContent } from "../services/modulePublication.js";
+import { mergeModuleContent } from "../services/courseModulePersistence.js";
+import { resolveClassCatalog, classPeriod } from "../services/classCatalogService.js";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 
@@ -45,6 +48,8 @@ function getCourseSelect(idColumn, summaryOnly = false) {
   if (!summaryOnly) return "c.*";
 
   return `c.${idColumn} AS course_pk,
+         c.content_modules, c.catalog_id, c.catalog_code, c.syllabus_version_id, c.class_name,
+         c.academic_year, c.semester, c.program, c.year_level, c.section_name,
          c.title,
          c.code,
          c.summary,
@@ -346,6 +351,7 @@ function normalizeContentModule(module, index) {
   );
 
   return {
+    ...(module?.studentPublished !== undefined ? { studentPublished: module.studentPublished === true } : {}),
     id:
       module?.id ||
       module?.lesson_id ||
@@ -587,7 +593,7 @@ function rowToCourse(row, learningModules = []) {
   const courseId = getCourseId(row);
   const storedLessonPages = parseJsonList(row.lesson_pages);
   const storedQuizItems = parseJsonList(row.quiz_items);
-  const contentModules = buildCourseContentModules(
+  const derivedModules = buildCourseContentModules(
     learningModules,
     storedLessonPages,
     storedQuizItems,
@@ -596,6 +602,9 @@ function rowToCourse(row, learningModules = []) {
       learningObjectives: row.learning_objectives || "",
     },
   );
+  const contentModules = row.content_modules == null
+    ? derivedModules
+    : mergeModuleContent(parseJsonList(row.content_modules).map(normalizeContentModule),derivedModules);
   const fallbackLessonPages = contentModules.flatMap(
     (module) => module.lessonPages || [],
   );
@@ -618,6 +627,15 @@ function rowToCourse(row, learningModules = []) {
   return {
     id: courseId,
     course_id: courseId,
+    catalogId: row.catalog_id || null,
+    catalogCode: row.catalog_code || "",
+    syllabusVersionId: row.syllabus_version_id || null,
+    className: row.class_name || "",
+    academicYear: row.academic_year || "",
+    semester: row.semester || "",
+    program: row.program || "",
+    yearLevel: row.year_level || "",
+    sectionName: row.section_name || "",
     courseName,
     course_name: courseName,
     title: courseName,
@@ -934,19 +952,9 @@ function validateCourse(fields) {
   if (fields.status !== "published") return "";
   if (!fields.summary || !fields.subject)
     return "Course description and subject are required to publish.";
-  if (!fields.learningObjectives || fields.lessonPages.length === 0) {
-    return "Learning objectives and at least one lesson page are required to publish.";
-  }
-  if (
-    fields.contentModules.some(
-      (module) =>
-        !module.title ||
-        !module.learningObjectives ||
-        !module.lessonPages.length,
-    )
-  ) {
-    return "Complete every module before publishing the course.";
-  }
+  // Courses can be released progressively; empty modules are valid placeholders.
+  if (fields.contentModules.some(module => !module.title))
+    return "Each module needs a title before publishing.";
   return "";
 }
 
@@ -958,6 +966,7 @@ function duplicateCourseCode(error) {
 }
 
 async function sendCourseWriteError(res, error, fallbackMessage) {
+  if(error.statusCode) return res.status(error.statusCode).json({success:false,message:error.message});
   if (duplicateCourseCode(error)) {
     return res.status(409).json({
       success: false,
@@ -980,7 +989,11 @@ async function getOrCreateCourse(fields) {
       [fields.courseId],
     );
 
-    if (rows.length > 0) return rows[0];
+    if (rows.length > 0) {
+      if ((fields.professorId || fields.professorEmail) && !courseMatchesProfessorFields(rows[0],fields))
+        throw Object.assign(new Error("You cannot edit this course."),{statusCode:403});
+      return rows[0];
+    }
   }
 
   const [existing] = await db.execute(
@@ -1000,6 +1013,8 @@ async function getOrCreateCourse(fields) {
       error.code = "ER_DUP_ENTRY";
       throw error;
     }
+
+    if(existing[0].catalog_id) return existing[0];
 
     await db.execute(
       `UPDATE courses
@@ -1042,36 +1057,7 @@ async function getOrCreateCourse(fields) {
     return updated[0];
   }
 
-  const [result] = await db.execute(
-    `INSERT INTO courses
-     (title, code, summary, subject, professor_id, course_name, description,
-      course_code, status, visibility, join_link, archived, professor_name,
-      professor_email, professor_department, professor_profile_image)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
-    [
-      fields.courseName,
-      fields.courseCode,
-      fields.courseDescription,
-      fields.courseName,
-      fields.professorId,
-      fields.courseName,
-      fields.courseDescription,
-      fields.courseCode,
-      fields.courseStatus,
-      fields.courseVisibility,
-      `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`,
-      fields.professorName,
-      fields.professorEmail,
-      fields.professorDepartment,
-      fields.professorProfileImage,
-    ],
-  );
-
-  const [rows] = await db.execute(
-    `SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`,
-    [result.insertId],
-  );
-  return rows[0];
+  throw Object.assign(new Error("Create a class from an active catalog course before adding modules."),{statusCode:400});
 }
 
 async function getCourseLearningModules(courseIds) {
@@ -1229,7 +1215,7 @@ export async function getCourses(req, res) {
 
     return res.json({
       success: true,
-      courses,
+      courses: currentUser && ["professor", "admin", "super_admin", "superadmin"].includes(normalizeRole(currentUser.role)) ? courses : courses.map(studentCourseContent),
     });
   } catch (error) {
     console.error("Get courses error:", error);
@@ -1317,7 +1303,7 @@ export async function getEnrolledCourses(req, res) {
 
     return res.json({
       success: true,
-      courses,
+      courses: courses.map(studentCourseContent),
     });
   } catch (error) {
     console.error("Get enrolled courses error:", error);
@@ -1791,6 +1777,7 @@ export async function getCourseEnrollments(req, res) {
          u.display_name AS displayName,
          u.email,
          u.gender,
+         u.course AS course,
          u.year_level AS yearLevel,
          u.section_name AS sectionName,
          u.profile_image AS profileImage
@@ -2251,7 +2238,7 @@ export async function getCourseById(req, res) {
 
     return res.json({
       success: true,
-      course,
+      course: currentUser && ["professor", "admin", "super_admin", "superadmin"].includes(normalizeRole(currentUser.role)) ? course : studentCourseContent(course),
     });
   } catch (error) {
     console.error("Get course error:", error);
@@ -2505,32 +2492,33 @@ export async function getLearningModuleById(req, res) {
 }
 
 export async function createCourse(req, res) {
-  let fields = payloadToCourseFields(req.body);
-  const validationMessage = validateCourse(fields);
-
-  if (validationMessage) {
-    return res.status(400).json({
-      success: false,
-      message: validationMessage,
-    });
-  }
-
+  let connection;
   try {
-    fields = await applyAuthenticatedProfessorFields(req, fields);
-
+    const ownerFields = await applyAuthenticatedProfessorFields(req, payloadToCourseFields(req.body));
     const idColumn = await getCourseIdColumn();
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const {course: catalog, versionId, joinCode} = await resolveClassCatalog(connection, req.body);
+    const period = classPeriod(req.body);
+    let fields = payloadToCourseFields({...req.body, title: catalog.title, courseName: catalog.title,
+      code: joinCode, courseCode: joinCode, course_code: joinCode,
+      summary: catalog.description || req.body.summary || '', description: catalog.description || req.body.description || '', subject: catalog.title});
+    const validationMessage = validateCourse(fields);
+    if(validationMessage) throw Object.assign(new Error(validationMessage), {statusCode:400});
+    for (const key of ["professorId", "professorName", "professorEmail", "professorDepartment", "professorProfileImage"]) fields[key] = ownerFields[key];
     const lessonPages = toJsonList(fields.lessonPages);
     const quizItems = toJsonList(fields.quizItems);
     const joinLink = `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`;
 
-    const [result] = await db.execute(
+    const [result] = await connection.execute(
       `INSERT INTO courses
        (title, code, summary, subject, professor_id, course_name, description,
         course_code, learning_objectives, status, visibility, lesson_pages,
         quiz_items, students, modules, quizzes, join_link, archived,
         professor_name, professor_email, professor_department,
-        professor_profile_image)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        professor_profile_image, catalog_id, syllabus_version_id, catalog_code,
+        class_name, academic_year, semester, program, year_level, section_name, content_modules)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         fields.title,
         fields.courseCode,
@@ -2554,15 +2542,21 @@ export async function createCourse(req, res) {
         fields.professorEmail,
         fields.professorDepartment,
         fields.professorProfileImage,
+        catalog.catalog_id, versionId, catalog.code, period.class_name, period.academic_year,
+        period.semester, period.program, period.year_level, period.section_name,
+        JSON.stringify(fields.contentModules),
       ],
     );
 
-    const [rows] = await db.execute(
+    const [rows] = await connection.execute(
       `SELECT * FROM courses WHERE ${idColumn} = ? LIMIT 1`,
       [result.insertId],
     );
     const course = rowToCourse(rows[0], []);
 
+    await connection.commit();
+    connection.release();
+    connection = null;
     await logAuditFromRequest(req, {
       category: "Course Management",
       action: "Created Course",
@@ -2579,9 +2573,11 @@ export async function createCourse(req, res) {
       course,
     });
   } catch (error) {
+    if(connection) await connection.rollback();
+    if(error.statusCode) return res.status(error.statusCode).json({success:false,message:error.message});
     console.error("Create course error:", error);
     return sendCourseWriteError(res, error, "Failed to add course.");
-  }
+  } finally {connection?.release();}
 }
 
 export async function createLearningModule(req, res) {
@@ -2692,6 +2688,13 @@ export async function updateCourse(req, res) {
     fields = await applyAuthenticatedProfessorFields(req, fields);
 
     const idColumn = await getCourseIdColumn();
+    const [[existingClass]] = await db.execute(`SELECT * FROM courses WHERE ${idColumn}=?`,[id]);
+    if(existingClass?.catalog_id) {
+      fields.title=existingClass.title;
+      fields.courseCode=existingClass.code;
+      fields.subject=existingClass.subject;
+    }
+    const period = classPeriod({...existingClass,...req.body});
     const lessonPages = toJsonList(fields.lessonPages);
     const quizItems = toJsonList(fields.quizItems);
     const joinLink = `/student/join?courseCode=${encodeURIComponent(fields.courseCode)}`;
@@ -2728,7 +2731,9 @@ export async function updateCourse(req, res) {
            professor_name = ?,
            professor_email = ?,
            professor_department = ?,
-           professor_profile_image = ?
+           professor_profile_image = ?,
+           class_name=?,academic_year=?,semester=?,program=?,year_level=?,section_name=?,
+           content_modules=?
        WHERE ${where.join(" AND ")}`,
       [
         fields.title,
@@ -2753,6 +2758,8 @@ export async function updateCourse(req, res) {
         fields.professorEmail,
         fields.professorDepartment,
         fields.professorProfileImage,
+        period.class_name,period.academic_year,period.semester,period.program,period.year_level,period.section_name,
+        (Array.isArray(req.body.contentModules)||Array.isArray(req.body.content_modules)) ? JSON.stringify(fields.contentModules) : existingClass.content_modules == null ? null : JSON.stringify(parseJsonList(existingClass.content_modules)),
         ...whereParams,
       ],
     );

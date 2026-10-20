@@ -78,8 +78,38 @@ for (let count = 2; count <= 50; count++) {
       6,
     );
 }
-assert.throws(() =>
-  calculateAdaptiveTos({ ...settings, questionCount: 1 }, answers),
+const shortQuiz = calculateAdaptiveTos(
+  {
+    ...settings,
+    questionCount: 1,
+    multipleChoiceCount: 1,
+    identificationCount: 0,
+    trueFalseCount: 0,
+  },
+  answers,
+);
+assert.equal(shortQuiz.slots.length, 1);
+assert.equal(shortQuiz.slots[0].topic, "Photosynthesis");
+assert.equal(shortQuiz.slots[0].type, "multiple_choice");
+const shortBaseline = calculateAdaptiveTos(
+  {
+    ...settings,
+    questionCount: 2,
+    multipleChoiceCount: 2,
+    identificationCount: 0,
+    trueFalseCount: 0,
+    topics: ["A", "B", "C", "D"],
+  },
+  [],
+  { allowBaseline: true },
+);
+assert.equal(shortBaseline.slots.length, 2);
+assert.equal(
+  shortBaseline.tosDistribution.reduce(
+    (sum, row) => sum + row.question_count,
+    0,
+  ),
+  2,
 );
 assert.throws(() => calculateAdaptiveTos(settings, []));
 const question = {

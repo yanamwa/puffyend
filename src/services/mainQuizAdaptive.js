@@ -129,7 +129,7 @@ export function calculateAdaptiveTos(
   const quotas = apportion(
     settings.questionCount,
     topics.map((topic) => 1 + (100 - (topic.percent ?? 50)) / 100),
-    1,
+    settings.questionCount >= topics.length ? 1 : 0,
   );
   // Baseline assesses both skills; weaker skill gains up to 10 percentage points without removing higher-order assessment.
   const low = performance.skills[0].percent ?? 50,

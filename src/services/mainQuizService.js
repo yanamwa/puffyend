@@ -34,9 +34,15 @@ async function studentAccess(user, courseId, moduleId) {
   if (!enrollments.length)
     throw requestError("You are not enrolled in this course.", 403);
   const [courses] = await db.execute(
-    "SELECT lesson_pages AS lesson_contents, quiz_items AS quiz_contents FROM courses WHERE course_id=?",
+    "SELECT lesson_pages AS lesson_contents, quiz_items AS quiz_contents, content_modules FROM courses WHERE course_id=?",
     [courseId],
   );
+  const publicationModules = parse(courses[0]?.content_modules || "[]");
+  if (publicationModules.some(m => m.studentPublished !== undefined)) {
+    const publishedModule = publicationModules.find(m => String(m.id ?? m.module_id) === String(moduleId));
+    if (publishedModule?.studentPublished !== true)
+      throw requestError("This module has not been uploaded to students yet.", 403);
+  }
   const content = [
     ...parse(courses[0]?.lesson_contents || "[]"),
     ...parse(courses[0]?.quiz_contents || "[]"),
@@ -121,11 +127,6 @@ export async function saveMainConfig(user, body) {
         .map((item) => item.topic.trim()),
     ),
   ];
-  if (topics.length > settings.questionCount)
-    throw requestError(
-      "Increase Total Questions to cover all module topics.",
-      400,
-    );
   const config = {
     ...settings,
     topics,
@@ -775,6 +776,18 @@ export async function mainQuizStatus(user, courseId, moduleId) {
     [Number(courseId), String(moduleId), user.userId],
   );
   if (results.length) return { taken: true };
-  await studentAccess(user, Number(courseId), String(moduleId));
+  const module = await studentAccess(user, Number(courseId), String(moduleId));
+  const manualQuestions = module.mainQuizSettings?.manualQuestions;
+  if (!Array.isArray(manualQuestions) || !manualQuestions.length) {
+    const [configs] = await db.execute(
+      "SELECT course_id FROM main_quiz_configs WHERE course_id=? AND module_id=? LIMIT 1",
+      [Number(courseId), String(moduleId)],
+    );
+    if (!configs.length)
+      throw requestError(
+        "Your professor has not created the Main Quiz for this module yet. Please check back later.",
+        409,
+      );
+  }
   return { taken: false };
 }

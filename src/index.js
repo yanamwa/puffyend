@@ -1,3 +1,5 @@
+import academicCalendarRoutes from "./routes/academicCalendarRoutes.js";
+import { migrateAcademicCalendar } from "./migrations/academicCalendarMigration.js";
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -6,6 +8,9 @@ import { fileURLToPath } from "node:url";
 
 import authRoutes from "./routes/authRoutes.js";
 import courseRoutes from "./routes/courseRoutes.js";
+import catalogRoutes, { cleanupSyllabusUploads } from "./routes/catalogRoutes.js";
+import { migrateCourseCatalog } from "./migrations/courseCatalogMigration.js";
+import { db } from "./db.js";
 import userRoutes from "./routes/userRoutes.js";
 import lessonRoutes from "./routes/lessonRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
@@ -204,6 +209,8 @@ app.use("/api", authRoutes);
 /*
   Course routes
 */
+app.use("/api/academic-calendars", academicCalendarRoutes);
+app.use("/api/catalog", catalogRoutes);
 app.use("/api", courseRoutes);
 
 /*
@@ -295,6 +302,10 @@ async function startServer() {
     console.log("Connecting to MySQL...");
 
     await initDb();
+    await migrateCourseCatalog(db);
+    await migrateAcademicCalendar(db);
+    await cleanupSyllabusUploads();
+    setInterval(() => cleanupSyllabusUploads().catch(console.error), 3600000).unref();
     startLessonWorker();
 
     console.log("MySQL Connected Successfully.");

@@ -1,3 +1,4 @@
+import { requireRole } from "../middleware/roleMiddleware.js";
 import express from "express";
 
 import {
@@ -39,6 +40,7 @@ import {
   generateAdaptiveFeedback,
   getCourseMonitoring,
   getAssessmentAttempts,
+  emailAssessmentResult,
   getLessonProgress,
   getQuizAttempts,
   saveLessonProgress,
@@ -48,6 +50,11 @@ import {
 import authenticateUser from "../middleware/authMiddleware.js";
 
 const router = express.Router();
+router.post(
+  "/assessment-attempts/:courseId/:attemptId/email",
+  authenticateUser,
+  emailAssessmentResult,
+);
 
 /* =====================================================
    LEGACY MULTIPART PARSER
@@ -133,7 +140,7 @@ router.get("/courses", getCourses);
  * AUDIT:
  * Created Course
  */
-router.post("/courses", authenticateUser, createCourse);
+router.post("/courses", authenticateUser, requireRole("professor", "admin", "super_admin"), createCourse);
 
 /* =====================================================
    COURSE ENROLLMENT
@@ -272,7 +279,7 @@ router.get("/courses/:id", getCourseById);
  * AUDIT:
  * Updated Course
  */
-router.put("/courses/:id", authenticateUser, updateCourse);
+router.put("/courses/:id", authenticateUser, requireRole("professor", "admin", "super_admin"), updateCourse);
 
 /*
  * Archive or restore course.

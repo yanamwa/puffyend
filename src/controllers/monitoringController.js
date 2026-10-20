@@ -1,5 +1,6 @@
 import { assertCourseAccess } from "../services/rag/courseAccessService.js";
 import { db } from "../db.js";
+import { sendQuizResultEmail } from "../utils/mailer.js";
 
 function parseJsonList(value) {
   if (Array.isArray(value)) return value;
@@ -771,12 +772,94 @@ export async function getQuizAttempts(req, res) {
   }
 }
 
+export async function emailAssessmentResult(req, res) {
+  try {
+    const courseId = Number(req.params.courseId);
+    await assertCourseAccess(req.user, courseId);
+    const attemptId = Number(req.params.attemptId);
+    if (!Number.isSafeInteger(attemptId) || attemptId < 1)
+      return res
+        .status(400)
+        .json({ success: false, message: "A saved response is required." });
+    const [rows] = await db.execute(
+      `SELECT a.*, d.assessment_type, d.answers_json,
+       COALESCE(u.display_name,u.name,u.email) AS student_name, u.email,
+       c.title AS course_title
+       FROM quiz_attempts a
+       JOIN users u ON u.userId=a.user_id
+       JOIN courses c ON c.course_id=a.course_id
+       LEFT JOIN quiz_attempt_details d ON d.attempts_id=a.attempts_id
+       WHERE a.attempts_id=? AND a.course_id=?`,
+      [attemptId, courseId],
+    );
+    const row = rows[0];
+    if (!row)
+      return res
+        .status(404)
+        .json({ success: false, message: "Response not found." });
+    if (
+      row.assessment_type !== "main" &&
+      !/main/i.test(`${row.source} ${row.quiz_mode}`)
+    )
+      return res
+        .status(400)
+        .json({ success: false, message: "Select a Main Quiz response." });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email || ""))
+      return res.status(400).json({
+        success: false,
+        message: "The student has no valid email address.",
+      });
+    const answers = parseJsonList(row.answers_json);
+    if (!answers.length)
+      return res.status(409).json({
+        success: false,
+        message: "This response has no saved answer key.",
+      });
+    const report = [
+      row.course_title,
+      "Main Quiz results",
+      `Student: ${row.student_name}`,
+      `Score: ${row.score} / ${row.total}`,
+      "",
+      ...answers.map(
+        (answer, index) =>
+          `${index + 1}. ${answer.question || answer.prompt || `Question ${index + 1}`}\nStudent answer: ${answer.selected_answer ?? answer.selectedAnswer ?? answer.user_answer ?? answer.userAnswer ?? answer.response ?? answer.answer ?? "No answer"}\nCorrect answer: ${answer.correct_answer ?? answer.correctAnswer ?? answer.correct_response ?? "Not recorded"}${answer.explanation ? `\nExplanation: ${answer.explanation}` : ""}`,
+      ),
+    ].join("\n");
+    await sendQuizResultEmail(
+      row.email,
+      `${row.course_title} — Main Quiz results`,
+      report,
+      {
+        courseTitle: row.course_title,
+        studentName: row.student_name,
+        email: row.email,
+        score: row.score,
+        total: row.total,
+        answers,
+      },
+    );
+    return res.json({
+      success: true,
+      message: `Score and answer key sent to ${row.email}.`,
+    });
+  } catch (error) {
+    console.error("Email assessment result:", error.message);
+    return res.status(error.statusCode || 502).json({
+      success: false,
+      message: error.statusCode
+        ? error.message
+        : "Could not send the email. Check the server email settings and try again.",
+    });
+  }
+}
+
 export async function getAssessmentAttempts(req, res) {
   try {
     await assertCourseAccess(req.user, Number(req.params.courseId));
     const [attempts] = await db.execute(
       `SELECT a.*, d.assessment_type, d.answers_json, d.module_index,
-      COALESCE(u.display_name, u.name, u.email) AS student_name
+      COALESCE(u.display_name, u.name, u.email) AS student_name, u.email AS student_email
       FROM quiz_attempts a LEFT JOIN quiz_attempt_details d ON d.attempts_id = a.attempts_id
       LEFT JOIN users u ON u.userId = a.user_id
       WHERE a.course_id = ? ORDER BY a.created_at, a.attempts_id`,

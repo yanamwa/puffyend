@@ -1,3 +1,4 @@
+import { studentMainQuizHistory } from "../services/studentQuizHistory.js";
 import {
   saveMainQuizPreview,
   generateMainQuizPreview,
@@ -39,6 +40,7 @@ const mainHandler = (handler) => async (req, res) => {
     if (!error.statusCode) console.error("Main Quiz:", error.message);
   }
 };
+router.get("/main-quiz/history", authenticateUser, mainHandler((req) => studentMainQuizHistory(req.user, req.query)));
 router.get(
   "/main-quiz/status/:courseId/:moduleId",
   authenticateUser,
