@@ -7,7 +7,7 @@ import jwt from "jsonwebtoken";
 import { db } from "../db.js";
 import { deleteWithSources } from "../services/rag/sourceLifecycleService.js";
 import authenticateUser from "../middleware/authMiddleware.js";
-import { assertCourseAccess } from "../services/rag/courseAccessService.js";
+import { canEditCourse, assertCourseAccess } from "../services/rag/courseAccessService.js";
 
 async function authenticateDeletion(req, res) {
   if (req.user) return true;
@@ -25,7 +25,7 @@ import {
 import { createNotification } from "../utils/notification.js";
 import { logAuditFromRequest } from "../services/auditLogService.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "puffybrain-secret";
+import { JWT_SECRET } from "../config/security.js";
 
 function cleanText(value) {
   return String(value || "").trim();
@@ -103,22 +103,13 @@ function getTokenUser(req) {
   }
 
   try {
-    return jwt.verify(token, JWT_SECRET);
+    return jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
   } catch {
     return null;
   }
 }
 
 function getRequestUserId(req) {
-  const explicitId =
-    req.body?.userId ||
-    req.body?.user_id ||
-    req.query.userId ||
-    req.query.user_id;
-
-  if (explicitId) {
-    return explicitId;
-  }
 
   const decoded = getTokenUser(req);
 
@@ -980,7 +971,7 @@ async function sendCourseWriteError(res, error, fallbackMessage) {
   });
 }
 
-async function getOrCreateCourse(fields) {
+async function getOrCreateCourse(fields, user) {
   const idColumn = await getCourseIdColumn();
 
   if (fields.courseId) {
@@ -992,6 +983,7 @@ async function getOrCreateCourse(fields) {
     if (rows.length > 0) {
       if ((fields.professorId || fields.professorEmail) && !courseMatchesProfessorFields(rows[0],fields))
         throw Object.assign(new Error("You cannot edit this course."),{statusCode:403});
+      if (!canEditCourse(user, rows[0])) throw Object.assign(new Error("You cannot edit this course."), { statusCode: 403 });
       return rows[0];
     }
   }
@@ -1005,6 +997,7 @@ async function getOrCreateCourse(fields) {
   );
 
   if (existing.length > 0) {
+    if (!canEditCourse(user, existing[0])) throw Object.assign(new Error("You cannot edit this course."), { statusCode: 403 });
     if (
       (fields.professorId || fields.professorEmail) &&
       !courseMatchesProfessorFields(existing[0], fields)
@@ -2594,7 +2587,7 @@ export async function createLearningModule(req, res) {
   try {
     fields = await applyAuthenticatedProfessorFields(req, fields);
 
-    const course = await getOrCreateCourse(fields);
+    const course = await getOrCreateCourse(fields, req.user);
 
     const quizContents = toJsonList(fields.quizItems);
 
@@ -2827,7 +2820,7 @@ export async function updateLearningModule(req, res) {
   try {
     fields = await applyAuthenticatedProfessorFields(req, fields);
 
-    const course = await getOrCreateCourse(fields);
+    const course = await getOrCreateCourse(fields, req.user);
 
     const currentUser = await getRequestUserProfile(req);
 

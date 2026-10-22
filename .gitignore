@@ -28,3 +28,8 @@ Thumbs.db
 uploads/
 # Private catalog PDFs
 src/private/
+
+.env.*
+!.env.example
+backups/
+audit-report.json

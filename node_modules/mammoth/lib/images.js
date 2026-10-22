@@ -7,7 +7,7 @@ exports.imgElement = imgElement;
 
 function imgElement(func) {
     return function(element, messages) {
-        return promises.when(func(element)).then(function(result) {
+        return promises.resolve(func(element)).then(function(result) {
             var attributes = {};
             if (element.altText) {
                 attributes.alt = element.altText;
@@ -29,3 +29,9 @@ exports.dataUri = imgElement(function(element) {
         };
     });
 });
+
+function imageFilenameExtension(image) {
+    return image.contentType.split(/\/|\\/)[1];
+}
+
+exports.imageFilenameExtension = imageFilenameExtension;

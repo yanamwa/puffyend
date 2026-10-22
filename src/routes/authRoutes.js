@@ -1,3 +1,4 @@
+import { loginLimiter, recoveryLimiter, signupLimiter } from "../middleware/authRateLimits.js";
 import express from "express";
 import {
   forgotPassword,
@@ -33,14 +34,14 @@ function handleSignupUpload(req, res, next) {
   });
 }
 
-router.post("/signup", handleSignupUpload, signup);
-router.post("/login", login);
+router.post("/signup", signupLimiter, handleSignupUpload, signup);
+router.post("/login", loginLimiter, login);
 router.post("/logout", authenticateUser, logout);
-router.post("/verify-email", verifyEmail);
-router.post("/resend-otp", resendOtp);
-router.post("/forgot-password", forgotPassword);
-router.post("/reset-password", resetPassword);
-router.post("/forgot-password.php", forgotPassword);
-router.post("/change-password.php", resetPassword);
+router.post("/verify-email", recoveryLimiter, verifyEmail);
+router.post("/resend-otp", recoveryLimiter, resendOtp);
+router.post("/forgot-password", recoveryLimiter, forgotPassword);
+router.post("/reset-password", recoveryLimiter, resetPassword);
+router.post("/forgot-password.php", recoveryLimiter, forgotPassword);
+router.post("/change-password.php", recoveryLimiter, resetPassword);
 
 export default router;

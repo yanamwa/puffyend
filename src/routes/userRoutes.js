@@ -1,3 +1,4 @@
+import requireOwnAccount from "../middleware/requireOwnAccount.js";
 import express from "express";
 import authenticateUser from "../middleware/authMiddleware.js";
 import professorProofUpload from "../middleware/professorProofUpload.js";
@@ -144,32 +145,32 @@ router.delete(
    PROFILE
 ========================= */
 
-router.post("/profile", getProfile);
+router.post("/profile", authenticateUser, requireOwnAccount, getProfile);
 
 /* =========================
    ONBOARDING
 ========================= */
 
-router.post("/onboarding/name", updateOnboardingName);
+router.post("/onboarding/name", authenticateUser, requireOwnAccount, updateOnboardingName);
 
-router.post("/onboarding/year", updateOnboardingYear);
+router.post("/onboarding/year", authenticateUser, requireOwnAccount, updateOnboardingYear);
 
-router.post("/onboarding/section", updateOnboardingSection);
+router.post("/onboarding/section", authenticateUser, requireOwnAccount, updateOnboardingSection);
 
-router.post("/onboarding/complete", completeOnboarding);
+router.post("/onboarding/complete", authenticateUser, requireOwnAccount, completeOnboarding);
 
 /* =========================
    LEGACY PHP-COMPATIBLE ROUTES
 ========================= */
 
-router.post("/get-profile.php", getProfile);
+router.post("/get-profile.php", authenticateUser, requireOwnAccount, getProfile);
 
-router.post("/update-name.php", updateOnboardingName);
+router.post("/update-name.php", authenticateUser, requireOwnAccount, updateOnboardingName);
 
-router.post("/update-year.php", updateOnboardingYear);
+router.post("/update-year.php", authenticateUser, requireOwnAccount, updateOnboardingYear);
 
-router.post("/update-section.php", updateOnboardingSection);
+router.post("/update-section.php", authenticateUser, requireOwnAccount, updateOnboardingSection);
 
-router.post("/complete-onboarding.php", completeOnboarding);
+router.post("/complete-onboarding.php", authenticateUser, requireOwnAccount, completeOnboarding);
 
 export default router;

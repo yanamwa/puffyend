@@ -1,3 +1,9 @@
+import { mountUploads } from "./routes/uploadRoutes.js";
+import helmet from "helmet";
+import { security } from "./config/security.js";
+import authenticateUser from "./middleware/authMiddleware.js";
+import { requireRole } from "./middleware/roleMiddleware.js";
+import { productionErrorHandler } from "./middleware/productionErrorHandler.js";
 import academicCalendarRoutes from "./routes/academicCalendarRoutes.js";
 import { migrateAcademicCalendar } from "./migrations/academicCalendarMigration.js";
 import express from "express";
@@ -21,11 +27,13 @@ import reportRoutes from "./routes/reportRoutes.js";
 
 import { initDb } from "./db.js";
 import { startLessonWorker } from "./services/rag/lessonJobService.js";
-import privateLessonUploads from "./middleware/privateLessonUploads.js";
 
 dotenv.config();
 
 const app = express();
+app.disable("x-powered-by");
+app.set("trust proxy", security.proxyHops);
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
 const port = process.env.PORT || 5000;
 
@@ -54,28 +62,7 @@ console.log("Profile uploads directory:", profileUploadsDirectory);
    CORS
 ========================================= */
 
-const allowedOrigins = [
-  "http://localhost",
-  "http://127.0.0.1",
-
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-
-  "http://localhost:3001",
-  "http://127.0.0.1:3001",
-
-  "http://localhost:3002",
-  "http://127.0.0.1:3002",
-
-  "http://localhost:3003",
-  "http://127.0.0.1:3003",
-
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-
-  "https://puffybrain.fun",
-  "https://www.puffybrain.fun",
-];
+const allowedOrigins = security.origins;
 
 app.use(
   cors({
@@ -132,21 +119,7 @@ app.use(
    http://localhost:5000/uploads/profile-images/profile-23-xxx.jpg
 ========================================= */
 
-app.use(
-  "/uploads",
-  privateLessonUploads,
-  express.static(profileUploadsDirectory),
-);
-
-/* =========================================
-   LESSON UPLOADS
-========================================= */
-
-app.use(
-  "/api/uploads",
-  privateLessonUploads,
-  express.static(path.resolve(__dirname, "src", "uploads")),
-);
+mountUploads(app, profileUploadsDirectory);
 
 /* =========================================
    REQUEST LOGGER
@@ -173,7 +146,7 @@ app.get("/api/health", (req, res) => {
    TEST PROFILE UPLOAD STATIC FOLDER
 ========================================= */
 
-app.get("/api/debug/uploads", (req, res) => {
+app.get("/api/debug/uploads", authenticateUser, requireRole("super_admin"), (req, res) => {
   res.json({
     success: true,
 
@@ -275,17 +248,7 @@ app.use((error, req, res, next) => {
    GENERAL ERROR HANDLER
 ========================================= */
 
-app.use((error, req, res, next) => {
-  console.error("Unhandled Server Error:");
-
-  console.error(error);
-
-  res.status(error.statusCode || 500).json({
-    success: false,
-
-    message: error.message || "Internal Server Error",
-  });
-});
+app.use(productionErrorHandler);
 
 /* =========================================
    START SERVER
@@ -335,6 +298,7 @@ async function startServer() {
     console.error("--------------------------------------");
 
     console.error(error);
+    process.exitCode = 1;
   }
 }
 

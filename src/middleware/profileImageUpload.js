@@ -111,7 +111,7 @@ const fileFilter = (req, file, cb) => {
     "image/webp",
   ];
 
-  if (allowedMimeTypes.includes(file.mimetype)) {
+  if (allowedMimeTypes.includes(file.mimetype) && [".jpg", ".jpeg", ".png", ".webp", ""].includes(path.extname(file.originalname).toLowerCase())) {
     cb(null, true);
     return;
   }

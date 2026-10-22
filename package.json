@@ -8,7 +8,8 @@
     "format": "prettier --write src tests --ignore-unknown",
     "format:check": "prettier --check src tests --ignore-unknown",
     "migrate:catalog": "node src/migrations/runCourseCatalogMigration.js",
-    "test:catalog": "node --test tests/courseCatalog.test.js tests/syllabusExtraction.test.js tests/courseCatalog.integration.test.js"
+    "test:catalog": "node --test tests/courseCatalog.test.js tests/syllabusExtraction.test.js tests/courseCatalog.integration.test.js",
+    "test:security": "node --test tests/security.test.js"
   },
   "dependencies": {
     "adm-zip": "^0.6.1",
@@ -17,7 +18,9 @@
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.2",
+    "express-rate-limit": "^8.7.1",
     "fast-xml-parser": "^5.11.2",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.12.0",
     "multer": "^2.2.0",

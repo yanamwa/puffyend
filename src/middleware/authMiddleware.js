@@ -1,7 +1,7 @@
 import jwt from "jsonwebtoken";
 import { db } from "../db.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "puffybrain-secret";
+import { JWT_SECRET } from "../config/security.js";
 
 function normalizeRole(value) {
   return String(value || "")
@@ -39,7 +39,7 @@ export default async function authenticateUser(req, res, next) {
   const token = authHeader.split(" ")[1];
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
     const decodedUserId = decoded.userId || decoded.id;
     const decodedEmail = String(decoded.email || "")
       .trim()

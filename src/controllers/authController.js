@@ -1,3 +1,4 @@
+import { security } from "../config/security.js";
 import bcrypt from "bcrypt";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -12,7 +13,7 @@ import { logAuditFromRequest } from "../services/auditLogService.js";
    CONFIGURATION
 ===================================================== */
 
-const JWT_SECRET = process.env.JWT_SECRET || "puffybrain-secret";
+import { JWT_SECRET } from "../config/security.js";
 
 const OTP_TTL_SECONDS = 5 * 60;
 
@@ -27,7 +28,7 @@ const RESERVED_SUPER_ADMIN_EMAIL = cleanEmailValue(
 ===================================================== */
 
 function createOtp() {
-  return Math.floor(1000 + Math.random() * 9000).toString();
+  return crypto.randomInt(1000, 10000).toString();
 }
 
 function cleanEmailValue(value) {
@@ -74,14 +75,7 @@ function isStrongPassword(password) {
 }
 
 function getPasswordResetBaseUrl(req) {
-  const configuredBaseUrl =
-    process.env.FRONTEND_URL ||
-    process.env.APP_URL ||
-    process.env.PUBLIC_APP_URL ||
-    req.get("origin") ||
-    "http://localhost:5173";
-
-  return String(configuredBaseUrl).replace(/\/+$/, "");
+  return security.frontendUrl;
 }
 
 async function getOtpTiming(userId) {
@@ -881,7 +875,10 @@ export async function resetPassword(req, res) {
 ===================================================== */
 
 export async function login(req, res) {
-  const { email, username, password } = req.body;
+  const { email, username, password } = req.body || {};
+  if (typeof (email || username || "") !== "string" || typeof password !== "string") {
+    return res.status(400).json({ success: false, message: "Email and password must be strings." });
+  }
 
   const loginEmail = (email || username || "").trim().toLowerCase();
 
@@ -930,10 +927,10 @@ export async function login(req, res) {
           "Login attempt failed because the email address was not found.",
       });
 
-      return res.status(404).json({
+      return res.status(401).json({
         success: false,
-        code: "EMAIL_NOT_FOUND",
-        message: "Email not found. Please check your email or sign up.",
+        code: "INVALID_CREDENTIALS",
+        message: "Invalid email or password.",
       });
     }
 
@@ -961,8 +958,8 @@ export async function login(req, res) {
 
       return res.status(401).json({
         success: false,
-        code: "INCORRECT_PASSWORD",
-        message: "Incorrect password. Please try again.",
+        code: "INVALID_CREDENTIALS",
+        message: "Invalid email or password.",
       });
     }
 

@@ -132,7 +132,7 @@ function parseLegacyModeBody(req, _res, next) {
 /*
  * Get all courses.
  */
-router.get("/courses", getCourses);
+router.get("/courses", authenticateUser, getCourses);
 
 /*
  * Create a new course.
@@ -240,9 +240,9 @@ router.put("/courses/:id/unenroll", authenticateUser, unenrollCourse);
 /*
  * Find/join a course using a course code.
  */
-router.get("/courses/join", joinCourseByCode);
+router.get("/courses/join", authenticateUser, joinCourseByCode);
 
-router.post("/courses/join", joinCourseByCode);
+router.post("/courses/join", authenticateUser, joinCourseByCode);
 
 /* =====================================================
    ARCHIVED COURSES
@@ -271,7 +271,7 @@ router.get("/courses/archived", authenticateUser, getArchivedCourses);
  * as "enrolled" as the :id parameter.
  */
 
-router.get("/courses/:id", getCourseById);
+router.get("/courses/:id", authenticateUser, getCourseById);
 
 /*
  * Update course.
@@ -288,12 +288,12 @@ router.put("/courses/:id", authenticateUser, requireRole("professor", "admin", "
  * Archived Course
  * Restored Course
  */
-router.patch("/courses/:id/archive", authenticateUser, archiveCourse);
+router.patch("/courses/:id/archive", authenticateUser, requireRole("professor", "admin", "super_admin"), archiveCourse);
 
 /*
  * Compatibility route for archive/restore.
  */
-router.post("/courses/:id/archive", authenticateUser, archiveCourse);
+router.post("/courses/:id/archive", authenticateUser, requireRole("professor", "admin", "super_admin"), archiveCourse);
 
 /*
  * NO DELETE COURSE ROUTE.
@@ -311,7 +311,7 @@ router.post("/courses/:id/archive", authenticateUser, archiveCourse);
  *
  * Reading data does not need an audit entry.
  */
-router.get("/modules", getLearningModules);
+router.get("/modules", authenticateUser, getLearningModules);
 
 /*
  * Create learning module.
@@ -319,12 +319,12 @@ router.get("/modules", getLearningModules);
  * AUDIT:
  * Created Learning Module
  */
-router.post("/modules", authenticateUser, createLearningModule);
+router.post("/modules", authenticateUser, requireRole("professor", "admin", "super_admin"), createLearningModule);
 
 /*
  * Get one learning module.
  */
-router.get("/modules/:id", getLearningModuleById);
+router.get("/modules/:id", authenticateUser, getLearningModuleById);
 
 /*
  * Update learning module.
@@ -332,7 +332,7 @@ router.get("/modules/:id", getLearningModuleById);
  * AUDIT:
  * Updated Learning Module
  */
-router.put("/modules/:id", authenticateUser, updateLearningModule);
+router.put("/modules/:id", authenticateUser, requireRole("professor", "admin", "super_admin"), updateLearningModule);
 
 /*
  * Delete learning module.
@@ -345,19 +345,19 @@ router.put("/modules/:id", authenticateUser, updateLearningModule);
  * instead of permanent deletion, this can
  * later be changed to an archive route.
  */
-router.delete("/modules/:id", authenticateUser, deleteLearningModule);
+router.delete("/modules/:id", authenticateUser, requireRole("professor", "admin", "super_admin"), deleteLearningModule);
 
 /* =====================================================
    QUIZ MODES
 ===================================================== */
 
-router.get("/modes", getModes);
+router.get("/modes", authenticateUser, getModes);
 
-router.post("/modes", authenticateUser, createMode);
+router.post("/modes", authenticateUser, requireRole("professor", "admin", "super_admin"), createMode);
 
-router.put("/modes/:id", authenticateUser, updateMode);
+router.put("/modes/:id", authenticateUser, requireRole("professor", "admin", "super_admin"), updateMode);
 
-router.delete("/modes/:id", authenticateUser, deleteMode);
+router.delete("/modes/:id", authenticateUser, requireRole("professor", "admin", "super_admin"), deleteMode);
 
 /* =====================================================
    MONITORING
@@ -369,37 +369,37 @@ router.get(
   getAssessmentAttempts,
 );
 
-router.get("/monitoring/:courseId", getCourseMonitoring);
+router.get("/monitoring/:courseId", authenticateUser, getCourseMonitoring);
 
-router.get("/getLessonProgress.php", getLessonProgress);
+router.get("/getLessonProgress.php", authenticateUser, getLessonProgress);
 
-router.post("/saveLessonProgress.php", saveLessonProgress);
+router.post("/saveLessonProgress.php", authenticateUser, saveLessonProgress);
 
 router.post("/saveQuizAttempt.php", authenticateUser, saveQuizAttempt);
 
 router.get("/getQuizAttempts.php", authenticateUser, getQuizAttempts);
 
-router.post("/generateAdaptiveFeedback.php", generateAdaptiveFeedback);
+router.post("/generateAdaptiveFeedback.php", authenticateUser, generateAdaptiveFeedback);
 
 /* =====================================================
    LEGACY MODE ROUTES
 ===================================================== */
 
-router.get("/getModes.php", getModes);
+router.get("/getModes.php", authenticateUser, getModes);
 
-router.post("/addMode.php", authenticateUser, parseLegacyModeBody, createMode);
+router.post("/addMode.php", authenticateUser, requireRole("professor", "admin", "super_admin"), parseLegacyModeBody, createMode);
 
 router.post(
   "/updateMode.php",
   authenticateUser,
-  parseLegacyModeBody,
+  requireRole("professor", "admin", "super_admin"), parseLegacyModeBody,
   updateMode,
 );
 
 router.post(
   "/deleteMode.php",
   authenticateUser,
-  parseLegacyModeBody,
+  requireRole("professor", "admin", "super_admin"), parseLegacyModeBody,
   deleteMode,
 );
 
@@ -407,12 +407,12 @@ router.post(
    LEGACY LEARNING MODULE ROUTES
 ===================================================== */
 
-router.get("/adminLearningModule.php", handleLegacyLearningModule);
+router.get("/adminLearningModule.php", authenticateUser, requireRole("professor", "admin", "super_admin"), handleLegacyLearningModule);
 
 router.post(
   "/adminLearningModule.php",
   authenticateUser,
-  handleLegacyLearningModule,
+  requireRole("professor", "admin", "super_admin"), handleLegacyLearningModule,
 );
 
 /* =====================================================

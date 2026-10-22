@@ -180,6 +180,7 @@ export async function getCourseMonitoring(req, res) {
 
     const course = courseRows[0];
     const courseId = getCourseId(course);
+    await assertCourseAccess(req.user, courseId);
 
     const [modules] = await db.execute(
       "SELECT * FROM learning_modules WHERE course_id = ? ORDER BY lesson_id",
@@ -347,9 +348,9 @@ export async function getCourseMonitoring(req, res) {
   } catch (error) {
     console.error("Get course monitoring error:", error);
 
-    return res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to fetch student monitoring data.",
+      message: error.statusCode && error.statusCode < 500 ? error.message : "Failed to fetch student monitoring data.",
     });
   }
 }
@@ -410,7 +411,7 @@ async function refreshPerformanceAnalytics(userId, courseId) {
 }
 
 export async function getLessonProgress(req, res) {
-  const userId = req.query.user_id || req.query.userId || 1;
+  const userId = req.user.userId;
   const lessonId = req.query.lesson_id || req.query.lessonId;
 
   if (!lessonId) {
@@ -451,7 +452,7 @@ export async function getLessonProgress(req, res) {
 }
 
 export async function saveLessonProgress(req, res) {
-  const userId = req.body.user_id || req.body.userId || 1;
+  const userId = req.user.userId;
   const lessonId = req.body.lesson_id || req.body.lessonId;
   const requestedCourseId = req.body.course_id || req.body.courseId || null;
   const totalCards = Number(req.body.total_cards || req.body.totalCards || 0);
@@ -588,7 +589,7 @@ export async function saveQuizAttempt(req, res) {
 }
 
 export async function generateAdaptiveFeedback(req, res) {
-  const userId = req.body.user_id || req.body.userId || 1;
+  const userId = req.user.userId;
   const lessonId = req.body.lessonId || req.body.lesson_id || null;
   const source = String(req.body.source || "lesson");
   const quizMode = String(req.body.quizMode || req.body.quiz_mode || "quiz");

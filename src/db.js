@@ -582,7 +582,7 @@ async function ensureSuperAdminUser() {
     .trim()
     .toLowerCase();
   const configuredSuperAdminPassword = process.env.SUPER_ADMIN_PASSWORD;
-  const superAdminPassword = configuredSuperAdminPassword || "SuperAdmin#2026!";
+  const superAdminPassword = configuredSuperAdminPassword;
   const superAdminName = process.env.SUPER_ADMIN_NAME || "Super Admin";
 
   if (!superAdminEmail || !superAdminPassword) return;

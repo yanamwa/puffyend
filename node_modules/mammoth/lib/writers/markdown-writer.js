@@ -1,5 +1,6 @@
 var _ = require("underscore");
 
+var htmlWriter = require("./html-writer");
 
 function symmetricMarkdownElement(end) {
     return markdownElement(end, end);
@@ -16,7 +17,7 @@ function markdownLink(attributes) {
     if (href) {
         return {
             start: "[",
-            end: "](" + href + ")",
+            end: "](" + escapeMarkdown(href) + ")",
             anchorPosition: "before"
         };
     } else {
@@ -28,7 +29,7 @@ function markdownImage(attributes) {
     var src = attributes.src || "";
     var altText = attributes.alt || "";
     if (src || altText) {
-        return {start: "![" + altText + "](" + src + ")"};
+        return {start: "![" + escapeMarkdown(altText) + "](" + escapeMarkdown(src) + ")"};
     } else {
         return {};
     }
@@ -52,10 +53,10 @@ function markdownListItem(attributes, list, listItem) {
     list = list || {indent: 0, isOrdered: false, count: 0};
     list.count++;
     listItem.hasClosed = false;
-    
+
     var bullet = list.isOrdered ? list.count + "." : "-";
     var start = repeatString("\t", list.indent) + bullet + " ";
-        
+
     return {
         start: start,
         end: function() {
@@ -94,20 +95,20 @@ function markdownWriter() {
     var elementStack = [];
     var list = null;
     var listItem = {};
-    
+
     function open(tagName, attributes) {
         attributes = attributes || {};
-        
+
         var createElement = htmlToMarkdown[tagName] || function() {
             return {};
         };
         var element = createElement(attributes, list, listItem);
         elementStack.push({end: element.end, list: list});
-        
+
         if (element.list) {
             list = element.list;
         }
-        
+
         var anchorBeforeStart = element.anchorPosition === "before";
         if (anchorBeforeStart) {
             writeAnchor(attributes);
@@ -118,29 +119,32 @@ function markdownWriter() {
             writeAnchor(attributes);
         }
     }
-    
+
     function writeAnchor(attributes) {
         if (attributes.id) {
-            fragments.push('<a id="' + attributes.id + '"></a>');
+            var writer = htmlWriter.writer();
+            writer.open("a", {id: attributes.id});
+            writer.close("a");
+            fragments.push(writer.asString());
         }
     }
-    
+
     function close(tagName) {
         var element = elementStack.pop();
         list = element.list;
         var end = _.isFunction(element.end) ? element.end() : element.end;
         fragments.push(end || "");
     }
-    
+
     function selfClosing(tagName, attributes) {
         open(tagName, attributes);
         close(tagName);
     }
-    
+
     function text(value) {
         fragments.push(escapeMarkdown(value));
     }
-    
+
     function asString() {
         return fragments.join("");
     }
