@@ -341,6 +341,7 @@ export async function generateQuizBatch(
                 `Generate exactly ${types.length} questions in the assigned types and thinking_skills order for this batch; the quiz-wide distribution is supplied separately.`,
                 `Use ONLY retrieved source evidence and lesson content supported by that evidence.`,
                 `Objectives are learning targets, never evidence.`,
+                `When lesson content contains Practice Activity prompts, use those activities to guide source-supported practice questions. Convert reflections into objectively answerable questions; never grade personal opinions as facts.`,
                 `Every question must be directly supported by cited evidence_ids.`,
                 `Avoid duplicate or nearly identical questions.`,
                 `Keep grammar clear and explanations concise and educational.`,

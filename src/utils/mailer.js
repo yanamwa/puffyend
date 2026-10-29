@@ -599,3 +599,25 @@ If you have questions regarding this action, please contact ${
 PuffyBrain`,
   });
 }
+
+export async function sendMainQuizAvailableEmail(email, courseTitle, moduleTitle, courseId) {
+  const { transporter, from } = createSmtpMailer();
+  const origin = process.env.FRONTEND_URL || "http://localhost:3000";
+  const url = `${origin.replace(/\/$/, "")}/student/enrolled-courses/${encodeURIComponent(courseId)}`;
+  return transporter.sendMail({ from, to: email,
+    subject: `Main Quiz available: ${moduleTitle}`,
+    text: `The Main Quiz for ${moduleTitle} in ${courseTitle} is now available. Open your course to view the quiz and its requirements: ${url}`,
+    html: `<h2 style="color:#527eaf">Main Quiz now available</h2><p>The Main Quiz for <strong>${escapeHtml(moduleTitle)}</strong> in ${escapeHtml(courseTitle)} is now available.</p><p><a href="${escapeHtml(url)}">Open your course</a> to view its requirements and schedule.</p>`,
+  });
+}
+
+export async function sendModuleAvailableEmail(email, courseTitle, moduleTitle, courseId) {
+  const { transporter, from } = createSmtpMailer();
+  const origin = process.env.FRONTEND_URL || "http://localhost:3000";
+  const url = `${origin.replace(/\/$/, "")}/student/enrolled-courses/${encodeURIComponent(courseId)}`;
+  return transporter.sendMail({ from, to: email,
+    subject: `New module available: ${moduleTitle}`,
+    text: `${moduleTitle} has been uploaded to ${courseTitle}. Open your course to start learning: ${url}`,
+    html: `<h2 style="color:#527eaf">New module available</h2><p><strong>${escapeHtml(moduleTitle)}</strong> has been uploaded to ${escapeHtml(courseTitle)}.</p><p><a href="${escapeHtml(url)}">Open your course</a> to start learning.</p>`,
+  });
+}

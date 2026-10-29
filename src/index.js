@@ -1,3 +1,5 @@
+import { startModulePublicationNotifications } from "./services/modulePublicationNotifications.js";
+import { startMainQuizAvailabilityNotifications } from "./services/mainQuizAvailabilityNotifications.js";
 import { mountUploads } from "./routes/uploadRoutes.js";
 import helmet from "helmet";
 import { security } from "./config/security.js";
@@ -270,6 +272,8 @@ async function startServer() {
     await cleanupSyllabusUploads();
     setInterval(() => cleanupSyllabusUploads().catch(console.error), 3600000).unref();
     startLessonWorker();
+    startModulePublicationNotifications().catch(error => console.error("Module publication worker:", error.code || error.message));
+    startMainQuizAvailabilityNotifications().catch(error => console.error("Main Quiz notification worker:", error.code || error.message));
 
     console.log("MySQL Connected Successfully.");
 

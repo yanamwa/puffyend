@@ -268,7 +268,7 @@ export async function catalogClasses(req, res) {
     values,
   );
   const [records] = await db.query(
-    `SELECT c.course_id,c.catalog_id,c.catalog_code,c.title,c.code,c.class_name,c.program,c.year_level,c.section_name,c.academic_year,c.semester,c.status,c.archived,COALESCE(u.display_name,u.name,c.professor_name,c.professor_email) AS professor,(SELECT COUNT(*) FROM course_enrollments e WHERE e.course_id=c.course_id AND e.status='approved' AND e.archived=0) AS student_count FROM courses c LEFT JOIN users u ON u.userId=c.professor_id ${where} ORDER BY c.course_id DESC LIMIT ? OFFSET ?`,
+    `SELECT c.course_id,c.catalog_id,c.catalog_code,c.title,c.code,c.class_name,c.program,c.year_level,c.section_name,c.academic_year,c.semester,c.status,c.archived,c.created_at,COALESCE(u.display_name,u.name,c.professor_name,c.professor_email) AS professor,(SELECT COUNT(*) FROM course_enrollments e WHERE e.course_id=c.course_id AND e.status='approved' AND e.archived=0) AS student_count FROM courses c LEFT JOIN users u ON u.userId=c.professor_id ${where} ORDER BY c.course_id DESC LIMIT ? OFFSET ?`,
     [...values, size, (page - 1) * size],
   );
   res.json({ success: true, records, total: Number(count.total), page });

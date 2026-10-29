@@ -2492,6 +2492,13 @@ export async function createCourse(req, res) {
     connection = await db.getConnection();
     await connection.beginTransaction();
     const {course: catalog, versionId, joinCode} = await resolveClassCatalog(connection, req.body);
+    // Serialize creation per professor so simultaneous requests cannot duplicate a catalog course.
+    await connection.execute("SELECT userId FROM users WHERE userId=? FOR UPDATE", [ownerFields.professorId]);
+    const [existingCatalogCourses] = await connection.execute(
+      "SELECT course_id FROM courses WHERE professor_id=? AND catalog_id=? LIMIT 1",
+      [ownerFields.professorId, catalog.catalog_id],
+    );
+    if (existingCatalogCourses.length) throw Object.assign(new Error("You have already created this catalog course. Please manage the existing course in Course Management."), {statusCode:409});
     const period = classPeriod(req.body);
     let fields = payloadToCourseFields({...req.body, title: catalog.title, courseName: catalog.title,
       code: joinCode, courseCode: joinCode, course_code: joinCode,

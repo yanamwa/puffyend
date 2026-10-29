@@ -1,0 +1,8 @@
+LOAD DATABASE
+  FROM mysql://root:@host.docker.internal:3306/puffybrain
+  INTO postgresql://postgres.ixiqkuwxsgltuhpanxgu:SUPABASE_PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require
+
+WITH include no drop, create tables, create indexes,
+     reset sequences, foreign keys
+
+ALTER SCHEMA 'puffybrain' RENAME TO 'public';
