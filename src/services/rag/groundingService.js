@@ -1,5 +1,5 @@
 import { buildEvidence } from "./evidenceService.js";
-import { generateJson } from "../geminiService.js";
+import { generateJson } from "../ai/geminiService.js";
 
 export const stringSchema = { type: "STRING" };
 export const citationSchema = {

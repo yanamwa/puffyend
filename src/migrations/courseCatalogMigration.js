@@ -1,4 +1,5 @@
-import { recoverCatalogModuleShells } from "../services/courseModulePersistence.js";
+import { migrateCatalogCodeAvailability } from "./catalogCodeAvailability.js";
+import { recoverCatalogModuleShells } from "../services/courses/courseModulePersistence.js";
 import fs from "node:fs/promises";
 
 // Additive and repeatable. Existing class records and unique join codes are preserved.
@@ -12,6 +13,7 @@ export async function migrateCourseCatalog(db) {
     .map((s) => s.trim())
     .filter(Boolean))
     await db.query(statement);
+  await migrateCatalogCodeAvailability(db);
   const [versionColumns] = await db.query(
     "SHOW COLUMNS FROM syllabus_versions",
   );

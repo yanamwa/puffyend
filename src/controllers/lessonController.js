@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { generationContext } from "../services/rag/generationContext.js";
 import path from "node:path";
 import { db } from "../db.js";
 import { enqueueJob, loadJob } from "../services/rag/lessonJobService.js";
@@ -53,6 +54,7 @@ export async function processLessonFile(req, res) {
       courseId,
       lessonId,
       requesterId: req.user.userId,
+      generationContext: generationContext(req.body?.generation_context),
     });
     return res.status(202).json({
       success: true,
@@ -130,6 +132,7 @@ export async function queueSourceGeneration(req, res) {
       courseId: document.course_id,
       lessonId: document.lesson_id,
       requesterId: req.user.userId,
+      generationContext: generationContext(req.body?.generation_context),
     });
     return res
       .status(202)

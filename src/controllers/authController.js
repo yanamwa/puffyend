@@ -7,7 +7,7 @@ import jwt from "jsonwebtoken";
 import { db } from "../db.js";
 import { sendOtpEmail, sendPasswordResetEmail } from "../utils/mailer.js";
 
-import { logAuditFromRequest } from "../services/auditLogService.js";
+import { logAuditFromRequest } from "../services/system/auditLogService.js";
 
 /* =====================================================
    CONFIGURATION

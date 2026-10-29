@@ -177,6 +177,7 @@ export async function generateFromDocuments(
   documentIds,
   onProgress = async () => {},
   checkpoint = [],
+  generationContext = null,
 ) {
   const ids = [...new Set(documentIds.map(String))];
   return withDatabaseLocks(
@@ -232,6 +233,7 @@ export async function generateFromDocuments(
         chunks,
         onProgress,
         checkpoint,
+        generationContext,
       );
       const used = new Set();
       const configured = Number(process.env.RAG_PAGE_CONCURRENCY || 3);
@@ -368,5 +370,5 @@ export async function processLessonWithRag(options) {
       documentIds: ids,
     });
   }
-  return generateFromDocuments(ids, progress, options.outlineCheckpoint || []);
+  return generateFromDocuments(ids, progress, options.outlineCheckpoint || [], options.generationContext);
 }

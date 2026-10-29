@@ -1,11 +1,4 @@
-import { startModulePublicationNotifications } from "./services/modulePublicationNotifications.js";
-import { startMainQuizAvailabilityNotifications } from "./services/mainQuizAvailabilityNotifications.js";
-import { mountUploads } from "./routes/uploadRoutes.js";
-import helmet from "helmet";
-import { security } from "./config/security.js";
-import authenticateUser from "./middleware/authMiddleware.js";
-import { requireRole } from "./middleware/roleMiddleware.js";
-import { productionErrorHandler } from "./middleware/productionErrorHandler.js";
+import { startCatalogLessonWorker } from "./services/catalog/catalogLessonGeneration.js";
 import academicCalendarRoutes from "./routes/academicCalendarRoutes.js";
 import { migrateAcademicCalendar } from "./migrations/academicCalendarMigration.js";
 import express from "express";
@@ -268,12 +261,18 @@ async function startServer() {
 
     await initDb();
     await migrateCourseCatalog(db);
+    const { reconcileArchivedCatalogClasses } = await import("./services/catalog/catalogArchive.js");
+    await reconcileArchivedCatalogClasses(db);
     await migrateAcademicCalendar(db);
     await cleanupSyllabusUploads();
     setInterval(() => cleanupSyllabusUploads().catch(console.error), 3600000).unref();
     startLessonWorker();
+<<<<<<< HEAD
     startModulePublicationNotifications().catch(error => console.error("Module publication worker:", error.code || error.message));
     startMainQuizAvailabilityNotifications().catch(error => console.error("Main Quiz notification worker:", error.code || error.message));
+=======
+    startCatalogLessonWorker(db);
+>>>>>>> 7fef98ba8304dfe912e75b587500eb952b01fde9
 
     console.log("MySQL Connected Successfully.");
 

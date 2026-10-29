@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS course_catalog (
   archived_at DATETIME NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY catalog_normalized_code (normalized_code),
+  available_normalized_code VARCHAR(50) CHARACTER SET ascii COLLATE ascii_bin GENERATED ALWAYS AS (CASE WHEN archived_at IS NULL THEN normalized_code ELSE NULL END) STORED,
+  UNIQUE KEY catalog_available_code (available_normalized_code),
   KEY catalog_selection (archived_at, status),
   CONSTRAINT catalog_reviewer_fk FOREIGN KEY (reviewed_by) REFERENCES users(userId) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -43,4 +44,13 @@ CREATE TABLE IF NOT EXISTS syllabus_versions (
   KEY versions_catalog_date (catalog_id, uploaded_at),
   CONSTRAINT versions_catalog_fk FOREIGN KEY (catalog_id) REFERENCES course_catalog(catalog_id),
   CONSTRAINT versions_actor_fk FOREIGN KEY (uploaded_by) REFERENCES users(userId) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS catalog_lesson_jobs (
+  version_id INT NOT NULL PRIMARY KEY,
+  status ENUM('queued','running','completed','failed') NOT NULL DEFAULT 'queued',
+  completed_modules INT NOT NULL DEFAULT 0,
+  error_message VARCHAR(500) NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (version_id) REFERENCES syllabus_versions(version_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

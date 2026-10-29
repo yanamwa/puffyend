@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { logAuditFromRequest } from "../services/auditLogService.js";
+import { logAuditFromRequest } from "../services/system/auditLogService.js";
 /* =====================================================
    HELPERS
 ===================================================== */

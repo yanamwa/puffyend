@@ -1,4 +1,4 @@
-import { studentMainQuizHistory } from "../services/studentQuizHistory.js";
+import { studentMainQuizHistory } from "../services/quizzes/studentQuizHistory.js";
 import {
   saveMainQuizPreview,
   generateMainQuizPreview,
@@ -9,7 +9,7 @@ import {
   submitMainQuiz,
   mainQuizAnalysis,
   mainQuizStatus,
-} from "../services/mainQuizService.js";
+} from "../services/quizzes/mainQuizService.js";
 import express from "express";
 
 import upload from "../middleware/upload.js";
