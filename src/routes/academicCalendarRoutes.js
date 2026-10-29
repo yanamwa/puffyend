@@ -1,4 +1,4 @@
-import { extractAcademicCalendar } from "../services/academicCalendarExtraction.js";
+import { extractAcademicCalendar } from "../services/calendar/academicCalendarExtraction.js";
 import express from "express";
 import multer from "multer";
 import { db } from "../db.js";
@@ -7,7 +7,7 @@ import { requireRole } from "../middleware/roleMiddleware.js";
 import {
   calendarDetails,
   calendarFile,
-} from "../services/academicCalendarRules.js";
+} from "../services/calendar/academicCalendarRules.js";
 const fields =
   "calendar_id,title,academic_year,events,published,filename,mime_type,updated_at";
 const isAdmin = (req) => ["admin", "super_admin"].includes(req.user.role);

@@ -4,7 +4,7 @@ import crypto from "crypto";
 import fs from "node:fs/promises";
 import authenticateUser from "../middleware/authMiddleware.js";
 import { sendStudentTemporaryPasswordEmail } from "../utils/mailer.js";
-import { logAuditFromRequest } from "../services/auditLogService.js";
+import { logAuditFromRequest } from "../services/system/auditLogService.js";
 
 const YEAR_LEVELS = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
 const APPROVAL_STATUSES = ["pending", "approved", "declined"];

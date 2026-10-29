@@ -5,7 +5,6 @@ import { db } from "../../db.js";
 import {
   processLessonWithRag,
   generateFromDocuments,
-  generateFromDocument,
   reindexDocument,
 } from "./lessonRagService.js";
 import {
@@ -41,6 +40,7 @@ export async function enqueueJob({
   file,
   files = file ? [file] : [],
   documentId = null,
+  generationContext = null,
 }) {
   const hashes = await Promise.all(
     files.map(async (input) =>
@@ -53,7 +53,7 @@ export async function enqueueJob({
   const hash = files.length ? hashes.join(":") : String(documentId);
   const fingerprint = crypto
     .createHash("sha256")
-    .update(`${type}:${courseId}:${lessonId}:${hash}`)
+    .update(`${type}:${courseId}:${lessonId}:${hash}:${JSON.stringify(generationContext)}`)
     .digest("hex")
     .slice(0, 48);
   return withDatabaseLock(`rag-job:${fingerprint}`, async () => {
@@ -91,6 +91,7 @@ export async function enqueueJob({
       }
       const payload = {
         fingerprint,
+        generationContext,
         sourceHashes: hashes,
         courseId,
         lessonId,
@@ -255,6 +256,7 @@ export async function runClaimedJob(job) {
         job.payload.retryDocumentIds,
         progress,
         job.payload.outlineCheckpoint || [],
+        job.payload.generationContext,
       );
     else if (job.job_type === "upload")
       result = await processLessonWithRag({
@@ -266,7 +268,7 @@ export async function runClaimedJob(job) {
       if (!job.document_id) throw requestError("Source no longer exists.", 404);
       if (job.job_type === "reindex")
         await reindexDocument(job.document_id, progress);
-      result = await generateFromDocument(job.document_id, progress);
+      result = await generateFromDocuments([job.document_id], progress, [], job.payload.generationContext);
     }
     await db.execute(
       `UPDATE lesson_rag_jobs SET status = 'completed', phase = 'completed', progress = 100, result = ?,

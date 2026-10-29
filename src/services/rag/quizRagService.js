@@ -1,10 +1,10 @@
-import { validateAdaptiveQuestions } from "../mainQuizAdaptive.js";
+import { validateAdaptiveQuestions } from "../quizzes/mainQuizAdaptive.js";
 import { db } from "../../db.js";
 import { loadChunks } from "./vectorRepository.js";
 import { retrieveContexts } from "./retrievalService.js";
 import { buildEvidence } from "./evidenceService.js";
 import { validateCitation, stringSchema } from "./groundingService.js";
-import { generateJson } from "../geminiService.js";
+import { generateJson } from "../ai/geminiService.js";
 import { parallelMap } from "./parallelMap.js";
 import { assertCourseAccess, requestError } from "./courseAccessService.js";
 

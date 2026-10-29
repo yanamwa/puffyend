@@ -1,6 +1,6 @@
-import { studentCourseContent } from "../services/modulePublication.js";
-import { mergeModuleContent } from "../services/courseModulePersistence.js";
-import { resolveClassCatalog, classPeriod } from "../services/classCatalogService.js";
+import { studentCourseContent } from "../services/courses/modulePublication.js";
+import { mergeModuleContent } from "../services/courses/courseModulePersistence.js";
+import { resolveClassCatalog, classPeriod } from "../services/catalog/classCatalogService.js";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 
@@ -23,7 +23,7 @@ import {
   sendStudentUnenrolledEmail,
 } from "../utils/mailer.js";
 import { createNotification } from "../utils/notification.js";
-import { logAuditFromRequest } from "../services/auditLogService.js";
+import { logAuditFromRequest } from "../services/system/auditLogService.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "puffybrain-secret";
 
@@ -357,6 +357,7 @@ function normalizeContentModule(module, index) {
       module?.lesson_id ||
       module?.module_id ||
       `module-${index + 1}`,
+    topics: Array.isArray(module?.topics) ? module.topics.map(t => cleanText(t)).filter(Boolean).slice(0, 100) : [],
     mainQuizSettings: getMainQuizSettings(module),
     lesson_id: module?.lesson_id || null,
     module_id: module?.module_id || module?.id || null,
@@ -400,6 +401,7 @@ function getModuleMeta(module, index) {
     module.id || module.module_id || module.lesson_id || `module-${index + 1}`;
 
   return {
+    topics: Array.isArray(module?.topics) ? module.topics.map(t => cleanText(t)).filter(Boolean).slice(0, 100) : [],
     mainQuizSettings: getMainQuizSettings(module),
     moduleId,
     module_id: moduleId,
@@ -2693,6 +2695,8 @@ export async function updateCourse(req, res) {
       fields.title=existingClass.title;
       fields.courseCode=existingClass.code;
       fields.subject=existingClass.subject;
+      const [[catalogState]] = await db.execute("SELECT archived_at FROM course_catalog WHERE catalog_id=?", [existingClass.catalog_id]);
+      if (catalogState?.archived_at) fields.archived = true;
     }
     const period = classPeriod({...existingClass,...req.body});
     const lessonPages = toJsonList(fields.lessonPages);
@@ -2973,6 +2977,13 @@ export async function archiveCourse(req, res) {
 
     // Professors can archive ONLY their own courses.
     if (role === "professor") {
+      if (!archived) {
+        const [[catalogState]] = await db.execute(
+          `SELECT cc.archived_at FROM courses c JOIN course_catalog cc ON cc.catalog_id=c.catalog_id WHERE c.${idColumn}=?`,
+          [id],
+        );
+        if (catalogState?.archived_at) return res.status(409).json({success: false, message: "This course was archived by the admin. The admin must restore its catalog course before you can restore this class."});
+      }
       const owner = getProfessorOwnerCondition("", currentUser);
 
       where.push(owner.sql);

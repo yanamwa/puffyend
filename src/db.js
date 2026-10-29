@@ -757,7 +757,7 @@ export async function initDb() {
   await initCourseTables();
   await initQuizModeTables();
   await initMonitoringTables();
-  const { initMainQuizTables } = await import("./services/mainQuizService.js");
+  const { initMainQuizTables } = await import("./services/quizzes/mainQuizService.js");
   await initMainQuizTables();
   await initNotificationTables();
 

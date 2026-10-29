@@ -1,3 +1,4 @@
+import { startCatalogLessonWorker } from "./services/catalog/catalogLessonGeneration.js";
 import academicCalendarRoutes from "./routes/academicCalendarRoutes.js";
 import { migrateAcademicCalendar } from "./migrations/academicCalendarMigration.js";
 import express from "express";
@@ -303,10 +304,13 @@ async function startServer() {
 
     await initDb();
     await migrateCourseCatalog(db);
+    const { reconcileArchivedCatalogClasses } = await import("./services/catalog/catalogArchive.js");
+    await reconcileArchivedCatalogClasses(db);
     await migrateAcademicCalendar(db);
     await cleanupSyllabusUploads();
     setInterval(() => cleanupSyllabusUploads().catch(console.error), 3600000).unref();
     startLessonWorker();
+    startCatalogLessonWorker(db);
 
     console.log("MySQL Connected Successfully.");
 
