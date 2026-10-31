@@ -204,6 +204,36 @@ test(
         },
       );
       await t.test(
+        "startup accepts pgloader enum statuses and JSON course fields",
+        async () => {
+          await db.query(
+            "CREATE TYPE imported_enrollment_status AS ENUM ('pending','approved','declined')",
+          );
+          await db.query(
+            "ALTER TABLE course_enrollments ALTER COLUMN status DROP DEFAULT",
+          );
+          await db.query(
+            "ALTER TABLE course_enrollments ALTER COLUMN status TYPE imported_enrollment_status USING status::imported_enrollment_status",
+          );
+          await db.query(
+            "ALTER TABLE course_enrollments ALTER COLUMN status SET DEFAULT 'pending'",
+          );
+          await migrate();
+          await db.query(
+            "ALTER TABLE courses ALTER COLUMN lesson_pages TYPE JSONB USING lesson_pages::jsonb",
+          );
+          await db.query(
+            "ALTER TABLE courses ALTER COLUMN quiz_items TYPE JSONB USING quiz_items::jsonb",
+          );
+          await migrate();
+          const [[user]] = await db.query(
+            "SELECT userId FROM users WHERE userId=?",
+            [userId],
+          );
+          assert.equal(user.userId, userId);
+        },
+      );
+      await t.test(
         "login and authenticated frontend course requests work over HTTP with CORS",
         async () => {
           const { default: authRoutes } =

@@ -29,7 +29,7 @@ export function mergeModuleContent(stored, derived) {
 export async function recoverCatalogModuleShells(db) {
   const [rows] =
     await db.query(`SELECT c.course_id,c.modules,v.coverage_modules FROM courses c JOIN syllabus_versions v ON v.version_id=c.syllabus_version_id AND v.catalog_id=c.catalog_id
-    WHERE c.content_modules IS NULL AND c.modules>0 AND COALESCE(c.lesson_pages,'[]') IN ('[]','') AND COALESCE(c.quiz_items,'[]') IN ('[]','')
+    WHERE c.content_modules IS NULL AND c.modules>0 AND COALESCE(c.lesson_pages::text,'[]') IN ('[]','') AND COALESCE(c.quiz_items::text,'[]') IN ('[]','')
     AND NOT EXISTS (SELECT 1 FROM learning_modules m WHERE m.course_id=c.course_id)`);
   let recovered = 0;
   for (const row of rows) {

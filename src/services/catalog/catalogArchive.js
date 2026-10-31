@@ -4,7 +4,7 @@ export async function archiveCatalogClasses(connection, catalogId, actorId = nul
     `SELECT c.course_id,cc.code,c.title,COALESCE(c.professor_id,u.userId) AS professor_id
      FROM courses c JOIN course_catalog cc ON cc.catalog_id=c.catalog_id
      LEFT JOIN users u ON u.email=c.professor_email
-     WHERE c.catalog_id=? AND c.archived=0 FOR UPDATE`,
+     WHERE c.catalog_id=? AND c.archived=0 FOR UPDATE OF c`,
     [catalogId],
   );
   for (const course of classes) {

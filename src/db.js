@@ -369,7 +369,7 @@ async function initMonitoringTables() {
   await db.execute(`
     UPDATE course_enrollments
     SET status = 'pending'
-    WHERE status IS NULL OR status = ''
+    WHERE status IS NULL OR status::text = ''
   `);
 
   await db.execute(`
