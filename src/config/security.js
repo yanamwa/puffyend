@@ -28,7 +28,7 @@ export function securityConfig(env = process.env) {
   const proxyHops = Number(env.TRUST_PROXY_HOPS || 0);
   if (!Number.isSafeInteger(proxyHops) || proxyHops < 0)
     throw new Error("TRUST_PROXY_HOPS must be a nonnegative integer.");
-  const origins = [frontend.origin];
+  const origins = [...new Set(["https://puffybrain.fun", frontend.origin])];
   if (!production) {
     for (const host of ["localhost", "127.0.0.1"])
       for (const port of ["", ":3000", ":3001", ":3002", ":3003", ":5173"])

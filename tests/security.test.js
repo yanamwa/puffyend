@@ -41,6 +41,7 @@ test("production rejects missing secrets, DB settings, insecure frontend and inv
   );
   assert.throws(() => securityConfig({ ...prod, TRUST_PROXY_HOPS: "true" }));
   assert.deepEqual(securityConfig(prod).origins, ["https://puffybrain.fun"]);
+  assert.ok(securityConfig({ ...prod, FRONTEND_URL: "https://www.puffybrain.fun/" }).origins.includes("https://puffybrain.fun"));
 });
 test("real protected account routes reject anonymous access before querying DB", async () => {
   const app = express();
