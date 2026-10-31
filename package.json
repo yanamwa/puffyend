@@ -3,7 +3,6 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-<<<<<<< HEAD
     "test": "node --test tests/startup.test.js tests/apiAvailability.test.js tests/calendar/academicCalendarExtraction.test.js tests/catalog/catalogLessonGeneration.test.js tests/catalog/courseCatalog.test.js tests/catalog/syllabusExtraction.test.js tests/lessons/groundingRecovery.test.js tests/lessons/lessonCoverage.test.js tests/quizzes/assessmentEmail.test.js tests/quizzes/mainQuiz.test.js tests/quizzes/mainQuizBaseline.test.js tests/quizzes/mainQuizFlow.test.js tests/quizzes/mainQuizStatus.test.js tests/quizzes/practiceQuiz.test.js tests/courses/modulePublication.test.js tests/courses/progressiveCoursePublication.test.js",
     "test:integration": "node --test tests/postgresMigration.test.js tests/security.test.js",
     "format": "prettier --write src tests --ignore-unknown",
@@ -11,16 +10,8 @@
     "migrate:catalog": "node src/migrations/runCourseCatalogMigration.js",
     "test:catalog": "node --test tests/catalog/catalogLessonGeneration.test.js tests/catalog/courseCatalog.test.js tests/catalog/syllabusExtraction.test.js",
     "test:all": "npm test && npm run test:integration",
-    "migrate": "node src/migrations/runMigrations.js"
-=======
-    "test": "node --test tests/rag.test.js tests/grounding.test.js tests/powerPoint.test.js tests/outlineRecovery.test.js tests/quizRag.test.js",
-    "test:integration": "node --test tests/rag.integration.test.js",
-    "format": "prettier --write src tests --ignore-unknown",
-    "format:check": "prettier --check src tests --ignore-unknown",
-    "migrate:catalog": "node src/migrations/runCourseCatalogMigration.js",
-    "test:catalog": "node --test tests/courseCatalog.test.js tests/syllabusExtraction.test.js tests/courseCatalog.integration.test.js",
+    "migrate": "node src/migrations/runMigrations.js",
     "test:security": "node --test tests/security.test.js"
->>>>>>> backend/main
   },
   "dependencies": {
     "adm-zip": "^0.6.1",
@@ -35,7 +26,6 @@
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.12.0",
     "multer": "^2.2.0",
-<<<<<<< HEAD
     "nodemailer": "^9.0.3",
     "pdf-parse": "^2.4.5",
     "pg": "^8.23.1",
@@ -43,14 +33,6 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.13",
-=======
-    "mysql2": "^3.22.5",
-    "nodemailer": "^9.0.3",
-    "pdf-parse": "^2.4.5",
-    "ppt-to-text": "^1.0.1"
-  },
-  "devDependencies": {
->>>>>>> backend/main
     "nodemon": "^3.1.7",
     "prettier": "^3.9.10"
   }

@@ -599,7 +599,6 @@ If you have questions regarding this action, please contact ${
 PuffyBrain`,
   });
 }
-<<<<<<< HEAD
 
 export async function sendMainQuizAvailableEmail(email, courseTitle, moduleTitle, courseId) {
   const { transporter, from } = createSmtpMailer();
@@ -622,5 +621,3 @@ export async function sendModuleAvailableEmail(email, courseTitle, moduleTitle, 
     html: `<h2 style="color:#527eaf">New module available</h2><p><strong>${escapeHtml(moduleTitle)}</strong> has been uploaded to ${escapeHtml(courseTitle)}.</p><p><a href="${escapeHtml(url)}">Open your course</a> to start learning.</p>`,
   });
 }
-=======
->>>>>>> backend/main

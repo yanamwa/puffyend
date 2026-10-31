@@ -29,11 +29,7 @@ function dateBounds(query) {
 const inRange = (column, bounds, params) => {
   if (!bounds.start) return '1=1';
   params.push(bounds.start, bounds.end);
-<<<<<<< HEAD
   return `${column} >= ? AND ${column} < (?::timestamp + INTERVAL '1 day')`;
-=======
-  return `${column} >= ? AND ${column} < DATE_ADD(?, INTERVAL 1 DAY)`;
->>>>>>> backend/main
 };
 
 export async function getReports(req, res, next) {
@@ -42,7 +38,6 @@ export async function getReports(req, res, next) {
     const [settingsRows] = await db.execute(`
         SELECT
             passing_percentage AS passingPercentage,
-<<<<<<< HEAD
             TO_CHAR(semester_start_date, 'YYYY-MM-DD')
             AS semesterStartDate,
             TO_CHAR(semester_end_date, 'YYYY-MM-DD')
@@ -50,15 +45,6 @@ export async function getReports(req, res, next) {
             TO_CHAR(school_year_start_date, 'YYYY-MM-DD')
             AS schoolYearStartDate,
             TO_CHAR(school_year_end_date, 'YYYY-MM-DD')
-=======
-            DATE_FORMAT(semester_start_date, '%Y-%m-%d')
-            AS semesterStartDate,
-            DATE_FORMAT(semester_end_date, '%Y-%m-%d')
-            AS semesterEndDate,
-            DATE_FORMAT(school_year_start_date, '%Y-%m-%d')
-            AS schoolYearStartDate,
-            DATE_FORMAT(school_year_end_date, '%Y-%m-%d')
->>>>>>> backend/main
             AS schoolYearEndDate
         FROM system_settings
         ORDER BY setting_id ASC
@@ -165,7 +151,6 @@ export async function getReportConfig(req, res, next) {
     const [rows] = await db.execute(`
       SELECT
         passing_percentage AS passingPercentage,
-<<<<<<< HEAD
         TO_CHAR(semester_start_date, 'YYYY-MM-DD')
           AS semesterStartDate,
         TO_CHAR(semester_end_date, 'YYYY-MM-DD')
@@ -173,15 +158,6 @@ export async function getReportConfig(req, res, next) {
         TO_CHAR(school_year_start_date, 'YYYY-MM-DD')
           AS schoolYearStartDate,
         TO_CHAR(school_year_end_date, 'YYYY-MM-DD')
-=======
-        DATE_FORMAT(semester_start_date, '%Y-%m-%d')
-          AS semesterStartDate,
-        DATE_FORMAT(semester_end_date, '%Y-%m-%d')
-          AS semesterEndDate,
-        DATE_FORMAT(school_year_start_date, '%Y-%m-%d')
-          AS schoolYearStartDate,
-        DATE_FORMAT(school_year_end_date, '%Y-%m-%d')
->>>>>>> backend/main
           AS schoolYearEndDate
       FROM system_settings
       ORDER BY setting_id ASC

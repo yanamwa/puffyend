@@ -1,8 +1,5 @@
 import fs from "node:fs/promises";
-<<<<<<< HEAD
 import { generationContext } from "../services/rag/generationContext.js";
-=======
->>>>>>> backend/main
 import path from "node:path";
 import { db } from "../db.js";
 import { enqueueJob, loadJob } from "../services/rag/lessonJobService.js";
@@ -26,11 +23,7 @@ function reportError(res, error) {
   return res.status(error.statusCode || 500).json({
     success: false,
     message:
-<<<<<<< HEAD
       error.code === "42P01"
-=======
-      error.code === "ER_NO_SUCH_TABLE"
->>>>>>> backend/main
         ? "Run all three lesson RAG SQL migrations before using this endpoint."
         : error.message,
   });
@@ -61,10 +54,7 @@ export async function processLessonFile(req, res) {
       courseId,
       lessonId,
       requesterId: req.user.userId,
-<<<<<<< HEAD
       generationContext: generationContext(req.body?.generation_context),
-=======
->>>>>>> backend/main
     });
     return res.status(202).json({
       success: true,
@@ -142,10 +132,7 @@ export async function queueSourceGeneration(req, res) {
       courseId: document.course_id,
       lessonId: document.lesson_id,
       requesterId: req.user.userId,
-<<<<<<< HEAD
       generationContext: generationContext(req.body?.generation_context),
-=======
->>>>>>> backend/main
     });
     return res
       .status(202)
@@ -265,11 +252,7 @@ export async function retryLessonJob(req, res) {
         409,
       );
     const [result] = await db.execute(
-<<<<<<< HEAD
       "UPDATE lesson_rag_jobs SET status = 'queued', phase = 'retrying generation', attempts = 0, progress = 25, error_message = NULL, next_run_at = NOW(), requester_id = ?, payload = jsonb_set(payload::jsonb, '{retryDocumentIds}', ?::jsonb) WHERE job_id = ? AND status = 'failed'",
-=======
-      "UPDATE lesson_rag_jobs SET status = 'queued', phase = 'retrying generation', attempts = 0, progress = 25, error_message = NULL, next_run_at = NOW(), requester_id = ?, payload = JSON_SET(payload, '$.retryDocumentIds', JSON_EXTRACT(?, '$')) WHERE job_id = ? AND status = 'failed'",
->>>>>>> backend/main
       [
         req.user.userId,
         JSON.stringify(sources.map((s) => s.document_id)),

@@ -1,10 +1,6 @@
 import { db } from "../db.js";
-<<<<<<< HEAD
 import { prepareRestore, resetSequences, quoteIdentifier } from "../database/restore.js";
 import { logAuditFromRequest } from "../services/system/auditLogService.js";
-=======
-import { logAuditFromRequest } from "../services/auditLogService.js";
->>>>>>> backend/main
 
 /* =====================================================
    HELPERS
@@ -14,13 +10,6 @@ function cleanText(value) {
   return String(value ?? "").trim();
 }
 
-<<<<<<< HEAD
-=======
-function quoteIdentifier(value) {
-  return `\`${String(value).replace(/`/g, "``")}\``;
-}
-
->>>>>>> backend/main
 function getCurrentUser(req) {
   return req?.user || {};
 }
@@ -54,11 +43,7 @@ function getCurrentUserRole(req) {
 const EXCLUDED_TABLES = new Set(["audit_logs"]);
 
 async function getDatabaseName() {
-<<<<<<< HEAD
   const [rows] = await db.execute("SELECT CURRENT_SCHEMA() AS database_name");
-=======
-  const [rows] = await db.execute("SELECT DATABASE() AS database_name");
->>>>>>> backend/main
 
   return rows[0]?.database_name || "puffybrain";
 }
@@ -66,13 +51,8 @@ async function getDatabaseName() {
 async function getDatabaseTables() {
   const [rows] = await db.execute(`
     SELECT TABLE_NAME
-<<<<<<< HEAD
     FROM information_schema.tables
     WHERE TABLE_SCHEMA = CURRENT_SCHEMA()
-=======
-    FROM INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_SCHEMA = DATABASE()
->>>>>>> backend/main
       AND TABLE_TYPE = 'BASE TABLE'
     ORDER BY TABLE_NAME ASC
   `);
@@ -84,16 +64,10 @@ async function getTableColumns(connection, tableName) {
   const [rows] = await connection.execute(
     `
       SELECT COLUMN_NAME
-<<<<<<< HEAD
       FROM information_schema.columns
       WHERE TABLE_SCHEMA = CURRENT_SCHEMA()
         AND TABLE_NAME = ?
         AND is_generated = 'NEVER'
-=======
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = ?
->>>>>>> backend/main
       ORDER BY ORDINAL_POSITION ASC
     `,
     [tableName],
@@ -241,11 +215,7 @@ export async function restoreDatabaseBackup(req, res) {
      * Temporarily disable FK checks because
      * tables depend on each other.
      */
-<<<<<<< HEAD
     await prepareRestore(connection, backupTables.map(([table]) => table));
-=======
-    await connection.query("SET FOREIGN_KEY_CHECKS = 0");
->>>>>>> backend/main
 
     try {
       /*
@@ -268,16 +238,12 @@ export async function restoreDatabaseBackup(req, res) {
           await getTableColumns(connection, tableName),
         );
 
-<<<<<<< HEAD
         for (const originalRow of rows) {
           const row = originalRow && { ...originalRow };
           if (tableName === "users" && row && "userId" in row) {
             row.userid = row.userId;
             delete row.userId;
           }
-=======
-        for (const row of rows) {
->>>>>>> backend/main
           if (!row || typeof row !== "object" || Array.isArray(row)) {
             continue;
           }
@@ -295,15 +261,11 @@ export async function restoreDatabaseBackup(req, res) {
             continue;
           }
 
-<<<<<<< HEAD
           const values = columns.map((column) => {
             const value = row[column];
             return value?.type === "Buffer" && Array.isArray(value.data)
               ? Buffer.from(value.data) : value;
           });
-=======
-          const values = columns.map((column) => row[column]);
->>>>>>> backend/main
 
           const columnSql = columns.map(quoteIdentifier).join(", ");
 
@@ -320,27 +282,13 @@ export async function restoreDatabaseBackup(req, res) {
         }
       }
 
-<<<<<<< HEAD
       await connection.query("SET CONSTRAINTS ALL IMMEDIATE");
 
       await resetSequences(connection, backupTables.map(([table]) => table));
-=======
-      await connection.query("SET FOREIGN_KEY_CHECKS = 1");
-
->>>>>>> backend/main
       await connection.commit();
     } catch (restoreError) {
       await connection.rollback();
 
-<<<<<<< HEAD
-=======
-      try {
-        await connection.query("SET FOREIGN_KEY_CHECKS = 1");
-      } catch {
-        // Ignore cleanup failure.
-      }
-
->>>>>>> backend/main
       throw restoreError;
     }
 

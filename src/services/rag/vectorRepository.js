@@ -87,11 +87,7 @@ export async function loadDocument(documentId) {
 export async function findReusableDocument(courseId, lessonId, hash, config) {
   const [rows] = await db.execute(
     `SELECT d.* FROM lesson_source_documents d
-<<<<<<< HEAD
     WHERE d.course_id = ? AND d.lesson_id IS NOT DISTINCT FROM ? AND d.content_hash = ? AND d.processing_status = 'ready'
-=======
-    WHERE d.course_id = ? AND d.lesson_id <=> ? AND d.content_hash = ? AND d.processing_status = 'ready'
->>>>>>> backend/main
     AND d.chunk_count > 0 AND d.chunk_count = (SELECT COUNT(*) FROM lesson_source_chunks c WHERE c.document_id = d.document_id)
     AND NOT EXISTS (SELECT 1 FROM lesson_source_chunks c WHERE c.document_id = d.document_id
       AND (c.embedding_model <> ? OR c.embedding_dimensions <> ?))
@@ -111,11 +107,7 @@ export async function withDatabaseLocks(names, operation) {
   try {
     for (const name of [...new Set(names)].sort()) {
       const [rows] = await connection.execute(
-<<<<<<< HEAD
         "SELECT pg_try_advisory_lock(hashtextextended(?::text, 0)) AS acquired",
-=======
-        "SELECT GET_LOCK(?, 5) AS acquired",
->>>>>>> backend/main
         [name],
       );
       if (Number(rows[0].acquired) !== 1)
@@ -129,11 +121,7 @@ export async function withDatabaseLocks(names, operation) {
   } finally {
     try {
       for (const name of acquired.reverse())
-<<<<<<< HEAD
         await connection.execute("SELECT pg_advisory_unlock(hashtextextended(?::text, 0))", [name]);
-=======
-        await connection.execute("SELECT RELEASE_LOCK(?)", [name]);
->>>>>>> backend/main
     } finally {
       connection.release();
     }

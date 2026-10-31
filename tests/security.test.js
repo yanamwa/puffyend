@@ -26,27 +26,13 @@ async function serve(app, run) {
 const prod = {
   NODE_ENV: "production",
   JWT_SECRET: "x".repeat(48),
-<<<<<<< HEAD
   DATABASE_URL: "postgresql://app:private@db:5432/postgres",
-=======
-  DB_HOST: "db",
-  DB_USER: "app",
-  DB_PASSWORD: "private",
-  DB_NAME: "app",
->>>>>>> backend/main
   FRONTEND_URL: "https://puffybrain.fun",
 };
 test("production rejects missing secrets, DB settings, insecure frontend and invalid proxy hops", () => {
   for (const key of [
     "JWT_SECRET",
-<<<<<<< HEAD
     "DATABASE_URL",
-=======
-    "DB_HOST",
-    "DB_USER",
-    "DB_PASSWORD",
-    "DB_NAME",
->>>>>>> backend/main
     "FRONTEND_URL",
   ])
     assert.throws(() => securityConfig({ ...prod, [key]: "" }));
@@ -55,10 +41,7 @@ test("production rejects missing secrets, DB settings, insecure frontend and inv
   );
   assert.throws(() => securityConfig({ ...prod, TRUST_PROXY_HOPS: "true" }));
   assert.deepEqual(securityConfig(prod).origins, ["https://puffybrain.fun"]);
-<<<<<<< HEAD
   assert.ok(securityConfig({ ...prod, FRONTEND_URL: "https://www.puffybrain.fun/" }).origins.includes("https://puffybrain.fun"));
-=======
->>>>>>> backend/main
 });
 test("real protected account routes reject anonymous access before querying DB", async () => {
   const app = express();

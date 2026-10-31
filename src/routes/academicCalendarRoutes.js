@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 import { extractAcademicCalendar } from "../services/calendar/academicCalendarExtraction.js";
-=======
-import { extractAcademicCalendar } from "../services/academicCalendarExtraction.js";
->>>>>>> backend/main
 import express from "express";
 import multer from "multer";
 import { db } from "../db.js";
@@ -11,11 +7,7 @@ import { requireRole } from "../middleware/roleMiddleware.js";
 import {
   calendarDetails,
   calendarFile,
-<<<<<<< HEAD
 } from "../services/calendar/academicCalendarRules.js";
-=======
-} from "../services/academicCalendarRules.js";
->>>>>>> backend/main
 const fields =
   "calendar_id,title,academic_year,events,published,filename,mime_type,updated_at";
 const isAdmin = (req) => ["admin", "super_admin"].includes(req.user.role);
@@ -259,11 +251,7 @@ export function createAcademicCalendarRouter(
   router.post("/", admin, upload.array("file", 5), save);
   router.put("/:id", admin, upload.array("file", 5), save);
   router.use((error, req, res, next) => {
-<<<<<<< HEAD
     const duplicate = error.code === "23505";
-=======
-    const duplicate = error.code === "ER_DUP_ENTRY";
->>>>>>> backend/main
     res
       .status(
         duplicate

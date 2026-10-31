@@ -75,11 +75,7 @@ export async function getSystemAnalytics(req, res) {
 
         SUM(
           CASE
-<<<<<<< HEAD
             WHEN last_active >= (NOW() - INTERVAL '7 day')
-=======
-            WHEN last_active >= DATE_SUB(NOW(), INTERVAL 7 DAY)
->>>>>>> backend/main
             AND is_archived = 0
             THEN 1
             ELSE 0
@@ -100,14 +96,7 @@ export async function getSystemAnalytics(req, res) {
 
         SUM(
           CASE
-<<<<<<< HEAD
             WHEN created_at >= DATE_TRUNC('month', NOW())
-=======
-            WHEN created_at >= DATE_FORMAT(
-              NOW(),
-              '%Y-%m-01'
-            )
->>>>>>> backend/main
             THEN 1
             ELSE 0
           END
@@ -115,24 +104,9 @@ export async function getSystemAnalytics(req, res) {
 
         SUM(
           CASE
-<<<<<<< HEAD
             WHEN created_at >= DATE_TRUNC('month', (NOW() - INTERVAL '1 month'))
             AND created_at <
               DATE_TRUNC('month', NOW())
-=======
-            WHEN created_at >= DATE_FORMAT(
-              DATE_SUB(
-                NOW(),
-                INTERVAL 1 MONTH
-              ),
-              '%Y-%m-01'
-            )
-            AND created_at <
-              DATE_FORMAT(
-                NOW(),
-                '%Y-%m-01'
-              )
->>>>>>> backend/main
             THEN 1
             ELSE 0
           END
@@ -259,11 +233,7 @@ export async function getSystemAnalytics(req, res) {
             CASE
               WHEN total > 0
               THEN
-<<<<<<< HEAD
                 (score::numeric / total) * 100
-=======
-                (score / total) * 100
->>>>>>> backend/main
               ELSE NULL
             END
           ),
@@ -293,14 +263,7 @@ export async function getSystemAnalytics(req, res) {
       FROM quiz_attempts
 
       WHERE created_at >=
-<<<<<<< HEAD
         (NOW() - INTERVAL '7 day')
-=======
-        DATE_SUB(
-          NOW(),
-          INTERVAL 7 DAY
-        )
->>>>>>> backend/main
     `);
 
     /* =================================================
@@ -381,28 +344,16 @@ export async function getSystemAnalytics(req, res) {
             CASE
               WHEN total > 0
               THEN
-<<<<<<< HEAD
                 (score::numeric / total) * 100
               ELSE NULL
             END
           ) AS average_percentage
-=======
-                (score / total) * 100
-              ELSE NULL
-            END
-          ) AS averagePercentage
->>>>>>> backend/main
 
         FROM quiz_attempts
 
         GROUP BY user_id
 
-<<<<<<< HEAD
       ) AS mastery WHERE average_percentage >= 80
-=======
-        HAVING averagePercentage >= 80
-      ) AS mastery
->>>>>>> backend/main
     `);
 
     /* =================================================

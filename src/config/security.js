@@ -13,21 +13,11 @@ export function securityConfig(env = process.env) {
     );
   if (production) {
     for (const key of [
-<<<<<<< HEAD
       "FRONTEND_URL",
     ])
       if (!env[key]) throw new Error(`Production requires ${key}.`);
     if (!env.DATABASE_URL && !env.SUPABASE_DB_URL)
       throw new Error("Production requires DATABASE_URL (Supabase PostgreSQL connection string).");
-=======
-      "DB_HOST",
-      "DB_USER",
-      "DB_PASSWORD",
-      "DB_NAME",
-      "FRONTEND_URL",
-    ])
-      if (!env[key]) throw new Error(`Production requires ${key}.`);
->>>>>>> backend/main
   }
   const frontend = new URL(env.FRONTEND_URL || "https://puffybrain.fun");
   if (
@@ -38,11 +28,7 @@ export function securityConfig(env = process.env) {
   const proxyHops = Number(env.TRUST_PROXY_HOPS || 0);
   if (!Number.isSafeInteger(proxyHops) || proxyHops < 0)
     throw new Error("TRUST_PROXY_HOPS must be a nonnegative integer.");
-<<<<<<< HEAD
   const origins = [...new Set(["https://puffybrain.fun", frontend.origin])];
-=======
-  const origins = [frontend.origin];
->>>>>>> backend/main
   if (!production) {
     for (const host of ["localhost", "127.0.0.1"])
       for (const port of ["", ":3000", ":3001", ":3002", ":3003", ":5173"])
