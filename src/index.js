@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express from "express";
+import cors from "cors";
 import {
-  apiCors,
   mountApiAvailability,
   failStartup,
 } from "./middleware/apiAvailability.js";
@@ -15,19 +15,23 @@ const availability = {
   failed: false,
   stage: "loading_application",
 };
-let frontendOrigin = "https://puffybrain.fun";
-try {
-  frontendOrigin = new URL(process.env.FRONTEND_URL || frontendOrigin).origin;
-} catch {
-  /* The full application validates this after the listener starts. */
-}
-const origins = [frontendOrigin];
+const corsOptions = {
+  origin: "https://puffybrain.fun",
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  optionsSuccessStatus: 204,
+  preflightContinue: false,
+};
 if (process.env.NODE_ENV !== "production") {
+  const origins = ["https://puffybrain.fun"];
   for (const host of ["localhost", "127.0.0.1"])
     for (const port of ["", ":3000", ":3001", ":3002", ":3003", ":5173"])
       origins.push(`http://${host}${port}`);
+  corsOptions.origin = origins;
 }
-app.use(apiCors(origins));
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 mountApiAvailability(app, availability);
 
 const server = app.listen(process.env.PORT || 5000, "0.0.0.0", () => {
