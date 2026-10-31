@@ -10,7 +10,7 @@ import { startCatalogLessonWorker } from "./services/catalog/catalogLessonGenera
 import academicCalendarRoutes from "./routes/academicCalendarRoutes.js";
 import { migrateAcademicCalendar } from "./migrations/academicCalendarMigration.js";
 import express from "express";
-import cors from "cors";
+import { apiCors, mountApiAvailability } from "./middleware/apiAvailability.js";
 import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,33 +65,9 @@ console.log("Profile uploads directory:", profileUploadsDirectory);
    CORS
 ========================================= */
 
-const allowedOrigins = security.origins;
-
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-
-        return;
-      }
-
-      console.error("Blocked CORS Origin:", origin);
-
-      const error = new Error(`Origin not allowed: ${origin}`);
-
-      error.statusCode = 403;
-
-      callback(error);
-    },
-
-    credentials: true,
-
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-  }),
-);
+app.use(apiCors(security.origins));
+const availability = { ready: false, failed: false };
+mountApiAvailability(app, availability);
 
 /* =========================================
    BODY PARSERS
@@ -132,17 +108,6 @@ app.use((req, res, next) => {
   console.log(`${req.method} ${req.originalUrl}`);
 
   next();
-});
-
-/* =========================================
-   HEALTH CHECK
-========================================= */
-
-app.get("/api/health", (req, res) => {
-  res.json({
-    success: true,
-    message: "PuffyBrain API is running.",
-  });
 });
 
 /* =========================================
@@ -281,23 +246,7 @@ async function startServer() {
 
     console.log("MySQL Connected Successfully.");
 
-    app.listen(port, () => {
-      console.log("--------------------------------------");
-
-      console.log(`Server running on http://localhost:${port}`);
-
-      console.log(`Health Check: http://localhost:${port}/api/health`);
-
-      console.log(`Uploads folder: ${profileUploadsDirectory}`);
-
-      console.log(`Upload Debug: http://localhost:${port}/api/debug/uploads`);
-
-      console.log(
-        `Lesson Upload: http://localhost:${port}/api/lessons/process-file`,
-      );
-
-      console.log("--------------------------------------");
-    });
+    availability.ready = true;
   } catch (error) {
     console.error("--------------------------------------");
 
@@ -306,8 +255,16 @@ async function startServer() {
     console.error("--------------------------------------");
 
     console.error(error);
-    process.exitCode = 1;
+    availability.failed = true;
+    console.error("API remains available for health checks. Fix the startup error above and restart the app.");
   }
 }
 
-startServer();
+const server = app.listen(port, "0.0.0.0", () => {
+  console.log(`PuffyBrain HTTP server listening on port ${port}`);
+  void startServer();
+});
+server.on("error", (error) => {
+  console.error("HTTP SERVER FAILED TO LISTEN:", error);
+  process.exit(1);
+});

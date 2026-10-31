@@ -23,6 +23,13 @@ const pool = mysql.createPool({
 export const db = pool;
 
 async function ensureDatabaseExists() {
+  // Hosting accounts commonly permit an existing database but not CREATE DATABASE.
+  try {
+    await pool.query("SELECT 1");
+    return;
+  } catch (error) {
+    if (error.code !== "ER_BAD_DB_ERROR") throw error;
+  }
   const bootstrapPool = mysql.createPool({
     host: dbConfig.host,
     user: dbConfig.user,
