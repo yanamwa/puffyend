@@ -438,7 +438,7 @@ export async function generateQuizWithRag({ user, body }) {
   const selected = [...new Set((body.document_ids || []).map(String))];
   const [documents] = await db.execute(
     `SELECT document_id, filename, processing_status FROM lesson_source_documents
-    WHERE course_id = ? AND (lesson_id <=> ? OR (lesson_id IS NULL AND ? = 1)) ORDER BY document_id`,
+    WHERE course_id = ? AND (lesson_id IS NOT DISTINCT FROM ? OR (lesson_id IS NULL AND ? = 1)) ORDER BY document_id`,
     [courseId, lessonId, selected.length ? 1 : 0],
   );
   const sources = selected.length

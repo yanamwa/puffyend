@@ -567,8 +567,8 @@ async function getCourseIdColumn() {
 
   const [columns] = await db.execute(
     `SELECT COLUMN_NAME
-     FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE()
+     FROM information_schema.columns
+     WHERE TABLE_SCHEMA = CURRENT_SCHEMA()
        AND TABLE_NAME = 'courses'
        AND COLUMN_NAME IN ('course_id', 'id')`,
   );
@@ -953,7 +953,7 @@ function validateCourse(fields) {
 
 function duplicateCourseCode(error) {
   return (
-    error?.code === "ER_DUP_ENTRY" &&
+    error?.code === "23505" &&
     String(error?.message || "").includes("code")
   );
 }
@@ -1005,7 +1005,7 @@ async function getOrCreateCourse(fields, user) {
       !courseMatchesProfessorFields(existing[0], fields)
     ) {
       const error = new Error("A course with that code already exists.");
-      error.code = "ER_DUP_ENTRY";
+      error.code = "23505";
       throw error;
     }
 

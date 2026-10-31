@@ -98,7 +98,7 @@ export async function generateCatalogModule(
 
 export async function queueCatalogLessons(connection, versionId) {
   await connection.execute(
-    "INSERT IGNORE INTO catalog_lesson_jobs (version_id) VALUES (?)",
+    "INSERT INTO catalog_lesson_jobs (version_id) VALUES (?) ON CONFLICT DO NOTHING",
     [versionId],
   );
 }
@@ -109,7 +109,7 @@ export async function runCatalogLessons(db, generate = generateJson) {
     versionId;
   try {
     const [[lock]] = await connection.query(
-      "SELECT GET_LOCK('puffy-catalog-lessons',0) AS acquired",
+      "SELECT pg_try_advisory_lock(hashtextextended('puffy-catalog-lessons',0)) AS acquired",
     );
     locked = Number(lock.acquired) === 1;
     if (!locked) return;
@@ -155,7 +155,7 @@ export async function runCatalogLessons(db, generate = generateJson) {
     else console.error("Catalog generation:", error.message);
   } finally {
     if (locked)
-      await connection.query("SELECT RELEASE_LOCK('puffy-catalog-lessons')");
+      await connection.query("SELECT pg_advisory_unlock(hashtextextended('puffy-catalog-lessons',0))");
     connection.release();
   }
 }

@@ -251,7 +251,7 @@ export function createAcademicCalendarRouter(
   router.post("/", admin, upload.array("file", 5), save);
   router.put("/:id", admin, upload.array("file", 5), save);
   router.use((error, req, res, next) => {
-    const duplicate = error.code === "ER_DUP_ENTRY";
+    const duplicate = error.code === "23505";
     res
       .status(
         duplicate

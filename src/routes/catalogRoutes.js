@@ -168,7 +168,7 @@ router.get(
   run(async (req, res) => {
     const q = String(req.query.q || "").slice(0, 255);
     const [rows] = await db.execute(
-      "SELECT * FROM course_catalog WHERE status='active' AND archived_at IS NULL AND (code LIKE ? OR title LIKE ?) ORDER BY code",
+      "SELECT * FROM course_catalog WHERE status='active' AND archived_at IS NULL AND (code ILIKE ? OR title ILIKE ?) ORDER BY code",
       ["%" + q + "%", "%" + q + "%"],
     );
     const [versions] = await db.query(
@@ -217,7 +217,7 @@ router.get(
   admin,
   run(async (_req, res) => {
     const [[summary]] = await db.query(
-      `SELECT COUNT(*) AS total,COALESCE(SUM(status='active' AND archived_at IS NULL),0) AS active,COALESCE(SUM(status='draft' AND archived_at IS NULL),0) AS draft,(SELECT COUNT(*) FROM courses WHERE professor_id IS NOT NULL OR COALESCE(professor_email,'') <> '') AS classes FROM course_catalog`,
+      `SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE status='active' AND archived_at IS NULL) AS active,COUNT(*) FILTER (WHERE status='draft' AND archived_at IS NULL) AS draft,(SELECT COUNT(*) FROM courses WHERE professor_id IS NOT NULL OR COALESCE(professor_email,'') <> '') AS classes FROM course_catalog`,
     );
     res.json({ success: true, summary });
   }),
@@ -249,7 +249,7 @@ export async function catalogClasses(req, res) {
   }
   if (req.query.q) {
     conditions.push(
-      "(c.title LIKE ? OR c.code LIKE ? OR c.catalog_code LIKE ? OR c.class_name LIKE ? OR c.professor_name LIKE ? OR u.name LIKE ?)",
+      "(c.title ILIKE ? OR c.code ILIKE ? OR c.catalog_code ILIKE ? OR c.class_name ILIKE ? OR c.professor_name ILIKE ? OR u.name ILIKE ?)",
     );
     values.push(
       ...Array(6).fill("%" + String(req.query.q).slice(0, 255) + "%"),
@@ -296,7 +296,7 @@ router.post(
     await fs.writeFile(filePath(storageName), req.file.buffer, { flag: "wx" });
     try {
       await db.execute(
-        "INSERT INTO syllabus_uploads (upload_id,uploader_id,filename,storage_name,file_size,expires_at) VALUES (?,?,?,?,?,DATE_ADD(NOW(),INTERVAL 24 HOUR))",
+        "INSERT INTO syllabus_uploads (upload_id,uploader_id,filename,storage_name,file_size,expires_at) VALUES (?,?,?,?,?,(NOW() + INTERVAL '24 hour'))",
         [uploadId, actor(req), filename, storageName, req.file.size],
       );
     } catch (error) {
@@ -375,7 +375,7 @@ router.get(
                 : "archived_at IS NULL",
             ];
     if (req.query.q) {
-      conditions.push("(code LIKE ? OR title LIKE ?)");
+      conditions.push("(code ILIKE ? OR title ILIKE ?)");
       values.push(
         ...Array(2).fill("%" + String(req.query.q).slice(0, 255) + "%"),
       );
@@ -385,7 +385,7 @@ router.get(
       values.push(req.query.status);
     }
     if (["BSIT", "BSCS"].includes(req.query.program)) {
-      conditions.push("JSON_CONTAINS(programs, ?)");
+      conditions.push("programs::jsonb @> ?::jsonb");
       values.push(JSON.stringify(req.query.program));
     }
     if (req.query.normalizedCode) {
@@ -412,7 +412,7 @@ router.get(
   }),
 );
 router.post("/versions/:id/retry-lessons", admin, run(async (req,res) => {
-  const [result] = await db.execute("UPDATE catalog_lesson_jobs j JOIN syllabus_versions v ON v.version_id=j.version_id JOIN course_catalog c ON c.catalog_id=v.catalog_id SET j.status='queued',j.error_message=NULL WHERE j.version_id=? AND j.status='failed' AND c.status='active' AND c.archived_at IS NULL",[req.params.id]);
+  const [result] = await db.execute("UPDATE catalog_lesson_jobs j SET status='queued',error_message=NULL FROM syllabus_versions v JOIN course_catalog c ON c.catalog_id=v.catalog_id WHERE v.version_id=j.version_id AND j.version_id=? AND j.status='failed' AND c.status='active' AND c.archived_at IS NULL",[req.params.id]);
   if (!result.affectedRows) fail("No failed generation is available to retry.",409);
   res.json({success:true});
 }));
@@ -670,7 +670,7 @@ router.patch(
   }),
 );
 router.use((error, _req, res, _next) => {
-  if (error.code === "ER_DUP_ENTRY")
+  if (error.code === "23505")
     return res.status(409).json({
       success: false,
       message:

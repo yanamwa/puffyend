@@ -31,6 +31,6 @@ uploads/
 src/private/
 
 .env.*
-!.env.example
+.env.example
 backups/
 audit-report.json

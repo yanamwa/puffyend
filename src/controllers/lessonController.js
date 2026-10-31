@@ -23,7 +23,7 @@ function reportError(res, error) {
   return res.status(error.statusCode || 500).json({
     success: false,
     message:
-      error.code === "ER_NO_SUCH_TABLE"
+      error.code === "42P01"
         ? "Run all three lesson RAG SQL migrations before using this endpoint."
         : error.message,
   });
@@ -252,7 +252,7 @@ export async function retryLessonJob(req, res) {
         409,
       );
     const [result] = await db.execute(
-      "UPDATE lesson_rag_jobs SET status = 'queued', phase = 'retrying generation', attempts = 0, progress = 25, error_message = NULL, next_run_at = NOW(), requester_id = ?, payload = JSON_SET(payload, '$.retryDocumentIds', JSON_EXTRACT(?, '$')) WHERE job_id = ? AND status = 'failed'",
+      "UPDATE lesson_rag_jobs SET status = 'queued', phase = 'retrying generation', attempts = 0, progress = 25, error_message = NULL, next_run_at = NOW(), requester_id = ?, payload = jsonb_set(payload::jsonb, '{retryDocumentIds}', ?::jsonb) WHERE job_id = ? AND status = 'failed'",
       [
         req.user.userId,
         JSON.stringify(sources.map((s) => s.document_id)),

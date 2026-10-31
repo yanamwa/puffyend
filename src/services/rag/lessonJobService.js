@@ -58,8 +58,8 @@ export async function enqueueJob({
     .slice(0, 48);
   return withDatabaseLock(`rag-job:${fingerprint}`, async () => {
     const [existing] = await db.execute(
-      `SELECT job_id FROM lesson_rag_jobs WHERE course_id = ? AND lesson_id <=> ?
-      AND status IN ('queued', 'running') AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.fingerprint')) = ? LIMIT 1`,
+      `SELECT job_id FROM lesson_rag_jobs WHERE course_id = ? AND lesson_id IS NOT DISTINCT FROM ?
+      AND status IN ('queued', 'running') AND (payload::jsonb ->> 'fingerprint') = ? LIMIT 1`,
       [courseId, lessonId, fingerprint],
     );
     if (existing[0]) return { jobId: existing[0].job_id, reused: true };
@@ -156,7 +156,7 @@ export async function claimJob() {
     const token = crypto.randomUUID();
     await connection.execute(
       `UPDATE lesson_rag_jobs SET status = 'running', phase = 'starting', attempts = attempts + 1,
-      worker_token = ?, lease_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE), error_message = NULL WHERE job_id = ?`,
+      worker_token = ?, lease_expires_at = (NOW() + INTERVAL '10 minute'), error_message = NULL WHERE job_id = ?`,
       [token, job.job_id],
     );
     await connection.commit();
@@ -223,7 +223,7 @@ export async function runClaimedJob(job) {
   }) => {
     const [result] = await db.execute(
       `UPDATE lesson_rag_jobs SET phase = ?, progress = ?,
-      document_id = COALESCE(?, document_id), lease_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE)
+      document_id = COALESCE(?, document_id), lease_expires_at = (NOW() + INTERVAL '10 minute')
       WHERE job_id = ? AND worker_token = ? AND status = 'running'`,
       [phase, percent, documentId ?? null, ...owner],
     );
@@ -231,19 +231,19 @@ export async function runClaimedJob(job) {
       throw requestError("Job was deleted or reassigned.", 409);
     if (outlineCheckpoint)
       await db.execute(
-        "UPDATE lesson_rag_jobs SET payload = JSON_SET(payload, '$.outlineCheckpoint', JSON_EXTRACT(?, '$')) WHERE job_id = ? AND worker_token = ?",
+        "UPDATE lesson_rag_jobs SET payload = jsonb_set(payload::jsonb, '{outlineCheckpoint}', ?::jsonb) WHERE job_id = ? AND worker_token = ?",
         [JSON.stringify(outlineCheckpoint), ...owner],
       );
     for (const id of new Set(documentIds)) {
       await db.execute(
-        "INSERT IGNORE INTO lesson_rag_job_documents (job_id, document_id) VALUES (?, ?)",
+        "INSERT INTO lesson_rag_job_documents (job_id, document_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
         [job.job_id, id],
       );
     }
   };
   const heartbeat = setInterval(() => {
     db.execute(
-      "UPDATE lesson_rag_jobs SET lease_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE job_id = ? AND worker_token = ? AND status = 'running'",
+      "UPDATE lesson_rag_jobs SET lease_expires_at = (NOW() + INTERVAL '10 minute') WHERE job_id = ? AND worker_token = ? AND status = 'running'",
       owner,
     ).catch((error) => console.error("RAG heartbeat:", error.message));
   }, 30000);
@@ -279,7 +279,7 @@ export async function runClaimedJob(job) {
     const retry = error.retryable === true && job.attempts < 3;
     await db.execute(
       `UPDATE lesson_rag_jobs SET status = ?, phase = ?, error_message = ?, lease_expires_at = NULL,
-      next_run_at = DATE_ADD(NOW(), INTERVAL 30 SECOND) WHERE job_id = ? AND worker_token = ? AND status = 'running'`,
+      next_run_at = (NOW() + INTERVAL '30 second') WHERE job_id = ? AND worker_token = ? AND status = 'running'`,
       [
         retry ? "queued" : "failed",
         retry ? "retrying" : "failed",

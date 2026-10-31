@@ -26,19 +26,13 @@ async function serve(app, run) {
 const prod = {
   NODE_ENV: "production",
   JWT_SECRET: "x".repeat(48),
-  DB_HOST: "db",
-  DB_USER: "app",
-  DB_PASSWORD: "private",
-  DB_NAME: "app",
+  DATABASE_URL: "postgresql://app:private@db:5432/postgres",
   FRONTEND_URL: "https://puffybrain.fun",
 };
 test("production rejects missing secrets, DB settings, insecure frontend and invalid proxy hops", () => {
   for (const key of [
     "JWT_SECRET",
-    "DB_HOST",
-    "DB_USER",
-    "DB_PASSWORD",
-    "DB_NAME",
+    "DATABASE_URL",
     "FRONTEND_URL",
   ])
     assert.throws(() => securityConfig({ ...prod, [key]: "" }));

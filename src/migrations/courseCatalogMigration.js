@@ -15,16 +15,16 @@ export async function migrateCourseCatalog(db) {
     await db.query(statement);
   await migrateCatalogCodeAvailability(db);
   const [versionColumns] = await db.query(
-    "SHOW COLUMNS FROM syllabus_versions",
+    "SELECT column_name AS \"Field\" FROM information_schema.columns WHERE table_schema=CURRENT_SCHEMA() AND table_name='syllabus_versions'",
   );
   if (!versionColumns.some((column) => column.Field === "coverage_modules"))
     await db.query(
-      "ALTER TABLE syllabus_versions ADD COLUMN coverage_modules JSON NULL",
+      "ALTER TABLE syllabus_versions ADD COLUMN coverage_modules JSONB NULL",
     );
-  const [columns] = await db.query("SHOW COLUMNS FROM courses");
+  const [columns] = await db.query("SELECT column_name AS \"Field\" FROM information_schema.columns WHERE table_schema=CURRENT_SCHEMA() AND table_name='courses'");
   const names = new Set(columns.map((c) => c.Field));
   for (const [name, type] of Object.entries({
-    content_modules: "JSON NULL",
+    content_modules: "JSONB NULL",
     catalog_id: "INT NULL",
     syllabus_version_id: "INT NULL",
     catalog_code: "VARCHAR(50) NULL",
@@ -38,7 +38,7 @@ export async function migrateCourseCatalog(db) {
     if (!names.has(name))
       await db.query(`ALTER TABLE courses ADD COLUMN ${name} ${type}`);
   const [constraints] = await db.query(
-    "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='courses'",
+    "SELECT CONSTRAINT_NAME FROM information_schema.table_constraints WHERE TABLE_SCHEMA=CURRENT_SCHEMA() AND TABLE_NAME='courses'",
   );
   const existing = new Set(constraints.map((c) => c.CONSTRAINT_NAME));
   if (!existing.has("courses_catalog_fk"))

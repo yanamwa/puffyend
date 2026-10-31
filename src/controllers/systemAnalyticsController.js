@@ -75,7 +75,7 @@ export async function getSystemAnalytics(req, res) {
 
         SUM(
           CASE
-            WHEN last_active >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            WHEN last_active >= (NOW() - INTERVAL '7 day')
             AND is_archived = 0
             THEN 1
             ELSE 0
@@ -96,10 +96,7 @@ export async function getSystemAnalytics(req, res) {
 
         SUM(
           CASE
-            WHEN created_at >= DATE_FORMAT(
-              NOW(),
-              '%Y-%m-01'
-            )
+            WHEN created_at >= DATE_TRUNC('month', NOW())
             THEN 1
             ELSE 0
           END
@@ -107,18 +104,9 @@ export async function getSystemAnalytics(req, res) {
 
         SUM(
           CASE
-            WHEN created_at >= DATE_FORMAT(
-              DATE_SUB(
-                NOW(),
-                INTERVAL 1 MONTH
-              ),
-              '%Y-%m-01'
-            )
+            WHEN created_at >= DATE_TRUNC('month', (NOW() - INTERVAL '1 month'))
             AND created_at <
-              DATE_FORMAT(
-                NOW(),
-                '%Y-%m-01'
-              )
+              DATE_TRUNC('month', NOW())
             THEN 1
             ELSE 0
           END
@@ -245,7 +233,7 @@ export async function getSystemAnalytics(req, res) {
             CASE
               WHEN total > 0
               THEN
-                (score / total) * 100
+                (score::numeric / total) * 100
               ELSE NULL
             END
           ),
@@ -275,10 +263,7 @@ export async function getSystemAnalytics(req, res) {
       FROM quiz_attempts
 
       WHERE created_at >=
-        DATE_SUB(
-          NOW(),
-          INTERVAL 7 DAY
-        )
+        (NOW() - INTERVAL '7 day')
     `);
 
     /* =================================================
@@ -359,17 +344,16 @@ export async function getSystemAnalytics(req, res) {
             CASE
               WHEN total > 0
               THEN
-                (score / total) * 100
+                (score::numeric / total) * 100
               ELSE NULL
             END
-          ) AS averagePercentage
+          ) AS average_percentage
 
         FROM quiz_attempts
 
         GROUP BY user_id
 
-        HAVING averagePercentage >= 80
-      ) AS mastery
+      ) AS mastery WHERE average_percentage >= 80
     `);
 
     /* =================================================

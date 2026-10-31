@@ -82,11 +82,7 @@ async function getOtpTiming(userId) {
   const [rows] = await db.execute(
     `SELECT
        GREATEST(
-         TIMESTAMPDIFF(
-           SECOND,
-           NOW(),
-           otp_expires
-         ),
+         TRUNC(EXTRACT(EPOCH FROM (otp_expires - NOW()))),
          0
        ) AS otp_seconds_remaining
      FROM users
@@ -354,10 +350,7 @@ export async function signup(req, res) {
            ?,
            'pending',
            ?,
-           DATE_ADD(
-             NOW(),
-             INTERVAL ? SECOND
-           ),
+           (NOW() + (?::double precision * INTERVAL '1 second')),
            0,
            1
          )`,
@@ -460,11 +453,7 @@ export async function verifyEmail(req, res) {
     const [rows] = await db.execute(
       `SELECT
            users.*,
-           TIMESTAMPDIFF(
-             SECOND,
-             NOW(),
-             otp_expires
-           ) AS otp_seconds_remaining
+           TRUNC(EXTRACT(EPOCH FROM (otp_expires - NOW()))) AS otp_seconds_remaining
          FROM users
          WHERE email = ?
            AND role = 'professor'
@@ -596,10 +585,7 @@ export async function resendOtp(req, res) {
        SET
          otp_code = ?,
          otp_expires =
-           DATE_ADD(
-             NOW(),
-             INTERVAL ? SECOND
-           )
+           (NOW() + (?::double precision * INTERVAL '1 second'))
        WHERE userId = ?`,
       [otp, OTP_TTL_SECONDS, user.userId],
     );
@@ -681,10 +667,7 @@ export async function forgotPassword(req, res) {
        SET
          password_reset_token = ?,
          password_reset_expires =
-           DATE_ADD(
-             NOW(),
-             INTERVAL ? SECOND
-           )
+           (NOW() + (?::double precision * INTERVAL '1 second'))
        WHERE userId = ?`,
       [tokenHash, RESET_PASSWORD_TTL_SECONDS, user.userId],
     );

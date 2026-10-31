@@ -15,13 +15,13 @@ const parse = (value) =>
   typeof value === "string" ? JSON.parse(value) : value;
 export async function initMainQuizTables() {
   await db.execute(
-    `CREATE TABLE IF NOT EXISTS main_quiz_configs (course_id INT NOT NULL, module_id VARCHAR(100) NOT NULL, revision INT NOT NULL DEFAULT 1, config_json LONGTEXT NOT NULL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, PRIMARY KEY(course_id,module_id))`,
+    `CREATE TABLE IF NOT EXISTS main_quiz_configs (course_id INT NOT NULL, module_id VARCHAR(100) NOT NULL, revision INT NOT NULL DEFAULT 1, config_json TEXT NOT NULL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(course_id,module_id))`,
   );
   await db.execute(
-    `CREATE TABLE IF NOT EXISTS personalized_main_quizzes (quiz_id INT AUTO_INCREMENT PRIMARY KEY, course_id INT NOT NULL, module_id VARCHAR(100) NOT NULL, user_id INT NOT NULL, revision INT NOT NULL, practice_attempt_id INT NOT NULL, questions_json LONGTEXT NOT NULL, blueprint_json LONGTEXT NOT NULL, config_json LONGTEXT NOT NULL, submissions INT NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY personalized_quiz_unique(course_id,module_id,user_id,revision))`,
+    `CREATE TABLE IF NOT EXISTS personalized_main_quizzes (quiz_id SERIAL PRIMARY KEY, course_id INT NOT NULL, module_id VARCHAR(100) NOT NULL, user_id INT NOT NULL, revision INT NOT NULL, practice_attempt_id INT NOT NULL, questions_json TEXT NOT NULL, blueprint_json TEXT NOT NULL, config_json TEXT NOT NULL, submissions INT NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, CONSTRAINT personalized_quiz_unique UNIQUE (course_id,module_id,user_id,revision))`,
   );
   await db.execute(
-    `CREATE TABLE IF NOT EXISTS main_quiz_results (result_id INT AUTO_INCREMENT PRIMARY KEY, quiz_id INT NOT NULL, user_id INT NOT NULL, attempts_id INT NOT NULL, result_json LONGTEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`,
+    `CREATE TABLE IF NOT EXISTS main_quiz_results (result_id SERIAL PRIMARY KEY, quiz_id INT NOT NULL, user_id INT NOT NULL, attempts_id INT NOT NULL, result_json TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`,
   );
 }
 async function studentAccess(user, courseId, moduleId) {
@@ -141,7 +141,7 @@ export async function saveMainConfig(user, body) {
       "",
   };
   await db.execute(
-    "INSERT INTO main_quiz_configs(course_id,module_id,config_json) VALUES(?,?,?) ON DUPLICATE KEY UPDATE config_json=VALUES(config_json),revision=revision+1",
+    "INSERT INTO main_quiz_configs(course_id,module_id,config_json) VALUES(?,?,?) ON CONFLICT (course_id, module_id) DO UPDATE SET config_json=EXCLUDED.config_json,revision=main_quiz_configs.revision+1",
     [courseId, moduleId, JSON.stringify(config)],
   );
   return config;
@@ -178,7 +178,7 @@ export async function startMainQuiz(user, body) {
       mode: "manual",
     };
     await db.execute(
-      "INSERT IGNORE INTO main_quiz_configs(course_id,module_id,config_json) VALUES(?,?,?)",
+      "INSERT INTO main_quiz_configs(course_id,module_id,config_json) VALUES(?,?,?) ON CONFLICT DO NOTHING",
       [courseId, moduleId, JSON.stringify(manualConfig)],
     );
   }
@@ -233,7 +233,7 @@ export async function startMainQuiz(user, body) {
       })),
     };
     await db.execute(
-      "INSERT IGNORE INTO personalized_main_quizzes(course_id,module_id,user_id,revision,practice_attempt_id,questions_json,blueprint_json,config_json) VALUES(?,?,?,?,?,?,?,?)",
+      "INSERT INTO personalized_main_quizzes(course_id,module_id,user_id,revision,practice_attempt_id,questions_json,blueprint_json,config_json) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
       [
         courseId,
         moduleId,
@@ -286,7 +286,7 @@ async function generatePersonalized(
     validateManualQuestions(questions);
     blueprint = baselineQuestionBlueprint(questions);
     await db.execute(
-      "INSERT IGNORE INTO personalized_main_quizzes(course_id,module_id,user_id,revision,practice_attempt_id,questions_json,blueprint_json,config_json) VALUES(?,?,?,?,?,?,?,?)",
+      "INSERT INTO personalized_main_quizzes(course_id,module_id,user_id,revision,practice_attempt_id,questions_json,blueprint_json,config_json) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
       [
         courseId,
         moduleId,
@@ -420,7 +420,7 @@ async function generatePersonalized(
   if (preview) return questions;
   // Another process may have saved this revision while generation ran; preserve that saved quiz.
   await db.execute(
-    `INSERT IGNORE INTO personalized_main_quizzes(course_id,module_id,user_id,revision,practice_attempt_id,questions_json,blueprint_json,config_json) VALUES(?,?,?,?,?,?,?,?)`,
+    `INSERT INTO personalized_main_quizzes(course_id,module_id,user_id,revision,practice_attempt_id,questions_json,blueprint_json,config_json) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
     [
       courseId,
       moduleId,
@@ -551,7 +551,7 @@ export async function saveMainQuizPreview(user, body) {
     ).length,
   };
   const [updated] = await db.execute(
-    "UPDATE main_quiz_configs SET config_json=?,revision=revision+1 WHERE course_id=? AND module_id=? AND revision=?",
+    "UPDATE main_quiz_configs SET config_json=?,revision=main_quiz_configs.revision+1 WHERE course_id=? AND module_id=? AND revision=?",
     [JSON.stringify(config), courseId, moduleId, rows[0].revision],
   );
   if (!updated.affectedRows)
@@ -637,7 +637,7 @@ export async function submitMainQuiz(user, body) {
 export async function mainQuizAnalysis(user, courseId, moduleId) {
   await assertCourseAccess(user, Number(courseId));
   const [rows] = await db.execute(
-    `SELECT q.module_id,q.quiz_id,q.user_id,q.blueprint_json,q.config_json,q.practice_attempt_id,r.result_json,r.created_at,COALESCE(u.display_name,u.name) AS student_name FROM personalized_main_quizzes q JOIN main_quiz_results r ON r.quiz_id=q.quiz_id JOIN users u ON u.userId=q.user_id WHERE q.course_id=? AND (? IS NULL OR q.module_id=?) ORDER BY r.created_at`,
+    `SELECT q.module_id,q.quiz_id,q.user_id,q.blueprint_json,q.config_json,q.practice_attempt_id,r.result_json,r.created_at,COALESCE(u.display_name,u.name) AS student_name FROM personalized_main_quizzes q JOIN main_quiz_results r ON r.quiz_id=q.quiz_id JOIN users u ON u.userId=q.user_id WHERE q.course_id=? AND (?::text IS NULL OR q.module_id=?) ORDER BY r.created_at`,
     [
       Number(courseId),
       moduleId ? String(moduleId) : null,

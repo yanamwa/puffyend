@@ -29,7 +29,7 @@ function dateBounds(query) {
 const inRange = (column, bounds, params) => {
   if (!bounds.start) return '1=1';
   params.push(bounds.start, bounds.end);
-  return `${column} >= ? AND ${column} < DATE_ADD(?, INTERVAL 1 DAY)`;
+  return `${column} >= ? AND ${column} < (?::timestamp + INTERVAL '1 day')`;
 };
 
 export async function getReports(req, res, next) {
@@ -38,13 +38,13 @@ export async function getReports(req, res, next) {
     const [settingsRows] = await db.execute(`
         SELECT
             passing_percentage AS passingPercentage,
-            DATE_FORMAT(semester_start_date, '%Y-%m-%d')
+            TO_CHAR(semester_start_date, 'YYYY-MM-DD')
             AS semesterStartDate,
-            DATE_FORMAT(semester_end_date, '%Y-%m-%d')
+            TO_CHAR(semester_end_date, 'YYYY-MM-DD')
             AS semesterEndDate,
-            DATE_FORMAT(school_year_start_date, '%Y-%m-%d')
+            TO_CHAR(school_year_start_date, 'YYYY-MM-DD')
             AS schoolYearStartDate,
-            DATE_FORMAT(school_year_end_date, '%Y-%m-%d')
+            TO_CHAR(school_year_end_date, 'YYYY-MM-DD')
             AS schoolYearEndDate
         FROM system_settings
         ORDER BY setting_id ASC
@@ -151,13 +151,13 @@ export async function getReportConfig(req, res, next) {
     const [rows] = await db.execute(`
       SELECT
         passing_percentage AS passingPercentage,
-        DATE_FORMAT(semester_start_date, '%Y-%m-%d')
+        TO_CHAR(semester_start_date, 'YYYY-MM-DD')
           AS semesterStartDate,
-        DATE_FORMAT(semester_end_date, '%Y-%m-%d')
+        TO_CHAR(semester_end_date, 'YYYY-MM-DD')
           AS semesterEndDate,
-        DATE_FORMAT(school_year_start_date, '%Y-%m-%d')
+        TO_CHAR(school_year_start_date, 'YYYY-MM-DD')
           AS schoolYearStartDate,
-        DATE_FORMAT(school_year_end_date, '%Y-%m-%d')
+        TO_CHAR(school_year_end_date, 'YYYY-MM-DD')
           AS schoolYearEndDate
       FROM system_settings
       ORDER BY setting_id ASC

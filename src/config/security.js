@@ -13,13 +13,11 @@ export function securityConfig(env = process.env) {
     );
   if (production) {
     for (const key of [
-      "DB_HOST",
-      "DB_USER",
-      "DB_PASSWORD",
-      "DB_NAME",
       "FRONTEND_URL",
     ])
       if (!env[key]) throw new Error(`Production requires ${key}.`);
+    if (!env.DATABASE_URL && !env.SUPABASE_DB_URL)
+      throw new Error("Production requires DATABASE_URL (Supabase PostgreSQL connection string).");
   }
   const frontend = new URL(env.FRONTEND_URL || "https://puffybrain.fun");
   if (

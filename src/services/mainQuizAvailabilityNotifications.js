@@ -38,7 +38,7 @@ export async function checkMainQuizOpenings({ database = db, notify = createNoti
       const previous = states[0];
       // Establish a baseline so a restart never emails old, already-open quizzes.
       if (!previous) {
-        await database.execute("INSERT IGNORE INTO main_quiz_availability_state(course_id,module_id,available,schedule_key) VALUES(?,?,?,?)", [course.course_id,moduleId,opening.available,opening.schedule]);
+        await database.execute("INSERT INTO main_quiz_availability_state(course_id,module_id,available,schedule_key) VALUES(?,?,?,?) ON CONFLICT DO NOTHING", [course.course_id,moduleId,opening.available,opening.schedule]);
         continue;
       }
       let activationId = previous.activation_id;
@@ -48,7 +48,7 @@ export async function checkMainQuizOpenings({ database = db, notify = createNoti
       const [students] = await database.execute("SELECT DISTINCT u.userId,u.email FROM course_enrollments e JOIN users u ON u.userId=e.user_id WHERE e.course_id=? AND e.status='approved' AND COALESCE(e.archived,0)=0", [course.course_id]);
       const moduleTitle = module.title || module.moduleTitle || module.module_title || "Module";
       for (const student of students) {
-        await database.execute("INSERT IGNORE INTO main_quiz_availability_delivery(activation_id,user_id) VALUES(?,?)", [activationId,student.userId]);
+        await database.execute("INSERT INTO main_quiz_availability_delivery(activation_id,user_id) VALUES(?,?) ON CONFLICT DO NOTHING", [activationId,student.userId]);
         const [[delivery]] = await database.execute("SELECT notification_id,email_sent FROM main_quiz_availability_delivery WHERE activation_id=? AND user_id=?", [activationId,student.userId]);
         if (!delivery.notification_id) {
           const notification = await notify({ recipientUserId: student.userId, courseId: course.course_id,

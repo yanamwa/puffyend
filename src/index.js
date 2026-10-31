@@ -8,7 +8,6 @@ import { startModulePublicationNotifications } from "./services/modulePublicatio
 import { startMainQuizAvailabilityNotifications } from "./services/mainQuizAvailabilityNotifications.js";
 import { startCatalogLessonWorker } from "./services/catalog/catalogLessonGeneration.js";
 import academicCalendarRoutes from "./routes/academicCalendarRoutes.js";
-import { migrateAcademicCalendar } from "./migrations/academicCalendarMigration.js";
 import express from "express";
 import { apiCors, mountApiAvailability } from "./middleware/apiAvailability.js";
 import dotenv from "dotenv";
@@ -18,7 +17,6 @@ import { fileURLToPath } from "node:url";
 import authRoutes from "./routes/authRoutes.js";
 import courseRoutes from "./routes/courseRoutes.js";
 import catalogRoutes, { cleanupSyllabusUploads } from "./routes/catalogRoutes.js";
-import { migrateCourseCatalog } from "./migrations/courseCatalogMigration.js";
 import { db } from "./db.js";
 import userRoutes from "./routes/userRoutes.js";
 import lessonRoutes from "./routes/lessonRoutes.js";
@@ -28,7 +26,7 @@ import backupRoutes from "./routes/backupRoutes.js";
 import systemSettingsRoutes from "./routes/systemSettingsRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 
-import { initDb } from "./db.js";
+import { migrateApplication } from "./migrations/applicationMigration.js";
 import { startLessonWorker } from "./services/rag/lessonJobService.js";
 
 dotenv.config();
@@ -230,13 +228,9 @@ async function startServer() {
 
     console.log("--------------------------------------");
 
-    console.log("Connecting to MySQL...");
+    console.log("Connecting to Supabase PostgreSQL...");
 
-    await initDb();
-    await migrateCourseCatalog(db);
-    const { reconcileArchivedCatalogClasses } = await import("./services/catalog/catalogArchive.js");
-    await reconcileArchivedCatalogClasses(db);
-    await migrateAcademicCalendar(db);
+    await migrateApplication();
     await cleanupSyllabusUploads();
     setInterval(() => cleanupSyllabusUploads().catch(console.error), 3600000).unref();
     startLessonWorker();
@@ -244,7 +238,7 @@ async function startServer() {
     startMainQuizAvailabilityNotifications().catch(error => console.error("Main Quiz notification worker:", error.code || error.message));
     startCatalogLessonWorker(db);
 
-    console.log("MySQL Connected Successfully.");
+    console.log("PostgreSQL initialized successfully.");
 
     availability.ready = true;
   } catch (error) {
