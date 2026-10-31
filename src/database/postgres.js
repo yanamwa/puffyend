@@ -1,6 +1,7 @@
 import "dotenv/config";
 import pg from "pg";
 import fs from "node:fs/promises";
+import { databaseTls } from "./databaseTls.js";
 
 export function postgresConfig(env = process.env) {
   const schema = env.DB_SCHEMA || "puffybrain";
@@ -41,12 +42,7 @@ export function postgresConfig(env = process.env) {
     ssl:
       local && env.NODE_ENV !== "production"
         ? false
-        : {
-            rejectUnauthorized: true,
-            ...(env.DB_SSL_CA
-              ? { ca: env.DB_SSL_CA.replace(/\\n/g, "\n") }
-              : {}),
-          },
+        : databaseTls(url.hostname, env.DB_SSL_CA),
     max: 5,
     connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,

@@ -49,6 +49,7 @@ export function failStartup(state, error) {
     "SUPABASE_DB_URL",
     "FRONTEND_URL",
     "DB_SCHEMA",
+    "DB_SSL_CA",
   ].find((key) => String(error.message || "").includes(key));
   state.errorCode = configKey
     ? `${configKey}_INVALID`
