@@ -1,264 +1,44 @@
-import helmet from "helmet";
-import { security } from "./config/security.js";
-import { mountUploads } from "./routes/uploadRoutes.js";
-import authenticateUser from "./middleware/authMiddleware.js";
-import { requireRole } from "./middleware/roleMiddleware.js";
-import { productionErrorHandler } from "./middleware/productionErrorHandler.js";
-import { startModulePublicationNotifications } from "./services/modulePublicationNotifications.js";
-import { startMainQuizAvailabilityNotifications } from "./services/mainQuizAvailabilityNotifications.js";
-import { startCatalogLessonWorker } from "./services/catalog/catalogLessonGeneration.js";
-import academicCalendarRoutes from "./routes/academicCalendarRoutes.js";
+import "dotenv/config";
 import express from "express";
-import { apiCors, mountApiAvailability } from "./middleware/apiAvailability.js";
-import dotenv from "dotenv";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  apiCors,
+  mountApiAvailability,
+  failStartup,
+} from "./middleware/apiAvailability.js";
 
-import authRoutes from "./routes/authRoutes.js";
-import courseRoutes from "./routes/courseRoutes.js";
-import catalogRoutes, { cleanupSyllabusUploads } from "./routes/catalogRoutes.js";
-import { db } from "./db.js";
-import userRoutes from "./routes/userRoutes.js";
-import lessonRoutes from "./routes/lessonRoutes.js";
-import notificationRoutes from "./routes/notificationRoutes.js";
-import systemAnalyticsRoutes from "./routes/systemAnalyticsRoutes.js";
-import backupRoutes from "./routes/backupRoutes.js";
-import systemSettingsRoutes from "./routes/systemSettingsRoutes.js";
-import reportRoutes from "./routes/reportRoutes.js";
-
-import { migrateApplication } from "./migrations/applicationMigration.js";
-import { startLessonWorker } from "./services/rag/lessonJobService.js";
-
-dotenv.config();
-
+// Keep this entry point independent of the database, configuration validators,
+// and route imports: those can fail before Express has a chance to serve CORS.
 const app = express();
 app.disable("x-powered-by");
-app.set("trust proxy", security.proxyHops);
-app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-
-const port = process.env.PORT || 5000;
-
-/* =========================================
-   GET SERVER DIRECTORY
-========================================= */
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-/*
-  If index.js is located here:
-
-  C:\xampp\htdocs\server\index.js
-
-  this becomes:
-
-  C:\xampp\htdocs\server\uploads
-*/
-
-const profileUploadsDirectory = path.join(__dirname, "uploads");
-
-console.log("Profile uploads directory:", profileUploadsDirectory);
-
-/* =========================================
-   CORS
-========================================= */
-
-app.use(apiCors(security.origins));
-const availability = { ready: false, failed: false };
+const availability = {
+  ready: false,
+  failed: false,
+  stage: "loading_application",
+};
+let frontendOrigin = "https://puffybrain.fun";
+try {
+  frontendOrigin = new URL(process.env.FRONTEND_URL || frontendOrigin).origin;
+} catch {
+  /* The full application validates this after the listener starts. */
+}
+const origins = [frontendOrigin];
+if (process.env.NODE_ENV !== "production") {
+  for (const host of ["localhost", "127.0.0.1"])
+    for (const port of ["", ":3000", ":3001", ":3002", ":3003", ":5173"])
+      origins.push(`http://${host}${port}`);
+}
+app.use(apiCors(origins));
 mountApiAvailability(app, availability);
 
-/* =========================================
-   BODY PARSERS
-========================================= */
-
-app.use(
-  express.json({
-    limit: "25mb",
-  }),
-);
-
-app.use(
-  express.urlencoded({
-    extended: true,
-    limit: "25mb",
-  }),
-);
-
-/* =========================================
-   PROFILE IMAGE STATIC FOLDER
-
-   DATABASE PATH EXAMPLE:
-
-   /uploads/profile-images/profile-23-xxx.jpg
-
-   PUBLIC URL:
-
-   http://localhost:5000/uploads/profile-images/profile-23-xxx.jpg
-========================================= */
-
-mountUploads(app, profileUploadsDirectory);
-
-/* =========================================
-   REQUEST LOGGER
-========================================= */
-
-app.use((req, res, next) => {
-  console.log(`${req.method} ${req.originalUrl}`);
-
-  next();
-});
-
-/* =========================================
-   TEST PROFILE UPLOAD STATIC FOLDER
-========================================= */
-
-app.get("/api/debug/uploads", authenticateUser, requireRole("super_admin"), (req, res) => {
-  res.json({
-    success: true,
-
-    uploadsDirectory: profileUploadsDirectory,
-
-    example: "http://localhost:5000/uploads/profile-images/filename.jpg",
-  });
-});
-
-/* =========================================
-   ROUTES
-========================================= */
-
-/*
-  Dedicated notification routes first.
-  This prevents broad /api routers from
-  intercepting /api/notifications.
-*/
-app.use("/api/notifications", notificationRoutes);
-
-/*
-  Lesson routes
-*/
-app.use("/api/lessons", lessonRoutes);
-
-/*
-  Authentication routes
-*/
-app.use("/api/auth", authRoutes);
-
-app.use("/api", authRoutes);
-
-/*
-  Course routes
-*/
-app.use("/api/academic-calendars", academicCalendarRoutes);
-app.use("/api/catalog", catalogRoutes);
-app.use("/api", courseRoutes);
-
-/*
-  User routes
-*/
-app.use("/api", userRoutes);
-/* =========================================
-   BACKUP & RESTORE
-========================================= */
-
-app.use("/api/backup", backupRoutes);
-/* =========================================
-   SYSTEM ANALYTICS
-========================================= */
-
-app.use("/api/analytics", systemAnalyticsRoutes);
-/* =========================================
-   SYSTEM SETTINGS
-========================================= */
-
-app.use(
-  "/api/system-settings",
-  systemSettingsRoutes
-);
-
-/* =========================================
-   ADMIN REPORTS
-========================================= */
-
-app.use(
-  "/api/reports",
-  reportRoutes
-);
-
-/* =========================================
-   404
-========================================= */
-
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: "Route not found.",
-  });
-});
-
-/* =========================================
-   INVALID JSON
-========================================= */
-
-app.use((error, req, res, next) => {
-  if (error instanceof SyntaxError && "body" in error) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid JSON request body.",
-    });
-  }
-
-  next(error);
-});
-
-/* =========================================
-   GENERAL ERROR HANDLER
-========================================= */
-
-app.use(productionErrorHandler);
-
-/* =========================================
-   START SERVER
-========================================= */
-
-async function startServer() {
-  try {
-    console.log("--------------------------------------");
-
-    console.log("Starting PuffyBrain Backend...");
-
-    console.log("--------------------------------------");
-
-    console.log("Connecting to Supabase PostgreSQL...");
-
-    await migrateApplication();
-    await cleanupSyllabusUploads();
-    setInterval(() => cleanupSyllabusUploads().catch(console.error), 3600000).unref();
-    startLessonWorker();
-    startModulePublicationNotifications().catch(error => console.error("Module publication worker:", error.code || error.message));
-    startMainQuizAvailabilityNotifications().catch(error => console.error("Main Quiz notification worker:", error.code || error.message));
-    startCatalogLessonWorker(db);
-
-    console.log("PostgreSQL initialized successfully.");
-
-    availability.ready = true;
-  } catch (error) {
-    console.error("--------------------------------------");
-
-    console.error("SERVER FAILED TO START");
-
-    console.error("--------------------------------------");
-
-    console.error(error);
-    availability.failed = true;
-    console.error("API remains available for health checks. Fix the startup error above and restart the app.");
-  }
-}
-
-const server = app.listen(port, "0.0.0.0", () => {
-  console.log(`PuffyBrain HTTP server listening on port ${port}`);
-  void startServer();
+const server = app.listen(process.env.PORT || 5000, "0.0.0.0", () => {
+  console.log(
+    `PuffyBrain HTTP server listening on port ${server.address().port}`,
+  );
+  void import("./application.js")
+    .then(({ startApplication }) => startApplication(app, availability))
+    .catch((error) => failStartup(availability, error));
 });
 server.on("error", (error) => {
-  console.error("HTTP SERVER FAILED TO LISTEN:", error);
+  console.error("HTTP SERVER FAILED TO LISTEN:", error.code || "listen error");
   process.exit(1);
 });
