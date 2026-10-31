@@ -1,5 +1,8 @@
+<<<<<<< HEAD
 import { queueCatalogLessons } from "../services/catalog/catalogLessonGeneration.js";
 import { archiveCatalogClasses } from "../services/catalog/catalogArchive.js";
+=======
+>>>>>>> backend/main
 import { getCourseById } from "../controllers/courseController.js";
 import express from "express";
 import multer from "multer";
@@ -10,14 +13,24 @@ import { fileURLToPath } from "node:url";
 import { db } from "../db.js";
 import authenticateUser from "../middleware/authMiddleware.js";
 import { requireRole } from "../middleware/roleMiddleware.js";
+<<<<<<< HEAD
 import { extractSyllabus } from "../services/catalog/syllabusExtraction.js";
 import { validateCoverageModules } from "../services/catalog/catalogRules.js";
+=======
+import { extractSyllabus } from "../services/syllabusExtraction.js";
+import { validateCoverageModules } from "../services/catalogRules.js";
+>>>>>>> backend/main
 import {
   catalogDetails,
   normalizeCatalogCode,
   parseSyllabus,
+<<<<<<< HEAD
 } from "../services/catalog/catalogRules.js";
 import { getRequestIp } from "../services/system/auditLogService.js";
+=======
+} from "../services/catalogRules.js";
+import { getRequestIp } from "../services/auditLogService.js";
+>>>>>>> backend/main
 
 const router = express.Router();
 const admin = requireRole("admin", "super_admin");
@@ -49,7 +62,11 @@ const actor = (req) => req.user.userId;
 const programs = (value) =>
   Array.isArray(value) ? value : JSON.parse(value || "[]");
 const present = (row) => {
+<<<<<<< HEAD
   const { normalized_code, available_normalized_code, ...rest } = row;
+=======
+  const { normalized_code, ...rest } = row;
+>>>>>>> backend/main
   return { ...rest, programs: programs(row.programs) };
 };
 const windowFor = (req) => ({
@@ -154,7 +171,11 @@ router.post(
     const data = await analyzeFile(row.storage_name);
     const [matches] = data.suggestions.code
       ? await db.execute(
+<<<<<<< HEAD
           "SELECT * FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL",
+=======
+          "SELECT * FROM course_catalog WHERE normalized_code=?",
+>>>>>>> backend/main
           [normalizeCatalogCode(data.suggestions.code)],
         )
       : [[]];
@@ -168,11 +189,19 @@ router.get(
   run(async (req, res) => {
     const q = String(req.query.q || "").slice(0, 255);
     const [rows] = await db.execute(
+<<<<<<< HEAD
       "SELECT * FROM course_catalog WHERE status='active' AND archived_at IS NULL AND (code ILIKE ? OR title ILIKE ?) ORDER BY code",
       ["%" + q + "%", "%" + q + "%"],
     );
     const [versions] = await db.query(
       "SELECT v.version_id,v.catalog_id,v.academic_year,v.semester,v.filename,v.uploaded_at,v.coverage_modules,(SELECT status FROM catalog_lesson_jobs j WHERE j.version_id=v.version_id) AS generation_status FROM syllabus_versions v JOIN course_catalog c ON c.catalog_id=v.catalog_id WHERE c.status='active' AND c.archived_at IS NULL ORDER BY v.version_id DESC",
+=======
+      "SELECT * FROM course_catalog WHERE status='active' AND archived_at IS NULL AND (code LIKE ? OR title LIKE ?) ORDER BY code",
+      ["%" + q + "%", "%" + q + "%"],
+    );
+    const [versions] = await db.query(
+      "SELECT v.version_id,v.catalog_id,v.academic_year,v.semester,v.filename,v.uploaded_at,v.coverage_modules FROM syllabus_versions v JOIN course_catalog c ON c.catalog_id=v.catalog_id WHERE c.status='active' AND c.archived_at IS NULL ORDER BY v.version_id DESC",
+>>>>>>> backend/main
     );
     res.json({
       success: true,
@@ -217,7 +246,11 @@ router.get(
   admin,
   run(async (_req, res) => {
     const [[summary]] = await db.query(
+<<<<<<< HEAD
       `SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE status='active' AND archived_at IS NULL) AS active,COUNT(*) FILTER (WHERE status='draft' AND archived_at IS NULL) AS draft,(SELECT COUNT(*) FROM courses WHERE professor_id IS NOT NULL OR COALESCE(professor_email,'') <> '') AS classes FROM course_catalog`,
+=======
+      `SELECT COUNT(*) AS total,COALESCE(SUM(status='active' AND archived_at IS NULL),0) AS active,COALESCE(SUM(status='draft' AND archived_at IS NULL),0) AS draft,(SELECT COUNT(*) FROM courses WHERE professor_id IS NOT NULL OR COALESCE(professor_email,'') <> '') AS classes FROM course_catalog`,
+>>>>>>> backend/main
     );
     res.json({ success: true, summary });
   }),
@@ -249,7 +282,11 @@ export async function catalogClasses(req, res) {
   }
   if (req.query.q) {
     conditions.push(
+<<<<<<< HEAD
       "(c.title ILIKE ? OR c.code ILIKE ? OR c.catalog_code ILIKE ? OR c.class_name ILIKE ? OR c.professor_name ILIKE ? OR u.name ILIKE ?)",
+=======
+      "(c.title LIKE ? OR c.code LIKE ? OR c.catalog_code LIKE ? OR c.class_name LIKE ? OR c.professor_name LIKE ? OR u.name LIKE ?)",
+>>>>>>> backend/main
     );
     values.push(
       ...Array(6).fill("%" + String(req.query.q).slice(0, 255) + "%"),
@@ -270,7 +307,11 @@ export async function catalogClasses(req, res) {
     values,
   );
   const [records] = await db.query(
+<<<<<<< HEAD
     `SELECT c.course_id,c.catalog_id,c.catalog_code,c.title,c.code,c.class_name,c.program,c.year_level,c.section_name,c.academic_year,c.semester,c.status,c.archived,c.created_at,COALESCE(u.display_name,u.name,c.professor_name,c.professor_email) AS professor,(SELECT COUNT(*) FROM course_enrollments e WHERE e.course_id=c.course_id AND e.status='approved' AND e.archived=0) AS student_count FROM courses c LEFT JOIN users u ON u.userId=c.professor_id ${where} ORDER BY c.course_id DESC LIMIT ? OFFSET ?`,
+=======
+    `SELECT c.course_id,c.catalog_id,c.catalog_code,c.title,c.code,c.class_name,c.program,c.year_level,c.section_name,c.academic_year,c.semester,c.status,c.archived,COALESCE(u.display_name,u.name,c.professor_name,c.professor_email) AS professor,(SELECT COUNT(*) FROM course_enrollments e WHERE e.course_id=c.course_id AND e.status='approved' AND e.archived=0) AS student_count FROM courses c LEFT JOIN users u ON u.userId=c.professor_id ${where} ORDER BY c.course_id DESC LIMIT ? OFFSET ?`,
+>>>>>>> backend/main
     [...values, size, (page - 1) * size],
   );
   res.json({ success: true, records, total: Number(count.total), page });
@@ -296,7 +337,11 @@ router.post(
     await fs.writeFile(filePath(storageName), req.file.buffer, { flag: "wx" });
     try {
       await db.execute(
+<<<<<<< HEAD
         "INSERT INTO syllabus_uploads (upload_id,uploader_id,filename,storage_name,file_size,expires_at) VALUES (?,?,?,?,?,(NOW() + INTERVAL '24 hour'))",
+=======
+        "INSERT INTO syllabus_uploads (upload_id,uploader_id,filename,storage_name,file_size,expires_at) VALUES (?,?,?,?,?,DATE_ADD(NOW(),INTERVAL 24 HOUR))",
+>>>>>>> backend/main
         [uploadId, actor(req), filename, storageName, req.file.size],
       );
     } catch (error) {
@@ -306,7 +351,11 @@ router.post(
     const { suggestions, extractionMessage } = await analyzeFile(storageName);
     const [matches] = suggestions.code
       ? await db.execute(
+<<<<<<< HEAD
           "SELECT * FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL",
+=======
+          "SELECT * FROM course_catalog WHERE normalized_code=?",
+>>>>>>> backend/main
           [normalizeCatalogCode(suggestions.code)],
         )
       : [[]];
@@ -375,7 +424,11 @@ router.get(
                 : "archived_at IS NULL",
             ];
     if (req.query.q) {
+<<<<<<< HEAD
       conditions.push("(code ILIKE ? OR title ILIKE ?)");
+=======
+      conditions.push("(code LIKE ? OR title LIKE ?)");
+>>>>>>> backend/main
       values.push(
         ...Array(2).fill("%" + String(req.query.q).slice(0, 255) + "%"),
       );
@@ -385,7 +438,11 @@ router.get(
       values.push(req.query.status);
     }
     if (["BSIT", "BSCS"].includes(req.query.program)) {
+<<<<<<< HEAD
       conditions.push("programs::jsonb @> ?::jsonb");
+=======
+      conditions.push("JSON_CONTAINS(programs, ?)");
+>>>>>>> backend/main
       values.push(JSON.stringify(req.query.program));
     }
     if (req.query.normalizedCode) {
@@ -411,11 +468,14 @@ router.get(
     });
   }),
 );
+<<<<<<< HEAD
 router.post("/versions/:id/retry-lessons", admin, run(async (req,res) => {
   const [result] = await db.execute("UPDATE catalog_lesson_jobs j SET status='queued',error_message=NULL FROM syllabus_versions v JOIN course_catalog c ON c.catalog_id=v.catalog_id WHERE v.version_id=j.version_id AND j.version_id=? AND j.status='failed' AND c.status='active' AND c.archived_at IS NULL",[req.params.id]);
   if (!result.affectedRows) fail("No failed generation is available to retry.",409);
   res.json({success:true});
 }));
+=======
+>>>>>>> backend/main
 router.get(
   "/:id",
   admin,
@@ -426,7 +486,11 @@ router.get(
     );
     if (!row) fail("Catalog course not found.", 404);
     const [versions] = await db.execute(
+<<<<<<< HEAD
       "SELECT v.version_id,v.catalog_id,v.academic_year,v.semester,v.filename,v.uploaded_at,v.coverage_modules,(SELECT status FROM catalog_lesson_jobs j WHERE j.version_id=v.version_id) AS generation_status,(SELECT error_message FROM catalog_lesson_jobs j WHERE j.version_id=v.version_id) AS generation_error,COALESCE(u.display_name,u.name,u.email) AS uploader FROM syllabus_versions v LEFT JOIN users u ON u.userId=v.uploaded_by WHERE v.catalog_id=? ORDER BY v.version_id DESC",
+=======
+      "SELECT v.version_id,v.catalog_id,v.academic_year,v.semester,v.filename,v.uploaded_at,v.coverage_modules,COALESCE(u.display_name,u.name,u.email) AS uploader FROM syllabus_versions v LEFT JOIN users u ON u.userId=v.uploaded_by WHERE v.catalog_id=? ORDER BY v.version_id DESC",
+>>>>>>> backend/main
       [row.catalog_id],
     );
     res.json({ success: true, course: present(row), versions });
@@ -442,7 +506,11 @@ router.post(
       if (creating) {
         const details = catalogDetails(req.body);
         const [matches] = await connection.execute(
+<<<<<<< HEAD
           "SELECT * FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL",
+=======
+          "SELECT * FROM course_catalog WHERE normalized_code=?",
+>>>>>>> backend/main
           [details.normalizedCode],
         );
         if (matches.length) {
@@ -484,6 +552,7 @@ router.post(
           [req.body.catalogId],
         );
         if (!course) fail("Course not found.", 404);
+<<<<<<< HEAD
         if (course.archived_at) {
           if (req.body.restoreArchived !== true)
             fail("Restore this course before uploading a syllabus.");
@@ -497,6 +566,10 @@ router.post(
           await connection.execute("UPDATE course_catalog SET archived_at=NULL WHERE catalog_id=?", [course.catalog_id]);
           await audit(connection, req, "Restored catalog course", course.catalog_id, { archived_at: { before: course.archived_at, after: null } });
         }
+=======
+        if (course.archived_at)
+          fail("Restore this course before uploading a syllabus.");
+>>>>>>> backend/main
       }
       if (!req.body.uploadId) fail("Upload a syllabus PDF before saving.");
       const [[file]] = await connection.execute(
@@ -560,9 +633,13 @@ router.post(
           { status: { before: course.status, after: "active" } },
         );
       }
+<<<<<<< HEAD
       const generationQueued = (req.body.activate === true || course.status === "active") && coverageModules.length > 0;
       if (generationQueued) await queueCatalogLessons(connection, version.insertId);
       return { catalogId: course.catalog_id, versionId: version.insertId, generationQueued };
+=======
+      return { catalogId: course.catalog_id, versionId: version.insertId };
+>>>>>>> backend/main
     });
     res.status(201).json({ success: true, ...result });
   }),
@@ -579,6 +656,7 @@ router.patch(
       if (!course) fail("Course not found.", 404);
       const action = req.body.action;
       if (action === "archive" || action === "restore") {
+<<<<<<< HEAD
         if (action === "restore") {
           const [[conflict]] = await connection.execute(
             "SELECT catalog_id FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL AND catalog_id<>? LIMIT 1",
@@ -586,13 +664,18 @@ router.patch(
           );
           if (conflict) fail("Cannot restore this course because an unarchived course already uses its code. Archive that course first.", 409);
         }
+=======
+>>>>>>> backend/main
         await connection.execute(
           `UPDATE course_catalog SET archived_at=${action === "archive" ? "NOW()" : "NULL"} WHERE catalog_id=?`,
           [course.catalog_id],
         );
+<<<<<<< HEAD
         if (action === "archive") {
           await archiveCatalogClasses(connection, course.catalog_id, actor(req));
         }
+=======
+>>>>>>> backend/main
         await audit(
           connection,
           req,
@@ -616,7 +699,11 @@ router.patch(
         if (req.body.reviewed !== true)
           fail("Explicit review confirmation is required.");
         const [[version]] = await connection.execute(
+<<<<<<< HEAD
           "SELECT version_id,coverage_modules FROM syllabus_versions WHERE catalog_id=? ORDER BY version_id DESC LIMIT 1",
+=======
+          "SELECT version_id FROM syllabus_versions WHERE catalog_id=? LIMIT 1",
+>>>>>>> backend/main
           [course.catalog_id],
         );
         if (!version) fail("Upload a syllabus before activation.");
@@ -624,7 +711,10 @@ router.patch(
           "UPDATE course_catalog SET status='active',reviewed_by=?,reviewed_at=NOW() WHERE catalog_id=?",
           [actor(req), course.catalog_id],
         );
+<<<<<<< HEAD
         await queueCatalogLessons(connection, version.version_id);
+=======
+>>>>>>> backend/main
         await audit(
           connection,
           req,
@@ -670,7 +760,11 @@ router.patch(
   }),
 );
 router.use((error, _req, res, _next) => {
+<<<<<<< HEAD
   if (error.code === "23505")
+=======
+  if (error.code === "ER_DUP_ENTRY")
+>>>>>>> backend/main
     return res.status(409).json({
       success: false,
       message:

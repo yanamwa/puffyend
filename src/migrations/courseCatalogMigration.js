@@ -1,5 +1,9 @@
+<<<<<<< HEAD
 import { migrateCatalogCodeAvailability } from "./catalogCodeAvailability.js";
 import { recoverCatalogModuleShells } from "../services/courses/courseModulePersistence.js";
+=======
+import { recoverCatalogModuleShells } from "../services/courseModulePersistence.js";
+>>>>>>> backend/main
 import fs from "node:fs/promises";
 
 // Additive and repeatable. Existing class records and unique join codes are preserved.
@@ -13,6 +17,7 @@ export async function migrateCourseCatalog(db) {
     .map((s) => s.trim())
     .filter(Boolean))
     await db.query(statement);
+<<<<<<< HEAD
   await migrateCatalogCodeAvailability(db);
   const [versionColumns] = await db.query(
     "SELECT column_name AS \"Field\" FROM information_schema.columns WHERE table_schema=CURRENT_SCHEMA() AND table_name='syllabus_versions'",
@@ -25,6 +30,19 @@ export async function migrateCourseCatalog(db) {
   const names = new Set(columns.map((c) => c.Field));
   for (const [name, type] of Object.entries({
     content_modules: "JSONB NULL",
+=======
+  const [versionColumns] = await db.query(
+    "SHOW COLUMNS FROM syllabus_versions",
+  );
+  if (!versionColumns.some((column) => column.Field === "coverage_modules"))
+    await db.query(
+      "ALTER TABLE syllabus_versions ADD COLUMN coverage_modules JSON NULL",
+    );
+  const [columns] = await db.query("SHOW COLUMNS FROM courses");
+  const names = new Set(columns.map((c) => c.Field));
+  for (const [name, type] of Object.entries({
+    content_modules: "JSON NULL",
+>>>>>>> backend/main
     catalog_id: "INT NULL",
     syllabus_version_id: "INT NULL",
     catalog_code: "VARCHAR(50) NULL",
@@ -38,7 +56,11 @@ export async function migrateCourseCatalog(db) {
     if (!names.has(name))
       await db.query(`ALTER TABLE courses ADD COLUMN ${name} ${type}`);
   const [constraints] = await db.query(
+<<<<<<< HEAD
     "SELECT CONSTRAINT_NAME FROM information_schema.table_constraints WHERE TABLE_SCHEMA=CURRENT_SCHEMA() AND TABLE_NAME='courses'",
+=======
+    "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='courses'",
+>>>>>>> backend/main
   );
   const existing = new Set(constraints.map((c) => c.CONSTRAINT_NAME));
   if (!existing.has("courses_catalog_fk"))

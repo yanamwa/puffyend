@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import { studentMainQuizHistory } from "../services/quizzes/studentQuizHistory.js";
+=======
+import { studentMainQuizHistory } from "../services/studentQuizHistory.js";
+>>>>>>> backend/main
 import {
   saveMainQuizPreview,
   generateMainQuizPreview,
@@ -9,7 +13,11 @@ import {
   submitMainQuiz,
   mainQuizAnalysis,
   mainQuizStatus,
+<<<<<<< HEAD
 } from "../services/quizzes/mainQuizService.js";
+=======
+} from "../services/mainQuizService.js";
+>>>>>>> backend/main
 import express from "express";
 
 import upload from "../middleware/upload.js";

@@ -697,8 +697,13 @@ export async function markNotificationAsRead(req, res) {
 
         VALUES (?, ?, NOW())
 
+<<<<<<< HEAD
         ON CONFLICT (notification_id, user_id) DO UPDATE SET
           read_at = EXCLUDED.read_at
+=======
+        ON DUPLICATE KEY UPDATE
+          read_at = VALUES(read_at)
+>>>>>>> backend/main
         `,
         [notificationId, userId],
       );
@@ -802,14 +807,23 @@ export async function markAllNotificationsAsRead(req, res) {
     for (const notification of broadcastRows) {
       await connection.execute(
         `
+<<<<<<< HEAD
         INSERT INTO
+=======
+        INSERT IGNORE INTO
+>>>>>>> backend/main
           notification_reads (
             notification_id,
             user_id,
             read_at
           )
 
+<<<<<<< HEAD
         VALUES (?, ?, NOW()) ON CONFLICT DO NOTHING`,
+=======
+        VALUES (?, ?, NOW())
+        `,
+>>>>>>> backend/main
         [notification.notification_id, userId],
       );
     }

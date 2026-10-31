@@ -1,6 +1,12 @@
+<<<<<<< HEAD
 import { studentCourseContent } from "../services/courses/modulePublication.js";
 import { mergeModuleContent } from "../services/courses/courseModulePersistence.js";
 import { resolveClassCatalog, classPeriod } from "../services/catalog/classCatalogService.js";
+=======
+import { studentCourseContent } from "../services/modulePublication.js";
+import { mergeModuleContent } from "../services/courseModulePersistence.js";
+import { resolveClassCatalog, classPeriod } from "../services/classCatalogService.js";
+>>>>>>> backend/main
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 
@@ -23,7 +29,11 @@ import {
   sendStudentUnenrolledEmail,
 } from "../utils/mailer.js";
 import { createNotification } from "../utils/notification.js";
+<<<<<<< HEAD
 import { logAuditFromRequest } from "../services/system/auditLogService.js";
+=======
+import { logAuditFromRequest } from "../services/auditLogService.js";
+>>>>>>> backend/main
 
 import { JWT_SECRET } from "../config/security.js";
 
@@ -348,7 +358,10 @@ function normalizeContentModule(module, index) {
       module?.lesson_id ||
       module?.module_id ||
       `module-${index + 1}`,
+<<<<<<< HEAD
     topics: Array.isArray(module?.topics) ? module.topics.map(t => cleanText(t)).filter(Boolean).slice(0, 100) : [],
+=======
+>>>>>>> backend/main
     mainQuizSettings: getMainQuizSettings(module),
     lesson_id: module?.lesson_id || null,
     module_id: module?.module_id || module?.id || null,
@@ -392,7 +405,10 @@ function getModuleMeta(module, index) {
     module.id || module.module_id || module.lesson_id || `module-${index + 1}`;
 
   return {
+<<<<<<< HEAD
     topics: Array.isArray(module?.topics) ? module.topics.map(t => cleanText(t)).filter(Boolean).slice(0, 100) : [],
+=======
+>>>>>>> backend/main
     mainQuizSettings: getMainQuizSettings(module),
     moduleId,
     module_id: moduleId,
@@ -567,8 +583,13 @@ async function getCourseIdColumn() {
 
   const [columns] = await db.execute(
     `SELECT COLUMN_NAME
+<<<<<<< HEAD
      FROM information_schema.columns
      WHERE TABLE_SCHEMA = CURRENT_SCHEMA()
+=======
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+>>>>>>> backend/main
        AND TABLE_NAME = 'courses'
        AND COLUMN_NAME IN ('course_id', 'id')`,
   );
@@ -953,7 +974,11 @@ function validateCourse(fields) {
 
 function duplicateCourseCode(error) {
   return (
+<<<<<<< HEAD
     error?.code === "23505" &&
+=======
+    error?.code === "ER_DUP_ENTRY" &&
+>>>>>>> backend/main
     String(error?.message || "").includes("code")
   );
 }
@@ -1005,7 +1030,11 @@ async function getOrCreateCourse(fields, user) {
       !courseMatchesProfessorFields(existing[0], fields)
     ) {
       const error = new Error("A course with that code already exists.");
+<<<<<<< HEAD
       error.code = "23505";
+=======
+      error.code = "ER_DUP_ENTRY";
+>>>>>>> backend/main
       throw error;
     }
 
@@ -2494,6 +2523,7 @@ export async function createCourse(req, res) {
     connection = await db.getConnection();
     await connection.beginTransaction();
     const {course: catalog, versionId, joinCode} = await resolveClassCatalog(connection, req.body);
+<<<<<<< HEAD
     // Serialize creation per professor so simultaneous requests cannot duplicate a catalog course.
     await connection.execute("SELECT userId FROM users WHERE userId=? FOR UPDATE", [ownerFields.professorId]);
     const [existingCatalogCourses] = await connection.execute(
@@ -2501,6 +2531,8 @@ export async function createCourse(req, res) {
       [ownerFields.professorId, catalog.catalog_id],
     );
     if (existingCatalogCourses.length) throw Object.assign(new Error("You have already created this catalog course. Please manage the existing course in Course Management."), {statusCode:409});
+=======
+>>>>>>> backend/main
     const period = classPeriod(req.body);
     let fields = payloadToCourseFields({...req.body, title: catalog.title, courseName: catalog.title,
       code: joinCode, courseCode: joinCode, course_code: joinCode,
@@ -2695,8 +2727,11 @@ export async function updateCourse(req, res) {
       fields.title=existingClass.title;
       fields.courseCode=existingClass.code;
       fields.subject=existingClass.subject;
+<<<<<<< HEAD
       const [[catalogState]] = await db.execute("SELECT archived_at FROM course_catalog WHERE catalog_id=?", [existingClass.catalog_id]);
       if (catalogState?.archived_at) fields.archived = true;
+=======
+>>>>>>> backend/main
     }
     const period = classPeriod({...existingClass,...req.body});
     const lessonPages = toJsonList(fields.lessonPages);
@@ -2977,6 +3012,7 @@ export async function archiveCourse(req, res) {
 
     // Professors can archive ONLY their own courses.
     if (role === "professor") {
+<<<<<<< HEAD
       if (!archived) {
         const [[catalogState]] = await db.execute(
           `SELECT cc.archived_at FROM courses c JOIN course_catalog cc ON cc.catalog_id=c.catalog_id WHERE c.${idColumn}=?`,
@@ -2984,6 +3020,8 @@ export async function archiveCourse(req, res) {
         );
         if (catalogState?.archived_at) return res.status(409).json({success: false, message: "This course was archived by the admin. The admin must restore its catalog course before you can restore this class."});
       }
+=======
+>>>>>>> backend/main
       const owner = getProfessorOwnerCondition("", currentUser);
 
       where.push(owner.sql);

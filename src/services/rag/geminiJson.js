@@ -36,9 +36,12 @@ export async function generateJson({ instruction, data, schema }) {
       break;
     } catch (error) {
       const status = error.response?.status;
+<<<<<<< HEAD
       const providerMessage = String(error.response?.data?.error?.message || "");
       if (status === 403 && /leaked/i.test(providerMessage))
         throw Object.assign(new Error("The Gemini API key was rejected as leaked. An administrator must replace GEMINI_API_KEY and restart the backend, then retry lesson generation."), {statusCode: 503, retryable: false});
+=======
+>>>>>>> backend/main
       const transient = !status || status === 429 || status >= 500;
       if (!transient || attempt === 2)
         throw Object.assign(

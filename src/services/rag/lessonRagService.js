@@ -177,7 +177,10 @@ export async function generateFromDocuments(
   documentIds,
   onProgress = async () => {},
   checkpoint = [],
+<<<<<<< HEAD
   generationContext = null,
+=======
+>>>>>>> backend/main
 ) {
   const ids = [...new Set(documentIds.map(String))];
   return withDatabaseLocks(
@@ -233,7 +236,10 @@ export async function generateFromDocuments(
         chunks,
         onProgress,
         checkpoint,
+<<<<<<< HEAD
         generationContext,
+=======
+>>>>>>> backend/main
       );
       const used = new Set();
       const configured = Number(process.env.RAG_PAGE_CONCURRENCY || 3);
@@ -370,5 +376,9 @@ export async function processLessonWithRag(options) {
       documentIds: ids,
     });
   }
+<<<<<<< HEAD
   return generateFromDocuments(ids, progress, options.outlineCheckpoint || [], options.generationContext);
+=======
+  return generateFromDocuments(ids, progress, options.outlineCheckpoint || []);
+>>>>>>> backend/main
 }

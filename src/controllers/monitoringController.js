@@ -61,8 +61,13 @@ function getWeakestTopic(topics, scores) {
 async function getCourseIdColumn() {
   const [columns] = await db.execute(
     `SELECT COLUMN_NAME
+<<<<<<< HEAD
      FROM information_schema.columns
      WHERE TABLE_SCHEMA = CURRENT_SCHEMA()
+=======
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+>>>>>>> backend/main
        AND TABLE_NAME = 'courses'
        AND COLUMN_NAME IN ('course_id', 'id')`,
   );
@@ -396,9 +401,15 @@ async function refreshPerformanceAnalytics(userId, courseId) {
     `INSERT INTO performance_analytics
      (user_id, course_id, average_score, weakest_topic, strongest_topic, total_attempts)
      VALUES (?, ?, ?, ?, ?, ?)
+<<<<<<< HEAD
      ON CONFLICT (user_id, course_id) DO UPDATE SET
        average_score = EXCLUDED.average_score,
        total_attempts = EXCLUDED.total_attempts`,
+=======
+     ON DUPLICATE KEY UPDATE
+       average_score = VALUES(average_score),
+       total_attempts = VALUES(total_attempts)`,
+>>>>>>> backend/main
     [
       userId,
       courseId,
@@ -481,8 +492,13 @@ export async function saveLessonProgress(req, res) {
 
     if (courseId) {
       await db.execute(
+<<<<<<< HEAD
         `INSERT INTO course_enrollments (course_id, user_id)
          VALUES (?, ?) ON CONFLICT DO NOTHING`,
+=======
+        `INSERT IGNORE INTO course_enrollments (course_id, user_id)
+         VALUES (?, ?)`,
+>>>>>>> backend/main
         [courseId, userId],
       );
     }
@@ -491,12 +507,21 @@ export async function saveLessonProgress(req, res) {
       `INSERT INTO lesson_progress
        (user_id, lesson_id, course_id, total_cards, studied_cards, progress_percent, last_viewed_card)
        VALUES (?, ?, ?, ?, ?, ?, ?)
+<<<<<<< HEAD
        ON CONFLICT (user_id, lesson_id) DO UPDATE SET
          course_id = EXCLUDED.course_id,
          total_cards = EXCLUDED.total_cards,
          studied_cards = EXCLUDED.studied_cards,
          progress_percent = EXCLUDED.progress_percent,
          last_viewed_card = EXCLUDED.last_viewed_card`,
+=======
+       ON DUPLICATE KEY UPDATE
+         course_id = VALUES(course_id),
+         total_cards = VALUES(total_cards),
+         studied_cards = VALUES(studied_cards),
+         progress_percent = VALUES(progress_percent),
+         last_viewed_card = VALUES(last_viewed_card)`,
+>>>>>>> backend/main
       [
         userId,
         lessonId,
@@ -566,8 +591,13 @@ export async function saveQuizAttempt(req, res) {
 
     if (courseId) {
       await db.execute(
+<<<<<<< HEAD
         `INSERT INTO course_enrollments (course_id, user_id)
          VALUES (?, ?) ON CONFLICT DO NOTHING`,
+=======
+        `INSERT IGNORE INTO course_enrollments (course_id, user_id)
+         VALUES (?, ?)`,
+>>>>>>> backend/main
         [courseId, userId],
       );
       await refreshPerformanceAnalytics(userId, courseId);

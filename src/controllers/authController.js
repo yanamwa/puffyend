@@ -7,7 +7,11 @@ import jwt from "jsonwebtoken";
 import { db } from "../db.js";
 import { sendOtpEmail, sendPasswordResetEmail } from "../utils/mailer.js";
 
+<<<<<<< HEAD
 import { logAuditFromRequest } from "../services/system/auditLogService.js";
+=======
+import { logAuditFromRequest } from "../services/auditLogService.js";
+>>>>>>> backend/main
 
 /* =====================================================
    CONFIGURATION
@@ -82,7 +86,15 @@ async function getOtpTiming(userId) {
   const [rows] = await db.execute(
     `SELECT
        GREATEST(
+<<<<<<< HEAD
          TRUNC(EXTRACT(EPOCH FROM (otp_expires - NOW()))),
+=======
+         TIMESTAMPDIFF(
+           SECOND,
+           NOW(),
+           otp_expires
+         ),
+>>>>>>> backend/main
          0
        ) AS otp_seconds_remaining
      FROM users
@@ -350,7 +362,14 @@ export async function signup(req, res) {
            ?,
            'pending',
            ?,
+<<<<<<< HEAD
            (NOW() + (?::double precision * INTERVAL '1 second')),
+=======
+           DATE_ADD(
+             NOW(),
+             INTERVAL ? SECOND
+           ),
+>>>>>>> backend/main
            0,
            1
          )`,
@@ -453,7 +472,15 @@ export async function verifyEmail(req, res) {
     const [rows] = await db.execute(
       `SELECT
            users.*,
+<<<<<<< HEAD
            TRUNC(EXTRACT(EPOCH FROM (otp_expires - NOW()))) AS otp_seconds_remaining
+=======
+           TIMESTAMPDIFF(
+             SECOND,
+             NOW(),
+             otp_expires
+           ) AS otp_seconds_remaining
+>>>>>>> backend/main
          FROM users
          WHERE email = ?
            AND role = 'professor'
@@ -585,7 +612,14 @@ export async function resendOtp(req, res) {
        SET
          otp_code = ?,
          otp_expires =
+<<<<<<< HEAD
            (NOW() + (?::double precision * INTERVAL '1 second'))
+=======
+           DATE_ADD(
+             NOW(),
+             INTERVAL ? SECOND
+           )
+>>>>>>> backend/main
        WHERE userId = ?`,
       [otp, OTP_TTL_SECONDS, user.userId],
     );
@@ -667,7 +701,14 @@ export async function forgotPassword(req, res) {
        SET
          password_reset_token = ?,
          password_reset_expires =
+<<<<<<< HEAD
            (NOW() + (?::double precision * INTERVAL '1 second'))
+=======
+           DATE_ADD(
+             NOW(),
+             INTERVAL ? SECOND
+           )
+>>>>>>> backend/main
        WHERE userId = ?`,
       [tokenHash, RESET_PASSWORD_TTL_SECONDS, user.userId],
     );

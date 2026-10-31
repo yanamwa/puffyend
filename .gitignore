@@ -5,7 +5,10 @@ node_modules/
 .env
 .env.local
 .env.production
+<<<<<<< HEAD
 .env.example
+=======
+>>>>>>> backend/main
 
 # Build files
 dist/
@@ -32,5 +35,6 @@ src/private/
 
 .env.*
 .env.example
+!.env.example
 backups/
 audit-report.json
