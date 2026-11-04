@@ -2,14 +2,17 @@ import express from "express";
 
 import authenticateUser from "../middleware/authMiddleware.js";
 
+
 import {
   getNotifications,
+  getPostedNotifications,
   getUnreadNotificationCount,
   markNotificationAsRead,
   markAllNotificationsAsRead,
   createNotification,
   deleteNotification,
 } from "../controllers/notificationController.js";
+
 
 const router = express.Router();
 
@@ -19,9 +22,12 @@ const router = express.Router();
 
 router.use(authenticateUser);
 
+
+
 /* =====================================================
    GET NOTIFICATIONS
 ===================================================== */
+router.get("/posted", getPostedNotifications);
 
 router.get("/", getNotifications);
 

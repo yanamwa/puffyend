@@ -322,6 +322,64 @@ async function getManagedNotifications() {
   return rows;
 }
 
+
+export async function getPostedNotifications(req, res) {
+  try {
+    const currentUser = await getAuthenticatedUser(req);
+
+    if (!currentUser || !isNotificationManager(currentUser.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied.",
+      });
+    }
+
+    const [rows] = await db.execute(`
+      SELECT
+        notification_id,
+        title,
+        message,
+        target,
+        type,
+        created_by_user_id,
+        created_by_name,
+        created_by_role,
+        created_at
+      FROM notifications
+      WHERE recipient_user_id IS NULL
+        AND type = 'announcement'
+      ORDER BY created_at DESC, notification_id DESC
+    `);
+
+    const notifications = rows.map((row) => ({
+      id: `managed-${row.notification_id}`,
+      notificationId: row.notification_id,
+      title: row.title,
+      message: row.message,
+      target: normalizeTarget(row.target),
+      type: row.type,
+      createdByUserId: row.created_by_user_id,
+      createdByName: row.created_by_name || "",
+      createdByRole: normalizeRole(row.created_by_role),
+      createdAt: row.created_at,
+      source: "managed",
+    }));
+
+    return res.json({
+      success: true,
+      notifications,
+      total: notifications.length,
+    });
+  } catch (error) {
+    console.error("Get posted notifications error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch posted notifications.",
+    });
+  }
+}
+
 /* =====================================================
    GET NOTIFICATIONS
 ===================================================== */
