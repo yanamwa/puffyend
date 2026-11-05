@@ -22,7 +22,7 @@ import reportRoutes from "./routes/reportRoutes.js";
 
 import { initDb } from "./db.js";
 import { startLessonWorker } from "./services/rag/lessonJobService.js";
-import privateLessonUploads from "./middleware/privateLessonUploads.js";
+import publicUploads, { uploadsDirectory } from "./middleware/publicUploads.js";
 
 dotenv.config();
 
@@ -47,7 +47,7 @@ const __dirname = path.dirname(__filename);
   C:\xampp\htdocs\server\uploads
 */
 
-const profileUploadsDirectory = path.join(__dirname, "uploads");
+const profileUploadsDirectory = uploadsDirectory;
 
 console.log("Profile uploads directory:", profileUploadsDirectory);
 
@@ -135,8 +135,7 @@ app.use(
 
 app.use(
   "/uploads",
-  privateLessonUploads,
-  express.static(profileUploadsDirectory),
+  publicUploads,
 );
 
 /* =========================================
@@ -145,8 +144,7 @@ app.use(
 
 app.use(
   "/api/uploads",
-  privateLessonUploads,
-  express.static(path.resolve(__dirname, "src", "uploads")),
+  publicUploads,
 );
 
 /* =========================================
