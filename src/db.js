@@ -22,6 +22,19 @@ const pool = mysql.createPool({
 
 export const db = pool;
 
+db.query(`
+  SELECT
+    DATABASE() AS database_name,
+    @@hostname AS server_name,
+    @@port AS server_port
+`)
+  .then(([rows]) => {
+    console.log("PUFFYBRAIN DATABASE:", rows[0]);
+  })
+  .catch((error) => {
+    console.error("Database connection check failed:", error);
+  });
+  
 async function ensureDatabaseExists() {
   const bootstrapPool = mysql.createPool({
     host: dbConfig.host,
