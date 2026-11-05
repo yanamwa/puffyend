@@ -279,15 +279,6 @@ export async function signup(req, res) {
     });
   }
 
-  if (!cleanFacultyId) {
-    await removeUploadedProof(req.file);
-
-    return res.status(400).json({
-      success: false,
-      message: "Employee or faculty ID is required.",
-    });
-  }
-
   if (cleanFacultyId.length > 100) {
     await removeUploadedProof(req.file);
 
@@ -429,9 +420,13 @@ export async function signup(req, res) {
 
       await removeUploadedProof(req.file);
 
-      return res.status(500).json({
+      console.error("Signup verification email failed:", emailError);
+
+      return res.status(emailError.code === "SMTP_CONFIG_MISSING" ? 503 : 500).json({
         success: false,
-        message: "Email failed: " + emailError.message,
+        message: emailError.code === "SMTP_CONFIG_MISSING"
+          ? "Email verification is not configured. Please contact the administrator."
+          : "Unable to send your verification email. Please try again later.",
       });
     }
   } catch (error) {
@@ -595,9 +590,18 @@ export async function resendOtp(req, res) {
       });
     }
 
+    const remainingSeconds = await getOtpTiming(user.userId);
+    if (remainingSeconds > 0) {
+      return res.status(429).json({
+        success: false,
+        message: "Please wait until the current verification code expires before requesting another.",
+        otpSecondsRemaining: remainingSeconds,
+      });
+    }
+
     const otp = createOtp();
 
-    await db.execute(
+    const [updateResult] = await db.execute(
       `UPDATE users
        SET
          otp_code = ?,
@@ -606,9 +610,18 @@ export async function resendOtp(req, res) {
              NOW(),
              INTERVAL ? SECOND
            )
-       WHERE userId = ?`,
+       WHERE userId = ?
+         AND (otp_expires IS NULL OR otp_expires <= NOW())`,
       [otp, OTP_TTL_SECONDS, user.userId],
     );
+
+    if (updateResult.affectedRows === 0) {
+      return res.status(429).json({
+        success: false,
+        message: "A verification code has already been requested. Please wait for it to expire.",
+        otpSecondsRemaining: await getOtpTiming(user.userId),
+      });
+    }
 
     await sendOtpEmail(user.email, user.name, otp);
 

@@ -879,22 +879,13 @@ export async function createProfessorAccount(req, res) {
 
   const temporaryAccount = getTemporaryAccountSettings(req.body);
 
-  if (!name || !email || !facultyId || !department || !employmentProof) {
+  if (!name || !email || !department || !employmentProof) {
     await removeUploadedProfessorProof(req.file);
 
     return res.status(400).json({
       success: false,
       message:
-        "Professor name, email, faculty ID, department, and ID photo are required.",
-    });
-  }
-
-  if (!facultyId) {
-    await removeUploadedProfessorProof(req.file);
-
-    return res.status(400).json({
-      success: false,
-      message: "Employee or faculty ID is required.",
+        "Professor name, email, department, and employment proof are required.",
     });
   }
 
