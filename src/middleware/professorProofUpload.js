@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import multer from "multer";
+import { uploadsDirectory } from "./publicUploads.js";
 
-const uploadDirectory = path.resolve("src/uploads/professor-ids");
+const uploadDirectory = path.join(uploadsDirectory, "professor-ids");
 
 if (!fs.existsSync(uploadDirectory)) {
   fs.mkdirSync(uploadDirectory, {
