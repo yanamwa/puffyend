@@ -787,7 +787,6 @@ export async function markAllNotificationsAsRead(req, res) {
     const currentUser = await getAuthenticatedUser(req);
 
     if (!currentUser) {
-      connection.release();
 
       return res.status(401).json({
         success: false,
@@ -1071,16 +1070,16 @@ export async function createNotification(req, res) {
       icon: "announcement",
     };
 
-    await logAuditFromRequest(req, {
-      category: "Notification Management",
-      action: "Created Announcement",
-      target: title,
-      status: "Success",
-      details: `Created announcement "${title}" ` + `for target "${target}".`,
-      userId: currentUser.userId || null,
-      userName: createdByName,
-      userRole: createdByRole,
-    });
+   // await logAuditFromRequest(req, {
+    //  category: "Notification Management",
+      //action: "Created Announcement",
+      //target: title,
+     // status: "Success",
+     // details: `Created announcement "${title}" ` + `for target "${target}".`,
+     // userId: currentUser.userId || null,
+     // userName: createdByName,
+     // userRole: createdByRole,
+   // });
 
     return res.status(201).json({
       success: true,
@@ -1216,25 +1215,25 @@ export async function deleteNotification(req, res) {
     /*
      * AUDIT LOG
      */
-    await logAuditFromRequest(req, {
-      category: "Notification Management",
+   // await logAuditFromRequest(req, {
+     // category: "Notification Management",
 
-      action: "Deleted Announcement",
+     // action: "Deleted Announcement",
 
-      target: notification.title || `Announcement #${notificationId}`,
+      //target: notification.title || `Announcement #${notificationId}`,
 
-      status: "Success",
+    //  status: "Success",
 
-      details:
-        `Deleted announcement "${notification.title || `#${notificationId}`}" ` +
-        `targeted to "${normalizeTarget(notification.target)}".`,
+      //details:
+        //`Deleted announcement "${notification.title || `#${notificationId}`}" ` +
+        //`targeted to "${normalizeTarget(notification.target)}".`,
 
-      userId: currentUser.userId || null,
+     // userId: currentUser.userId || null,
 
-      userName: currentUserName,
+      //userName: currentUserName,
 
-      userRole: currentRole,
-    });
+      //userRole: currentRole,
+    //});
 
     return res.json({
       success: true,
