@@ -2,7 +2,6 @@ import { db, initDb } from "../db.js";
 import { migrateCourseCatalog } from "./courseCatalogMigration.js";
 import { migrateAcademicCalendar } from "./academicCalendarMigration.js";
 import { migrateLessonTables, finalizeDatabase } from "../database/postgres.js";
-import { reconcileArchivedCatalogClasses } from "../services/catalog/catalogArchive.js";
 
 export async function migrateApplication() {
   // Deployments may overlap. Serialize schema changes on a dedicated session.
@@ -15,12 +14,12 @@ export async function migrateApplication() {
       [`puffy-schema:${process.env.DB_SCHEMA || "puffybrain"}`],
     );
     locked = true;
-    await initDb();
+    await initDb({ migrate: true });
     await migrateCourseCatalog(db);
     await migrateAcademicCalendar(db);
     await migrateLessonTables(db);
     await finalizeDatabase(db);
-    await reconcileArchivedCatalogClasses(db);
+    // Existing catalog records are preserved; reconciliation is not a migration.
   } finally {
     try {
       if (locked)

@@ -1,5 +1,4 @@
 import { migrateCatalogCodeAvailability } from "./catalogCodeAvailability.js";
-import { recoverCatalogModuleShells } from "../services/courses/courseModulePersistence.js";
 import fs from "node:fs/promises";
 
 // Additive and repeatable. Existing class records and unique join codes are preserved.
@@ -49,5 +48,5 @@ export async function migrateCourseCatalog(db) {
     await db.query(
       "ALTER TABLE courses ADD CONSTRAINT courses_syllabus_catalog_fk FOREIGN KEY (syllabus_version_id, catalog_id) REFERENCES syllabus_versions(version_id, catalog_id)",
     );
-  await recoverCatalogModuleShells(db);
+  // Recovery can overwrite course content and must not run as a schema migration.
 }

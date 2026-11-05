@@ -154,7 +154,7 @@ test(
         },
       );
       await t.test(
-        "imported boolean flags and ordinary generated columns are migrated without losing users",
+        "read-only initialization preserves rows and explicit migrations retain legacy constraints",
         async () => {
           await db.query(
             "ALTER TABLE users ALTER COLUMN is_verified DROP DEFAULT",
@@ -172,6 +172,9 @@ test(
             "CREATE UNIQUE INDEX imported_old_code ON course_catalog(normalized_code)",
           );
           await initializeDatabase();
+          const [[unchanged]] = await db.query("SELECT is_verified FROM users WHERE userId=?", [userId]);
+          assert.equal(unchanged.is_verified, true, "normal initialization must not change column types or values");
+          await initializeDatabase({ migrate: true });
           await migrateCourseCatalog(db);
           const [[user]] = await db.query(
             "SELECT userId,is_verified FROM users WHERE userId=?",
@@ -193,8 +196,10 @@ test(
             "UPDATE course_catalog SET archived_at=NOW() WHERE catalog_id=?",
             [catalog.insertId],
           );
-          await db.execute(
-            "INSERT INTO course_catalog(code,normalized_code,title,programs) VALUES('BIO','BIO','Replacement','[]')",
+          await assert.rejects(
+            db.execute("INSERT INTO course_catalog(code,normalized_code,title,programs) VALUES('BIO','BIO','Replacement','[]')"),
+            e => e.code === "23505",
+            "migration must preserve the existing unique index",
           );
           const [[count]] = await db.execute(
             "SELECT COUNT(*) AS count FROM course_catalog WHERE programs::jsonb @> ?::jsonb",

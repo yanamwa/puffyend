@@ -1,10 +1,12 @@
 import { db } from "../db.js";
 
 export async function cleanupDeclinedRegistrations(email = "") {
+  // Data retention must be explicitly enabled; migration/startup never deletes users.
+  if (process.env.ENABLE_DECLINED_REGISTRATION_CLEANUP !== "true") return 0;
   const [rows] = await db.execute(
     `SELECT userId FROM users
      WHERE role = 'professor' AND verification_status = 'declined'
-       AND professor_declined_at <= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+       AND professor_declined_at <= (NOW() - INTERVAL '24 hours')
        ${email ? "AND email = ?" : ""}`,
     email ? [email] : [],
   );
@@ -14,7 +16,7 @@ export async function cleanupDeclinedRegistrations(email = "") {
       const [result] = await db.execute(
         `DELETE FROM users WHERE userId = ? AND role = 'professor'
          AND verification_status = 'declined'
-         AND professor_declined_at <= DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
+         AND professor_declined_at <= (NOW() - INTERVAL '24 hours')`,
         [user.userId],
       );
       removed += result.affectedRows;

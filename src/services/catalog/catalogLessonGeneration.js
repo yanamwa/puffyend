@@ -170,7 +170,7 @@ export function startCatalogLessonWorker(db) {
       busy = false;
     }
   };
-  const timer = setInterval(() => tick().catch(console.error), 5000);
+  const timer = setInterval(() => tick().catch(console.error), Math.max(10000, Number(process.env.CATALOG_POLL_MS) || 30000));
   timer.unref();
   return timer;
 }

@@ -71,5 +71,5 @@ export async function startModulePublicationNotifications() {
     finally { busy = false; }
   };
   await tick();
-  return setInterval(tick, 10000).unref();
+  return setInterval(tick, Math.max(30000, Number(process.env.NOTIFICATION_POLL_MS) || 60000)).unref();
 }

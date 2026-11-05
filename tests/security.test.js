@@ -2,7 +2,9 @@ import courseRoutes from "../src/routes/courseRoutes.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import { securityConfig } from "../src/config/security.js";
+import { securityConfig, JWT_SECRET } from "../src/config/security.js";
+import jwt from "jsonwebtoken";
+import { db } from "../src/db.js";
 import requireOwnAccount from "../src/middleware/requireOwnAccount.js";
 import { mountUploads } from "../src/routes/uploadRoutes.js";
 import fs from "node:fs/promises";
@@ -173,6 +175,7 @@ test("private uploads and backups never fall through static serving", async () =
         (await fetch(`${base}/uploads/profile-images/private.txt`)).status,
         200,
       );
+      assert.equal((await fetch(`${base}/api/uploads/profile-images/private.txt`)).status, 200);
       for (const root of ["/uploads", "/api/uploads"]) {
         assert.equal(
           (await fetch(`${base}${root}/professor-ids/private.txt`)).status,
@@ -235,4 +238,40 @@ test("legacy progress, monitoring and course reads reject anonymous requests", a
       );
     }
   });
+});
+
+
+test("professor proofs require an admin JWT while both profile URL aliases stay public", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "puffy-proof-access-"));
+  const originalExecute = db.execute;
+  try {
+    await fs.mkdir(path.join(directory, "professor-ids"));
+    await fs.mkdir(path.join(directory, "profile-images"));
+    await fs.writeFile(path.join(directory, "professor-ids", "id.png"), "private-proof");
+    await fs.writeFile(path.join(directory, "profile-images", "avatar.png"), "public-avatar");
+    db.execute = async (sql, values) => {
+      if (/SELECT/i.test(sql)) return [[{ userId: values[0], role: { 1: "student", 2: "admin", 3: "super_admin" }[values[0]], is_archived: 0, is_temporary: 0, verification_status: "approved" }]];
+      return [{ affectedRows: 1 }];
+    };
+    const app = express();
+    mountUploads(app, directory);
+    await serve(app, async base => {
+      for (const root of ["/uploads", "/api/uploads"]) {
+        assert.equal((await fetch(`${base}${root}/profile-images/avatar.png`)).status, 200);
+        assert.equal((await fetch(`${base}${root}/professor-ids/id.png`)).status, 401);
+        for (const [userId, status] of [[1, 403], [2, 200], [3, 200]]) {
+          const response = await fetch(`${base}${root}/professor-ids/id.png`, { headers: { Authorization: `Bearer ${jwt.sign({ userId }, JWT_SECRET, { expiresIn: 60 })}` } });
+          assert.equal(response.status, status);
+          if (status === 200) {
+            assert.equal(await response.text(), "private-proof");
+            assert.match(response.headers.get("cache-control"), /private/);
+            assert.match(response.headers.get("cache-control"), /no-store/);
+          }
+        }
+      }
+    });
+  } finally {
+    db.execute = originalExecute;
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });

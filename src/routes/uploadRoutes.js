@@ -5,7 +5,7 @@ import { requireRole } from "../middleware/roleMiddleware.js";
 
 export function mountUploads(app, directory) {
   app.use(
-    "/uploads/profile-images",
+    ["/uploads/profile-images", "/api/uploads/profile-images"],
     express.static(path.join(directory, "profile-images"), {
       dotfiles: "deny",
       index: false,

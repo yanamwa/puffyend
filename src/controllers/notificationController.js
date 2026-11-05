@@ -425,7 +425,7 @@ export async function getNotifications(req, res) {
         n.created_by_role,
         n.created_at,
 
-        nr.notification_read_id AS broadcast_read_id,
+        nr.notification_id AS broadcast_read_id,
         nr.read_at AS broadcast_read_at
 
       FROM notifications n
@@ -602,7 +602,7 @@ export async function getUnreadNotificationCount(req, res) {
         OR (
           n.recipient_user_id IS NULL
 
-          AND nr.notification_read_id
+          AND nr.notification_id
               IS NULL
 
           AND (

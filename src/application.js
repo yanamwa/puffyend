@@ -19,7 +19,7 @@ import courseRoutes from "./routes/courseRoutes.js";
 import catalogRoutes, {
   cleanupSyllabusUploads,
 } from "./routes/catalogRoutes.js";
-import { db } from "./db.js";
+import { db, initDb } from "./db.js";
 import userRoutes from "./routes/userRoutes.js";
 import lessonRoutes from "./routes/lessonRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
@@ -219,29 +219,32 @@ export async function startApplication(app, availability) {
 
       console.log("--------------------------------------");
 
-      console.log("Connecting to Supabase PostgreSQL...");
+      console.log("Connecting to PostgreSQL...");
 
       availability.stage = "database_initialization";
-      await migrateApplication();
-      await cleanupSyllabusUploads();
-      setInterval(
-        () => cleanupSyllabusUploads().catch(console.error),
-        3600000,
-      ).unref();
-      startLessonWorker();
-      startModulePublicationNotifications().catch((error) =>
-        console.error(
-          "Module publication worker:",
-          error.code || error.message,
-        ),
-      );
-      startMainQuizAvailabilityNotifications().catch((error) =>
-        console.error(
-          "Main Quiz notification worker:",
-          error.code || error.message,
-        ),
-      );
-      startCatalogLessonWorker(db);
+      if (process.env.RUN_DB_MIGRATIONS === "true") await migrateApplication();
+      else await initDb();
+      // Workers are opt-in on a populated database and never run during validation.
+      if (process.env.ENABLE_BACKGROUND_JOBS === "true") {
+        if (process.env.ENABLE_UPLOAD_CLEANUP === "true") {
+          await cleanupSyllabusUploads();
+          setInterval(() => cleanupSyllabusUploads().catch(console.error), 3600000).unref();
+        }
+        startLessonWorker();
+        startModulePublicationNotifications().catch((error) =>
+          console.error(
+            "Module publication worker:",
+            error.code || error.message,
+          ),
+        );
+        startMainQuizAvailabilityNotifications().catch((error) =>
+          console.error(
+            "Main Quiz notification worker:",
+            error.code || error.message,
+          ),
+        );
+        startCatalogLessonWorker(db);
+      }
 
       console.log("PostgreSQL initialized successfully.");
 

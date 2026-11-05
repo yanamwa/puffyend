@@ -3,15 +3,17 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-    "test": "node --test tests/calendar/academicCalendarExtraction.test.js tests/catalog/catalogLessonGeneration.test.js tests/catalog/courseCatalog.test.js tests/catalog/syllabusExtraction.test.js tests/lessons/groundingRecovery.test.js tests/lessons/lessonCoverage.test.js tests/quizzes/assessmentEmail.test.js tests/quizzes/mainQuiz.test.js tests/quizzes/mainQuizBaseline.test.js tests/quizzes/mainQuizFlow.test.js tests/quizzes/mainQuizStatus.test.js tests/quizzes/practiceQuiz.test.js tests/courses/modulePublication.test.js tests/courses/progressiveCoursePublication.test.js tests/professorRegistration.test.js",
-    "test:integration": "node --test tests/calendar/academicCalendar.test.js tests/catalog/catalogCodeAvailability.test.js tests/catalog/courseCatalog.integration.test.js tests/quizzes/studentQuizHistory.test.js tests/settings/systemSettings.test.js",
+    "test": "node --test tests/calendar/academicCalendarExtraction.test.js tests/catalog/catalogLessonGeneration.test.js tests/catalog/courseCatalog.test.js tests/catalog/syllabusExtraction.test.js tests/lessons/groundingRecovery.test.js tests/lessons/lessonCoverage.test.js tests/quizzes/assessmentEmail.test.js tests/quizzes/mainQuiz.test.js tests/quizzes/mainQuizBaseline.test.js tests/quizzes/mainQuizFlow.test.js tests/quizzes/mainQuizStatus.test.js tests/quizzes/practiceQuiz.test.js tests/courses/modulePublication.test.js tests/courses/progressiveCoursePublication.test.js",
+    "test:integration": "node --test tests/postgresMigration.test.js tests/postgresCompatibility.test.js",
     "format": "prettier --write src tests --ignore-unknown",
     "format:check": "prettier --check src tests --ignore-unknown",
     "migrate:catalog": "node src/migrations/runCourseCatalogMigration.js",
     "test:catalog": "node --test tests/catalog/catalogLessonGeneration.test.js tests/catalog/courseCatalog.test.js tests/catalog/syllabusExtraction.test.js",
     "test:all": "npm test && npm run test:integration",
     "migrate": "node src/migrations/runMigrations.js",
-    "test:security": "node --test tests/security.test.js"
+    "test:security": "node --test tests/security.test.js",
+    "test:startup": "node --test tests/startup.test.js",
+    "db:check": "node src/database/checkDatabase.js"
   },
   "dependencies": {
     "adm-zip": "^0.6.1",
@@ -26,7 +28,6 @@
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.12.0",
     "multer": "^2.2.0",
-    "mysql2": "^3.24.6",
     "nodemailer": "^9.0.3",
     "pdf-parse": "^2.4.5",
     "pg": "^8.23.1",

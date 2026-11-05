@@ -290,8 +290,8 @@ export async function signup(req, res) {
     await cleanupDeclinedRegistrations(cleanEmail);
     const [existing] = await db.execute(
       `SELECT userId, role, verification_status,
-         GREATEST(TIMESTAMPDIFF(SECOND, NOW(),
-           DATE_ADD(professor_declined_at, INTERVAL 24 HOUR)), 1) AS retry_after_seconds
+         GREATEST(CEIL(EXTRACT(EPOCH FROM
+           (professor_declined_at + INTERVAL '24 hours' - NOW()))), 1) AS retry_after_seconds
          FROM users
          WHERE email = ?
          LIMIT 1`,
@@ -604,10 +604,7 @@ export async function resendOtp(req, res) {
        SET
          otp_code = ?,
          otp_expires =
-           DATE_ADD(
-             NOW(),
-             INTERVAL ? SECOND
-           )
+           (NOW() + ? * INTERVAL '1 second')
        WHERE userId = ?
          AND (otp_expires IS NULL OR otp_expires <= NOW())`,
       [otp, OTP_TTL_SECONDS, user.userId],

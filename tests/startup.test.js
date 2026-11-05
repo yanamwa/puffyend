@@ -23,7 +23,7 @@ for (const scenario of [
 ]) {
   test(
     `real entry point serves CORS and safe health errors despite ${scenario.name}`,
-    { timeout: 30000 },
+    { timeout: 60000 },
     async () => {
       const child = spawn(process.execPath, ["src/index.js"], {
         cwd: new URL("..", import.meta.url),
@@ -33,7 +33,7 @@ for (const scenario of [
           PORT: "0",
           FRONTEND_URL: "https://puffybrain.fun",
           JWT_SECRET: "x".repeat(48),
-          DATABASE_URL: "postgresql://test:test@127.0.0.1:1/postgres",
+          DATABASE_URL: "postgresql://test:test@127.0.0.254:5432/postgres",
           SUPABASE_DB_URL: "",
           DB_SCHEMA: "puffybrain",
           SUPER_ADMIN_PASSWORD: "",
@@ -50,7 +50,7 @@ for (const scenario of [
       });
       try {
         let port;
-        for (let i = 0; i < 150; i++) {
+        for (let i = 0; i < 400; i++) {
           port = /HTTP server listening on port (\d+)/.exec(output)?.[1];
           if (port) break;
           if (child.exitCode !== null)
@@ -81,7 +81,7 @@ for (const scenario of [
           "true",
         );
         let body;
-        for (let i = 0; i < 150; i++) {
+        for (let i = 0; i < 400; i++) {
           const health = await fetch(`${base}/api/health`, { headers: origin });
           assert.equal(health.status, 503);
           assert.equal(

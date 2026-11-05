@@ -1,44 +1,9 @@
-import mysql from "mysql2/promise";
 import "./environment.js";
 import bcrypt from "bcrypt";
+import { db, initializeDatabase } from "./database/postgres.js";
 
-const dbConfig = {
-  host: process.env.DB_HOST || "127.0.0.1",
-  user: process.env.DB_USER || "root",
-  password: process.env.DB_PASSWORD || "",
-  database: process.env.DB_NAME || "puffybrain",
-};
-
-const pool = mysql.createPool({
-  host: dbConfig.host,
-  user: dbConfig.user,
-  password: dbConfig.password,
-  database: dbConfig.database,
-  waitForConnections: true,
-  connectionLimit: 10,
-});
-
-export const db = pool;
-
-async function ensureDatabaseExists() {
-  const bootstrapPool = mysql.createPool({
-    host: dbConfig.host,
-    user: dbConfig.user,
-    password: dbConfig.password,
-    waitForConnections: true,
-    connectionLimit: 1,
-  });
-
-  try {
-    await bootstrapPool.execute(
-      `CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\`
-       CHARACTER SET utf8mb4
-       COLLATE utf8mb4_general_ci`,
-    );
-  } finally {
-    await bootstrapPool.end();
-  }
-}
+// Preserve the interface imported by controllers, routes, services and middleware.
+export { db };
 
 async function ensureColumn(columnName, columnDefinition) {
   const [columns] = await db.execute(
@@ -404,11 +369,6 @@ async function initMonitoringTables() {
     "rejection_reason TEXT NULL",
   );
 
-  await db.execute(`
-    UPDATE course_enrollments
-    SET status = 'pending'
-    WHERE status IS NULL OR status::text = ''
-  `);
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS saved_courses (
@@ -565,46 +525,8 @@ async function ensureSuperAdminUser() {
     [superAdminEmail],
   );
 
-  if (rows.length > 0) {
-    if (configuredSuperAdminPassword) {
-      const hashedPassword = await bcrypt.hash(superAdminPassword, 10);
-
-      await db.execute(
-        `UPDATE users
-         SET password = ?,
-             role = 'super_admin',
-             name = ?,
-             display_name = ?,
-             verification_status = 'approved',
-             is_verified = 1,
-             onboarding_completed = 1,
-             is_archived = 0,
-             archived_at = NULL,
-             is_temporary = 0,
-             temporary_expires_at = NULL
-         WHERE email = ?`,
-        [hashedPassword, superAdminName, superAdminName, superAdminEmail],
-      );
-      return;
-    }
-
-    await db.execute(
-      `UPDATE users
-       SET role = 'super_admin',
-           name = ?,
-           display_name = ?,
-           verification_status = 'approved',
-           is_verified = 1,
-           onboarding_completed = 1,
-           is_archived = 0,
-           archived_at = NULL,
-           is_temporary = 0,
-           temporary_expires_at = NULL
-       WHERE email = ?`,
-      [superAdminName, superAdminName, superAdminEmail],
-    );
-    return;
-  }
+  // Never reset an existing administrator during initialization.
+  if (rows.length > 0) return;
 
   const hashedPassword = await bcrypt.hash(superAdminPassword, 10);
 
@@ -618,8 +540,10 @@ async function ensureSuperAdminUser() {
   );
 }
 
-export async function initDb() {
-  await initializeDatabase();
+export async function initDb({ migrate = false } = {}) {
+  await initializeDatabase({ migrate });
+  // A populated production database is validated without changing its contents.
+  if (!migrate) return db;
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS users (
@@ -708,12 +632,7 @@ export async function initDb() {
     "verification_status",
     "verification_status VARCHAR(50) NOT NULL DEFAULT 'pending'",
   );
-  await ensureColumn("professor_declined_at", "professor_declined_at DATETIME NULL");
-  await db.execute(
-    `UPDATE users SET professor_declined_at = NOW()
-     WHERE role = 'professor' AND verification_status = 'declined'
-       AND professor_declined_at IS NULL`,
-  );
+  await ensureColumn("professor_declined_at", "professor_declined_at TIMESTAMP NULL");
   await ensureColumn(
     "is_archived",
     "is_archived SMALLINT NOT NULL DEFAULT 0",

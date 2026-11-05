@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "../environment.js";
 import pg from "pg";
 import fs from "node:fs/promises";
 import { databaseTls } from "./databaseTls.js";
@@ -10,7 +10,7 @@ export function postgresConfig(env = process.env) {
   const connectionString = env.DATABASE_URL || env.SUPABASE_DB_URL;
   if (env.NODE_ENV === "production" && !connectionString)
     throw new Error(
-      "Set DATABASE_URL to the Supabase PostgreSQL session-pooler connection string.",
+      "Set DATABASE_URL to your PostgreSQL connection string (port 5432).",
     );
   let url;
   try {
@@ -31,6 +31,10 @@ export function postgresConfig(env = process.env) {
     throw new Error(
       "Use the Supabase session pooler (port 5432), not the transaction pooler: background jobs use session advisory locks.",
     );
+  if (url.port && url.port !== "5432")
+    throw new Error("DATABASE_URL must use PostgreSQL port 5432.");
+  url.port = "5432";
+  const sslmode = url.searchParams.get("sslmode");
   const local = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     url.hostname,
   );
@@ -40,7 +44,7 @@ export function postgresConfig(env = process.env) {
   return {
     connectionString: url.toString(),
     ssl:
-      local && env.NODE_ENV !== "production"
+      sslmode === "disable" || (local && !sslmode)
         ? false
         : databaseTls(url.hostname, env.DB_SSL_CA),
     max: 5,
@@ -83,6 +87,7 @@ export function bindParameters(sql, values = []) {
     );
     return `$${++bound}`;
   });
+  if (index === 0 && /\$[1-9][0-9]*/.test(text)) return { text, values };
   if (index !== values.length)
     throw new Error("Unexpected database query parameters.");
   return { text, values: parameters };
@@ -170,7 +175,7 @@ pgPool.on("error", (error) =>
 );
 export const db = createDatabase(pgPool);
 
-export async function initializeDatabase() {
+export async function initializeDatabase({ migrate = false } = {}) {
   const [schemas] = await db.execute(
     "SELECT schema_name FROM information_schema.schemata WHERE schema_name=?",
     [config.schema],
@@ -179,6 +184,18 @@ export async function initializeDatabase() {
     throw new Error(
       `Schema ${config.schema} does not exist. Set DB_SCHEMA to the schema containing your imported tables.`,
     );
+  if (!migrate) {
+    const [tables] = await db.execute(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema=?",
+      [config.schema],
+    );
+    const existing = new Set(tables.map(row => row.TABLE_NAME));
+    const required = ["users", "courses", "course_enrollments", "learning_modules",
+      "quiz_modes", "quiz_attempts", "managed_notifications", "notifications", "notification_reads", "system_settings"];
+    const missing = required.filter(name => !existing.has(name));
+    if (missing.length) throw new Error(`Database schema is missing required tables: ${missing.join(", ")}. Verify DB_SCHEMA; review migrations separately.`);
+    return;
+  }
   const [userColumns] = await db.execute(
     "SELECT column_name FROM information_schema.columns WHERE table_schema=? AND table_name='users' AND column_name IN ('userId','userid')",
     [config.schema],

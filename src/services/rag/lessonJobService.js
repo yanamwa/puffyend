@@ -314,7 +314,7 @@ export function startLessonWorker() {
       busy = false;
     }
   };
-  const timer = setInterval(tick, 2000);
+  const timer = setInterval(tick, Math.max(10000, Number(process.env.LESSON_POLL_MS) || 30000));
   timer.unref();
   void tick();
   return () => clearInterval(timer);
