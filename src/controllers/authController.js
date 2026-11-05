@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import jwt from "jsonwebtoken";
 
 import { db } from "../db.js";
+import { cleanupDeclinedRegistrations } from "../services/declinedRegistrationCleanup.js";
 import { sendOtpEmail, sendPasswordResetEmail } from "../utils/mailer.js";
 
 import { logAuditFromRequest } from "../services/system/auditLogService.js";
@@ -296,8 +297,11 @@ export async function signup(req, res) {
   }
 
   try {
+    await cleanupDeclinedRegistrations(cleanEmail);
     const [existing] = await db.execute(
-      `SELECT userId
+      `SELECT userId, role, verification_status,
+         GREATEST(TIMESTAMPDIFF(SECOND, NOW(),
+           DATE_ADD(professor_declined_at, INTERVAL 24 HOUR)), 1) AS retry_after_seconds
          FROM users
          WHERE email = ?
          LIMIT 1`,
@@ -306,6 +310,17 @@ export async function signup(req, res) {
 
     if (existing.length > 0) {
       await removeUploadedProof(req.file);
+
+      if (existing[0].role === "professor" && existing[0].verification_status === "declined") {
+        const retryAfterSeconds = Number(existing[0].retry_after_seconds) || 86400;
+        const hours = Math.ceil(retryAfterSeconds / 3600);
+        return res.status(409).json({
+          success: false,
+          code: "REGISTRATION_DECLINED",
+          retryAfterSeconds,
+          message: `This email is already registered and the registration was declined. Please try again in ${hours} hour${hours === 1 ? "" : "s"}, after the 24-hour waiting period.`,
+        });
+      }
 
       return res.status(409).json({
         success: false,

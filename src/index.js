@@ -3,7 +3,7 @@ import academicCalendarRoutes from "./routes/academicCalendarRoutes.js";
 import { migrateAcademicCalendar } from "./migrations/academicCalendarMigration.js";
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
+import "./environment.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,8 +23,7 @@ import reportRoutes from "./routes/reportRoutes.js";
 import { initDb } from "./db.js";
 import { startLessonWorker } from "./services/rag/lessonJobService.js";
 import publicUploads, { uploadsDirectory } from "./middleware/publicUploads.js";
-
-dotenv.config();
+import { cleanupDeclinedRegistrations } from "./services/declinedRegistrationCleanup.js";
 
 const app = express();
 
@@ -301,6 +300,10 @@ async function startServer() {
     console.log("Connecting to MySQL...");
 
     await initDb();
+    await cleanupDeclinedRegistrations();
+    setInterval(() => cleanupDeclinedRegistrations().catch((error) => {
+      console.error("Declined registration cleanup failed:", error.code || "CLEANUP_FAILED");
+    }), 60000).unref();
     await migrateCourseCatalog(db);
     const { reconcileArchivedCatalogClasses } = await import("./services/catalog/catalogArchive.js");
     await reconcileArchivedCatalogClasses(db);
