@@ -1,8 +1,6 @@
 import mysql from "mysql2/promise";
-import dotenv from "dotenv";
+import "./environment.js";
 import bcrypt from "bcrypt";
-
-dotenv.config();
 
 const dbConfig = {
   host: process.env.DB_HOST || "127.0.0.1",
@@ -746,6 +744,12 @@ export async function initDb() {
   await ensureColumn(
     "verification_status",
     "verification_status VARCHAR(50) NOT NULL DEFAULT 'pending'",
+  );
+  await ensureColumn("professor_declined_at", "professor_declined_at DATETIME NULL");
+  await db.execute(
+    `UPDATE users SET professor_declined_at = NOW()
+     WHERE role = 'professor' AND verification_status = 'declined'
+       AND professor_declined_at IS NULL`,
   );
   await ensureColumn(
     "is_archived",
