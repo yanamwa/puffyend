@@ -1,6 +1,44 @@
-import { db, initializeDatabase } from "./database/postgres.js";
+import mysql from "mysql2/promise";
+import "./environment.js";
 import bcrypt from "bcrypt";
-export { db };
+
+const dbConfig = {
+  host: process.env.DB_HOST || "127.0.0.1",
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASSWORD || "",
+  database: process.env.DB_NAME || "puffybrain",
+};
+
+const pool = mysql.createPool({
+  host: dbConfig.host,
+  user: dbConfig.user,
+  password: dbConfig.password,
+  database: dbConfig.database,
+  waitForConnections: true,
+  connectionLimit: 10,
+});
+
+export const db = pool;
+
+async function ensureDatabaseExists() {
+  const bootstrapPool = mysql.createPool({
+    host: dbConfig.host,
+    user: dbConfig.user,
+    password: dbConfig.password,
+    waitForConnections: true,
+    connectionLimit: 1,
+  });
+
+  try {
+    await bootstrapPool.execute(
+      `CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\`
+       CHARACTER SET utf8mb4
+       COLLATE utf8mb4_general_ci`,
+    );
+  } finally {
+    await bootstrapPool.end();
+  }
+}
 
 async function ensureColumn(columnName, columnDefinition) {
   const [columns] = await db.execute(
@@ -669,6 +707,12 @@ export async function initDb() {
   await ensureColumn(
     "verification_status",
     "verification_status VARCHAR(50) NOT NULL DEFAULT 'pending'",
+  );
+  await ensureColumn("professor_declined_at", "professor_declined_at DATETIME NULL");
+  await db.execute(
+    `UPDATE users SET professor_declined_at = NOW()
+     WHERE role = 'professor' AND verification_status = 'declined'
+       AND professor_declined_at IS NULL`,
   );
   await ensureColumn(
     "is_archived",

@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import fs from "node:fs/promises";
 import authenticateUser from "../middleware/authMiddleware.js";
-import { sendStudentTemporaryPasswordEmail } from "../utils/mailer.js";
+import { sendStudentTemporaryPasswordEmail, sendProfessorRegistrationDecisionEmail } from "../utils/mailer.js";
 import { logAuditFromRequest } from "../services/system/auditLogService.js";
 
 const YEAR_LEVELS = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
@@ -1085,11 +1085,19 @@ export async function updateProfessorRegistration(req, res) {
   const status = normalizeVerificationStatus(
     req.body.status || req.body.action,
   );
+  const reason = status === "declined" ? cleanText(req.body.reason) : "";
 
   if (!status || status === "pending") {
     return res.status(400).json({
       success: false,
       message: "Choose approved or declined.",
+    });
+  }
+
+  if (status === "declined" && (!reason || reason.length > 2000)) {
+    return res.status(400).json({
+      success: false,
+      message: "Please provide a decline reason of 1 to 2000 characters.",
     });
   }
 
@@ -1123,8 +1131,11 @@ export async function updateProfessorRegistration(req, res) {
     }
 
     await db.execute(
-      "UPDATE users SET verification_status = ? WHERE userId = ?",
-      [status, id],
+      `UPDATE users SET verification_status = ?,
+       professor_declined_at = CASE WHEN ? = 'declined'
+         THEN COALESCE(professor_declined_at, NOW()) ELSE NULL END
+       WHERE userId = ?`,
+      [status, status, id],
     );
 
     const [rows] = await db.execute(
@@ -1163,15 +1174,28 @@ export async function updateProfessorRegistration(req, res) {
       details:
         `Professor ID: ${id}; ` +
         `Email: ${user.email || "N/A"}; ` +
-        `Registration Status: ${status}`,
+        `Registration Status: ${status}` + (reason ? `; Decline Reason: ${reason}` : ""),
     });
+
+    let emailSent = false;
+    try {
+      await sendProfessorRegistrationDecisionEmail({
+        email: user.email,
+        name: targetName,
+        status,
+        reason,
+      });
+      emailSent = true;
+    } catch (error) {
+      console.error("Professor decision email failed:", error.code || "EMAIL_DELIVERY_FAILED");
+    }
 
     return res.json({
       success: true,
-      message:
-        status === "approved"
-          ? "Professor registration approved."
-          : "Professor registration declined.",
+      message: `Professor registration ${status}. ${emailSent
+        ? "Notification email sent to the registered address."
+        : "The notification email could not be sent. Please contact the professor directly."}`,
+      emailSent,
       user: rowToUser(rows[0]),
     });
   } catch (error) {

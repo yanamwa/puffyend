@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import "../environment.js";
 import { renderQuizResultEmail } from "./quizResultEmail.js";
 
 function getSmtpConfig() {
@@ -93,6 +94,31 @@ export async function sendOtpEmail(email, name, otp) {
     `,
     text: `Your PuffyBrain verification code is ${otp}. It expires in 5 minutes.`,
   });
+}
+
+export async function sendProfessorRegistrationDecisionEmail({ email, name, status, reason }) {
+  const approved = status === "approved";
+  const heading = approved ? "Professor Account Approved" : "Professor Registration Declined";
+  const message = approved
+    ? "Your professor account has been approved by an administrator. You can sign in using your registered email and password once your email is verified."
+    : "Your professor registration has been declined by an administrator. Your registration will be deleted after 24 hours, and you can register again using the same email address.";
+  const { transporter, from } = createSmtpMailer();
+  const info = await transporter.sendMail({
+    from,
+    to: email,
+    subject: `PuffyBrain — ${heading}`,
+    text: `Hi ${name || "Professor"},\n\n${message}${approved ? "" : `\n\nReason for decline:\n${reason}`}\n\nPuffyBrain Team`,
+    html: `<div style="font-family:Arial,sans-serif;color:#263e5b;max-width:600px;margin:auto;border:1px solid #cbdced;border-radius:12px;overflow:hidden;">
+      <h2 style="margin:0;padding:22px;background:#7fa9d6;color:#fff;">${heading}</h2>
+      <div style="padding:24px;line-height:1.6;">
+        <p>Hi ${escapeHtml(name || "Professor")},</p>
+        <p>${message}</p>
+        ${approved ? "" : `<div style="padding:16px;background:#edf5fd;border-left:4px solid #7fa9d6;"><strong>Reason for decline</strong><p style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(reason)}</p></div>`}
+        <p>PuffyBrain Team</p>
+      </div>
+    </div>`,
+  });
+  if (!info.accepted?.length) throw new Error("The mail server did not accept the recipient.");
 }
 
 export async function sendPasswordResetEmail(email, name, resetLink) {
