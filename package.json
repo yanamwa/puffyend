@@ -3,7 +3,7 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-    "test": "node --test tests/calendar/academicCalendarExtraction.test.js tests/catalog/catalogLessonGeneration.test.js tests/catalog/courseCatalog.test.js tests/catalog/syllabusExtraction.test.js tests/lessons/groundingRecovery.test.js tests/lessons/lessonCoverage.test.js tests/quizzes/assessmentEmail.test.js tests/quizzes/mainQuiz.test.js tests/quizzes/mainQuizBaseline.test.js tests/quizzes/mainQuizFlow.test.js tests/quizzes/mainQuizStatus.test.js tests/quizzes/practiceQuiz.test.js tests/courses/modulePublication.test.js tests/courses/progressiveCoursePublication.test.js",
+    "test": "node --test tests/calendar/academicCalendarExtraction.test.js tests/catalog/catalogLessonGeneration.test.js tests/catalog/courseCatalog.test.js tests/catalog/syllabusExtraction.test.js tests/lessons/groundingRecovery.test.js tests/lessons/lessonCoverage.test.js tests/quizzes/assessmentEmail.test.js tests/quizzes/mainQuiz.test.js tests/quizzes/mainQuizBaseline.test.js tests/quizzes/mainQuizFlow.test.js tests/quizzes/mainQuizStatus.test.js tests/quizzes/practiceQuiz.test.js tests/courses/modulePublication.test.js tests/courses/progressiveCoursePublication.test.js tests/professorRegistration.test.js",
     "test:integration": "node --test tests/calendar/academicCalendar.test.js tests/catalog/catalogCodeAvailability.test.js tests/catalog/courseCatalog.integration.test.js tests/quizzes/studentQuizHistory.test.js tests/settings/systemSettings.test.js",
     "format": "prettier --write src tests --ignore-unknown",
     "format:check": "prettier --check src tests --ignore-unknown",

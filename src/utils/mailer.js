@@ -12,7 +12,7 @@ function getSmtpConfig() {
     fromName: process.env.OTP_SMTP_FROM_NAME || "PuffyBrain",
   };
 
-  const missingKeys = [
+  const missingKeys = new Set([
     ["OTP_SMTP_HOST", config.host],
     ["OTP_SMTP_PORT", process.env.OTP_SMTP_PORT],
     ["OTP_SMTP_USERNAME", config.username],
@@ -20,15 +20,15 @@ function getSmtpConfig() {
     ["OTP_SMTP_FROM_EMAIL", config.fromEmail],
   ]
     .filter(([, value]) => !String(value || "").trim())
-    .map(([key]) => key);
+    .map(([key]) => key));
 
   if (!Number.isFinite(port) || port <= 0) {
-    missingKeys.push("OTP_SMTP_PORT");
+    missingKeys.add("OTP_SMTP_PORT");
   }
 
-  if (missingKeys.length > 0) {
+  if (missingKeys.size > 0) {
     const error = new Error(
-      `SMTP configuration is incomplete: ${missingKeys.join(", ")}`,
+      `SMTP configuration is incomplete: ${[...missingKeys].join(", ")}`,
     );
     error.code = "SMTP_CONFIG_MISSING";
     throw error;

@@ -279,15 +279,6 @@ export async function signup(req, res) {
     });
   }
 
-  if (!cleanFacultyId) {
-    await removeUploadedProof(req.file);
-
-    return res.status(400).json({
-      success: false,
-      message: "Employee or faculty ID is required.",
-    });
-  }
-
   if (cleanFacultyId.length > 100) {
     await removeUploadedProof(req.file);
 
@@ -429,9 +420,13 @@ export async function signup(req, res) {
 
       await removeUploadedProof(req.file);
 
-      return res.status(500).json({
+      console.error("Signup verification email failed:", emailError);
+
+      return res.status(emailError.code === "SMTP_CONFIG_MISSING" ? 503 : 500).json({
         success: false,
-        message: "Email failed: " + emailError.message,
+        message: emailError.code === "SMTP_CONFIG_MISSING"
+          ? "Email verification is not configured. Please contact the administrator."
+          : "Unable to send your verification email. Please try again later.",
       });
     }
   } catch (error) {
