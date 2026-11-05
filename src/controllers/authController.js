@@ -573,17 +573,38 @@ export async function resendOtp(req, res) {
       });
     }
 
+    const remainingSeconds = await getOtpTiming(user.userId);
+    if (remainingSeconds > 0) {
+      return res.status(429).json({
+        success: false,
+        message: "Please wait until the current verification code expires before requesting another.",
+        otpSecondsRemaining: remainingSeconds,
+      });
+    }
+
     const otp = createOtp();
 
-    await db.execute(
+    const [updateResult] = await db.execute(
       `UPDATE users
        SET
          otp_code = ?,
          otp_expires =
-           (NOW() + (?::double precision * INTERVAL '1 second'))
-       WHERE userId = ?`,
+           DATE_ADD(
+             NOW(),
+             INTERVAL ? SECOND
+           )
+       WHERE userId = ?
+         AND (otp_expires IS NULL OR otp_expires <= NOW())`,
       [otp, OTP_TTL_SECONDS, user.userId],
     );
+
+    if (updateResult.affectedRows === 0) {
+      return res.status(429).json({
+        success: false,
+        message: "A verification code has already been requested. Please wait for it to expire.",
+        otpSecondsRemaining: await getOtpTiming(user.userId),
+      });
+    }
 
     await sendOtpEmail(user.email, user.name, otp);
 
