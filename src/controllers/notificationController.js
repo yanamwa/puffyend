@@ -745,21 +745,38 @@ export async function markNotificationAsRead(req, res) {
         });
       }
 
-      await db.execute(
-        `
-        INSERT INTO notification_reads (
-          notification_id,
-          user_id,
-          read_at
-        )
+      const [result] = await db.execute(
+  `
+    INSERT INTO notification_reads (
+      notification_id,
+      user_id,
+      read_at
+    )
+    VALUES (?, ?, NOW())
+    ON DUPLICATE KEY UPDATE
+      read_at = VALUES(read_at)
+  `,
+  [notificationId, userId]
+);
 
-        VALUES (?, ?, NOW())
+console.log("NOTIFICATION READ INSERT:", {
+  notificationId,
+  userId,
+  affectedRows: result.affectedRows,
+  insertId: result.insertId,
+});
 
-        ON CONFLICT (notification_id, user_id) DO UPDATE SET
-          read_at = EXCLUDED.read_at
-        `,
-        [notificationId, userId],
-      );
+    const [savedRows] = await db.execute(
+      `
+        SELECT *
+        FROM notification_reads
+        WHERE notification_id = ?
+          AND user_id = ?
+      `,
+      [notificationId, userId]
+    );
+
+    console.log("SAVED NOTIFICATION READ:", savedRows);
     }
 
     return res.json({
