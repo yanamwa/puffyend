@@ -146,6 +146,72 @@ export async function getReports(req, res, next) {
         });
   } catch (error) { next(error); }
 }
+export async function getProfessorAssessmentSummary(req, res, next) {
+  try {
+    const [settings] = await db.execute(`
+      SELECT passing_percentage
+      FROM system_settings
+      ORDER BY setting_id ASC
+      LIMIT 1
+    `);
+    const threshold = settings[0]?.passing_percentage;
+    const passingPercentage = threshold == null ? null : Number(threshold);
+    const [rows] = await db.execute(`
+      SELECT DISTINCT
+        u.userId AS "studentId",
+        u.name,
+        c.course_id AS "courseId",
+        COALESCE(NULLIF(c.course_name, ''), c.title) AS course,
+        COALESCE(NULLIF(c.course_code, ''), c.code) AS "courseCode",
+        scores.attempts AS "scoredAttempts",
+        scores.average AS "averageScore",
+        modules.completed AS "completedModules",
+        modules.total AS "totalModules"
+      FROM courses c
+      JOIN course_enrollments ce ON ce.course_id = c.course_id
+      JOIN users u ON u.userId = ce.user_id
+      CROSS JOIN LATERAL (
+        SELECT COUNT(*) AS attempts,
+               AVG(100.0 * qa.score / NULLIF(qa.total, 0)) AS average
+        FROM quiz_attempts qa
+        WHERE qa.course_id = c.course_id AND qa.user_id = ce.user_id
+          AND qa.score IS NOT NULL AND qa.total > 0
+      ) scores
+      CROSS JOIN LATERAL (
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE EXISTS (
+                 SELECT 1 FROM lesson_progress lp
+                 WHERE lp.lesson_id = lm.lesson_id AND lp.user_id = ce.user_id
+                   AND lp.progress_percent >= 100
+               )) AS completed
+        FROM learning_modules lm
+        WHERE lm.course_id = c.course_id
+      ) modules
+      WHERE c.professor_id = ? AND COALESCE(c.archived, 0) = 0
+        AND ce.status = 'approved' AND COALESCE(ce.archived, 0) = 0
+        AND u.role = 'student' AND COALESCE(u.is_archived, 0) = 0
+      ORDER BY u.name, course, "studentId", "courseId"
+    `, [req.user.id]);
+
+    const students = rows.map(({ studentId, courseId, averageScore, ...row }) => {
+      const average = averageScore == null ? null : Number(averageScore);
+      return {
+        ...row,
+        key: `${courseId}:${studentId}`,
+        scoredAttempts: Number(row.scoredAttempts),
+        averageScore: average,
+        completedModules: Number(row.completedModules),
+        totalModules: Number(row.totalModules),
+        needsAttention: average != null && passingPercentage != null && average < passingPercentage,
+      };
+    });
+    res.set("Cache-Control", "no-store");
+    return res.json({ success: true, passingPercentage, students });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 export async function getReportConfig(req, res, next) {
   try {
     const [rows] = await db.execute(`
