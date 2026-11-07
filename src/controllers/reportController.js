@@ -181,3 +181,148 @@ export async function getReportConfig(req, res, next) {
     next(error);
   }
 }
+
+export async function getProfessorAssessmentSummary(req, res, next) {
+  if (req.user?.role !== "professor") {
+    return res.status(403).json({
+      success: false,
+      message: "Professor account is required.",
+    });
+  }
+  const professorId = req.user.userId || req.user.id;
+  if (!professorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Authentication required." });
+  }
+
+  try {
+    const email = String(req.user.email || "")
+      .trim()
+      .toLowerCase();
+    const [courses] = await db.execute(
+      `SELECT c.course_id AS id,
+              COALESCE(NULLIF(c.course_name, ''), c.title) AS title,
+              COALESCE(NULLIF(c.course_code, ''), c.code) AS code
+       FROM courses c
+       WHERE COALESCE(c.archived, 0) = 0
+         AND (c.professor_id = ? OR
+              ((c.professor_id IS NULL OR c.professor_id = 0)
+               AND LOWER(c.professor_email) = ? AND ? <> ''))`,
+      [professorId, email, email],
+    );
+    const [settings] = await db.execute(
+      "SELECT passing_percentage FROM system_settings ORDER BY setting_id ASC LIMIT 1",
+    );
+    const configuredThreshold = settings[0]?.passing_percentage;
+    const passingPercentage =
+      configuredThreshold != null &&
+      Number.isFinite(Number(configuredThreshold)) &&
+      Number(configuredThreshold) >= 0 &&
+      Number(configuredThreshold) <= 100
+        ? Number(configuredThreshold)
+        : null;
+    let students = [];
+
+    if (courses.length) {
+      const ids = courses.map((course) => course.id);
+      const placeholders = ids.map(() => "?").join(", ");
+      const [[enrollments], [modules], [progress], [attempts]] =
+        await Promise.all([
+          db.execute(
+            `SELECT ce.course_id AS courseId, ce.user_id AS userId,
+                  COALESCE(NULLIF(u.display_name, ''), u.name) AS name
+           FROM course_enrollments ce JOIN users u ON u.userId = ce.user_id
+           WHERE ce.course_id IN (${placeholders}) AND ce.status = 'approved'
+             AND COALESCE(ce.archived, 0) = 0 AND COALESCE(u.is_archived, 0) = 0
+             AND u.role = 'student'`,
+            ids,
+          ),
+          db.execute(
+            `SELECT lesson_id AS id, course_id AS courseId
+           FROM learning_modules WHERE course_id IN (${placeholders})`,
+            ids,
+          ),
+          db.execute(
+            `SELECT lp.user_id AS userId, lp.lesson_id AS lessonId,
+                  lp.course_id AS courseId, lp.progress_percent AS progressPercent
+           FROM lesson_progress lp JOIN learning_modules lm
+             ON lm.lesson_id = lp.lesson_id AND lm.course_id = lp.course_id
+           WHERE lp.course_id IN (${placeholders})`,
+            ids,
+          ),
+          db.execute(
+            `SELECT course_id AS courseId, user_id AS userId, score, total
+           FROM quiz_attempts WHERE course_id IN (${placeholders})`,
+            ids,
+          ),
+        ]);
+      const courseMap = new Map(
+        courses.map((course) => [String(course.id), course]),
+      );
+      const moduleIds = new Map();
+      for (const module of modules) {
+        const key = String(module.courseId);
+        if (!moduleIds.has(key)) moduleIds.set(key, new Set());
+        moduleIds.get(key).add(String(module.id));
+      }
+      const scores = new Map();
+      for (const attempt of attempts) {
+        const value = percentage(attempt.score, attempt.total);
+        if (value === null) continue;
+        const key = `${attempt.courseId}:${attempt.userId}`;
+        if (!scores.has(key)) scores.set(key, { sum: 0, count: 0 });
+        const score = scores.get(key);
+        score.sum += value;
+        score.count += 1;
+      }
+      const completed = new Map();
+      for (const item of progress) {
+        if (
+          !(Number(item.progressPercent) >= 100) ||
+          !moduleIds.get(String(item.courseId))?.has(String(item.lessonId))
+        )
+          continue;
+        const key = `${item.courseId}:${item.userId}`;
+        if (!completed.has(key)) completed.set(key, new Set());
+        completed.get(key).add(String(item.lessonId));
+      }
+      students = enrollments
+        .flatMap((enrollment) => {
+          const course = courseMap.get(String(enrollment.courseId));
+          if (!course) return [];
+          const key = `${enrollment.courseId}:${enrollment.userId}`;
+          const score = scores.get(key);
+          const averageScore = score ? score.sum / score.count : null;
+          return [
+            {
+              key,
+              userId: enrollment.userId,
+              courseId: enrollment.courseId,
+              name: enrollment.name,
+              course: course.title,
+              courseCode: course.code,
+              scoredAttempts: score?.count || 0,
+              averageScore,
+              completedModules: completed.get(key)?.size || 0,
+              totalModules: moduleIds.get(String(course.id))?.size || 0,
+              needsAttention:
+                passingPercentage !== null &&
+                averageScore !== null &&
+                averageScore < passingPercentage,
+            },
+          ];
+        })
+        .sort(
+          (a, b) =>
+            String(a.name).localeCompare(String(b.name)) ||
+            String(a.course).localeCompare(String(b.course)),
+        );
+    }
+
+    res.set("Cache-Control", "no-store");
+    return res.json({ success: true, passingPercentage, students });
+  } catch (error) {
+    next(error);
+  }
+}

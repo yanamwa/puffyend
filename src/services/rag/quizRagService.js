@@ -1,4 +1,5 @@
 import { validateAdaptiveQuestions } from "../quizzes/mainQuizAdaptive.js";
+import { validateQuizUniqueness } from "../quizzes/quizValidation.js";
 import { db } from "../../db.js";
 import { loadChunks } from "./vectorRepository.js";
 import { retrieveContexts } from "./retrievalService.js";
@@ -70,9 +71,6 @@ const reviewSchema = {
   },
   required: ["verdicts"],
 };
-const normalized = (value) =>
-  String(value).trim().replace(/\s+/g, " ").toLowerCase();
-
 export function validateQuizSettings(body) {
   const questionCount = Number(body.question_count ?? 5);
   const identificationCount = Number(body.identification_count ?? 0);
@@ -138,7 +136,13 @@ export function validateQuizSettings(body) {
   return { questionCount, identificationCount, difficulty };
 }
 
-export function validateQuizBatch(draft, types, chunks, skills = []) {
+export function validateQuizBatch(
+  draft,
+  types,
+  chunks,
+  skills = [],
+  previousQuestions = [],
+) {
   if (
     !Array.isArray(draft?.questions) ||
     draft.questions.length !== types.length
@@ -147,8 +151,7 @@ export function validateQuizBatch(draft, types, chunks, skills = []) {
   const evidence = new Map(
     buildEvidence(chunks).map((e) => [e.evidence_id, e]),
   );
-  const seen = new Set();
-  return draft.questions.map((item, index) => {
+  const questions = draft.questions.map((item, index) => {
     if (skills.length) {
       const skill =
         typeof item.thinking_skill === "string"
@@ -179,9 +182,6 @@ export function validateQuizBatch(draft, types, chunks, skills = []) {
           `Question ${index}: ${field} must contain 1-500 characters.`,
         );
     }
-    if (seen.has(normalized(item.question)))
-      throw new Error("Duplicate quiz question.");
-    seen.add(normalized(item.question));
     if (!Array.isArray(item.options))
       throw new Error("Question options must be an array.");
     if (item.type === "multiple_choice") {
@@ -189,8 +189,7 @@ export function validateQuizBatch(draft, types, chunks, skills = []) {
         item.options.length !== 4 ||
         item.options.some(
           (o) => typeof o !== "string" || !o.trim() || o.length > 500,
-        ) ||
-        new Set(item.options.map(normalized)).size !== 4
+        )
       )
         throw new Error(
           `Question ${index} needs four distinct nonempty options.`,
@@ -258,6 +257,7 @@ export function validateQuizBatch(draft, types, chunks, skills = []) {
       },
     };
   });
+  return validateQuizUniqueness(questions, previousQuestions);
 }
 
 export function validateQuizReview(review, questions) {
@@ -292,6 +292,7 @@ export async function generateQuizBatch(
     mainPrompt,
     assignedSlots = [],
     previousQuestions = [],
+    onValidated,
   },
   generate = generateJson,
 ) {
@@ -342,13 +343,13 @@ export async function generateQuizBatch(
                 `Use ONLY retrieved source evidence and lesson content supported by that evidence.`,
                 `Objectives are learning targets, never evidence.`,
                 `Every question must be directly supported by cited evidence_ids.`,
-                `Avoid duplicate or nearly identical questions.`,
+                `Avoid duplicate or nearly identical questions, including previous_questions.`,
                 `Keep grammar clear and explanations concise and educational.`,
                 `Do not refer to the text above or the provided lesson.`,
                 `LOTS assesses Remember, Understand, Apply; HOTS assesses Analyze, Evaluate, Create.`,
                 `Each question needs exactly one matching cognitive_level and thinking_skill.`,
                 `Assign a short consistent topic supported by the source; use the same topic name for the same concept.`,
-                `Multiple choice: exactly four plain options without letter prefixes, one correct answer, believable but clearly incorrect distractors.`,
+                `Multiple choice: exactly four distinct plain options without letter prefixes, one correct answer, believable but clearly incorrect distractors.`,
                 `Identification: options=[], one unique short expected answer, do not reveal it in the question.`,
                 `True/False: options exactly ["True", "False"], correct_answer exactly True or False.`,
                 `Return question, type, options, correct_answer, explanation, topic, cognitive_level, thinking_skill, evidence_ids in valid JSON.`,
@@ -364,7 +365,7 @@ export async function generateQuizBatch(
                 "Explanations and correct answers must follow from selected evidence.",
                 "Cite adjacent passages when needed.",
                 "Do not invent facts, scenarios, or True/False questions.",
-                "Avoid duplicates.",
+                "Avoid duplicates, including previous_questions.",
                 "Difficulty changes reasoning depth, not source fidelity.",
                 "Objectives are targets, never evidence.",
                 "Repair rejected questions using reviewer reasons.",
@@ -381,7 +382,7 @@ export async function generateQuizBatch(
             "topic must be a short source-supported label (1–100 characters).",
             "Do not replace assigned skills with your preferred distribution.",
           ].join(" "),
-          ...(mainPrompt ? { previous_questions: previousQuestions } : {}),
+          previous_questions: [...previousQuestions],
           ...(skills.length
             ? {
                 thinking_skills: skills,
@@ -397,7 +398,13 @@ export async function generateQuizBatch(
       });
       previousDraft = draft;
       previousReview = null;
-      const questions = validateQuizBatch(draft, types, chunks, skills);
+      const questions = validateQuizBatch(
+        draft,
+        types,
+        chunks,
+        skills,
+        previousQuestions,
+      );
       if (mainPrompt)
         validateAdaptiveQuestions(questions, assignedSlots, previousQuestions);
       const review = await generate({
@@ -415,6 +422,7 @@ export async function generateQuizBatch(
       });
       previousReview = review;
       validateQuizReview(review, questions);
+      onValidated?.(questions);
       return questions;
     } catch (error) {
       if (error.statusCode || error.retryable) throw error;
@@ -497,6 +505,7 @@ export async function generateQuizWithRag({ user, body }) {
   const batches = Array.from({ length: Math.ceil(types.length / 5) }, (_, i) =>
     types.slice(i * 5, i * 5 + 5),
   );
+  const acceptedQuestions = [];
   const questions = (
     await parallelMap(batches, 3, async (types, index) => {
       const start = Math.floor((index * chunks.length) / batches.length);
@@ -515,16 +524,14 @@ export async function generateQuizWithRag({ user, body }) {
         skills: skills.slice(index * 5, index * 5 + types.length),
         lessonContent: String(body.lesson_content || "").slice(0, 30000),
         distribution: settings,
+        previousQuestions: acceptedQuestions,
+        onValidated: (batch) => {
+          validateQuizUniqueness(batch, acceptedQuestions);
+          acceptedQuestions.push(...batch.map((question) => question.question));
+        },
       });
     })
   ).flat();
-  if (
-    new Set(questions.map((q) => normalized(q.question))).size !==
-    questions.length
-  )
-    throw requestError(
-      "Duplicate questions detected across quiz batches. Retry generation.",
-      422,
-    );
+  validateQuizUniqueness(questions);
   return { questions, document_ids: ids, ...settings };
 }

@@ -242,7 +242,7 @@ router.put("/courses/:id/unenroll", authenticateUser, unenrollCourse);
  */
 router.get("/courses/join", joinCourseByCode);
 
-router.post("/courses/join", joinCourseByCode);
+router.post("/courses/join", authenticateUser, enrollCourse);
 
 /* =====================================================
    ARCHIVED COURSES

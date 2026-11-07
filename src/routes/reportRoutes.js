@@ -3,10 +3,12 @@ import authenticateUser from "../middleware/authMiddleware.js";
 import {
   getReports,
   getReportConfig,
+  getProfessorAssessmentSummary,
 } from "../controllers/reportController.js";
 
 const router = Router();
 router.use(authenticateUser);
+router.get("/professor/assessments", getProfessorAssessmentSummary);
 router.use((req, res, next) => {
   if (!['admin', 'super_admin'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Reports are restricted to administrators.' });
