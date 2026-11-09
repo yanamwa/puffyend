@@ -6,7 +6,14 @@ import jwt from "jsonwebtoken";
 import { db } from "../db.js";
 import { cleanupDeclinedRegistrations } from "../services/declinedRegistrationCleanup.js";
 import { sendOtpEmail, sendPasswordResetEmail } from "../utils/mailer.js";
+import { hasPendingStudentTutorial } from "../utils/studentTutorial.js";
+import { hasProfessorAdminAccess } from "../utils/professorAdminAccess.js";
 
+import {
+  getSystemSettingsConfig,
+  isProfessorApprovalRequired,
+} from "../services/system/systemSettingsService.js";
+import { sendMaintenanceResponse } from "../middleware/maintenanceMode.js";
 import { logAuditFromRequest } from "../services/system/auditLogService.js";
 
 /* =====================================================
@@ -139,7 +146,7 @@ function isTemporaryAccountExpired(user) {
   return !Number.isNaN(expiresAt.getTime()) && expiresAt <= new Date();
 }
 
-function authUserPayload(user) {
+function authUserPayload(user, role = user.role) {
   const displayName = user.display_name || user.name || "";
 
   const isTemporary = Number(user.is_temporary) === 1;
@@ -153,9 +160,12 @@ function authUserPayload(user) {
 
     email: user.email,
 
-    role: user.role,
+    role,
+    primaryRole: user.role,
+    hasAdminAccess: hasProfessorAdminAccess(user),
 
     name: user.name,
+    profileImage: user.profile_image || "",
 
     displayName,
 
@@ -178,6 +188,7 @@ function authUserPayload(user) {
     onboardingCompleted: Number(user.onboarding_completed) === 1,
 
     onboarding_completed: Number(user.onboarding_completed) === 1 ? 1 : 0,
+    studentTutorialPending: hasPendingStudentTutorial(user),
 
     verificationStatus: user.verification_status,
 
@@ -328,8 +339,8 @@ export async function signup(req, res) {
       });
     }
 
+    const requiresApproval = await isProfessorApprovalRequired();
     const hashedPassword = await bcrypt.hash(password, 10);
-
     const otp = createOtp();
 
     const [result] = await db.execute(
@@ -416,12 +427,11 @@ export async function signup(req, res) {
       return res.json({
         success: true,
 
-        message:
-          "Verification code sent to your email. Your professor account will be reviewed by the Super Admin after email verification.",
+        message: "Verification code sent to your email.",
 
         email: cleanEmail,
 
-        requiresApproval: true,
+        requiresApproval,
 
         otpSecondsRemaining,
       });
@@ -501,6 +511,9 @@ export async function verifyEmail(req, res) {
       return res.json({
         success: true,
         message: "Email already verified.",
+        requiresApproval:
+          user.verification_status === "pending" && (await isProfessorApprovalRequired()),
+        verificationStatus: user.verification_status,
       });
     }
 
@@ -519,15 +532,50 @@ export async function verifyEmail(req, res) {
       });
     }
 
-    await db.execute(
+    const settings = await getSystemSettingsConfig();
+    const [verified] = await db.execute(
       `UPDATE users
        SET
          is_verified = 1,
          otp_code = NULL,
-         otp_expires = NULL
-       WHERE userId = ?`,
+         otp_expires = NULL,
+         verification_status = CASE
+           WHEN verification_status = 'pending' AND ? = 0 THEN 'approved'
+           ELSE verification_status
+         END
+       WHERE userId = ? AND is_verified = 0 AND otp_code = ? AND otp_expires > NOW()`,
+      [Number(settings.professorApproval), user.userId, otp],
+    );
+    const [[current]] = await db.execute(
+      "SELECT is_verified, verification_status FROM users WHERE userId = ?",
       [user.userId],
     );
+    if (!current?.is_verified) {
+      return res.status(400).json({
+        success: false,
+        message: "The verification code changed or expired. Request a new code.",
+      });
+    }
+
+    const requiresApproval = current.verification_status === "pending";
+    if (
+      verified.affectedRows &&
+      requiresApproval &&
+      settings.professorApprovalNotification
+    ) {
+      try {
+        await db.execute(
+          `INSERT INTO notifications
+             (recipient_user_id, title, message, target, type)
+           SELECT userId, 'Professor Registration Pending', ?, 'super_admin', 'professor_registration_pending'
+           FROM users
+           WHERE role = 'super_admin' AND is_archived = 0`,
+          [`${user.name || user.email} verified their email and is waiting for approval.`],
+        );
+      } catch (error) {
+        console.error("Professor registration notification failed:", error);
+      }
+    }
 
     /* ===============================================
        AUDIT LOG - EMAIL VERIFIED
@@ -554,6 +602,8 @@ export async function verifyEmail(req, res) {
     return res.json({
       success: true,
       message: "Email verified successfully.",
+      requiresApproval,
+      verificationStatus: current.verification_status,
     });
   } catch (error) {
     console.error("Verify email error:", error);
@@ -790,9 +840,9 @@ export async function forgotPassword(req, res) {
   } catch (error) {
     console.error("Forgot password error:", error);
 
-    return res.status(500).json({
+    return res.status(503).json({
       success: false,
-      message: "Failed to send password reset email.",
+      message: "Password reset is temporarily unavailable. Please try again later.",
     });
   }
 }
@@ -834,7 +884,9 @@ export async function resetPassword(req, res) {
            userId,
            name,
            email,
-           role
+           role,
+           password,
+           must_change_password
          FROM users
          WHERE password_reset_token = ?
            AND password_reset_expires
@@ -855,18 +907,41 @@ export async function resetPassword(req, res) {
       });
     }
 
+    if (
+      normalizeRoleValue(user.role) === "student" &&
+      Number(user.must_change_password) === 1 &&
+      (await bcrypt.compare(password, user.password))
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Choose a new password different from your temporary password.",
+      });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    await db.execute(
+    const [result] = await db.execute(
       `UPDATE users
        SET
          password = ?,
          password_reset_token = NULL,
          password_reset_expires = NULL,
+         student_tutorial_pending = CASE
+           WHEN LOWER(TRIM(role)) = 'student' AND onboarding_completed = 0 AND must_change_password = 1
+           THEN 1 ELSE student_tutorial_pending
+         END,
          must_change_password = 0
-       WHERE userId = ?`,
-      [hashedPassword, user.userId],
+       WHERE userId = ? AND password = ? AND password_reset_token = ?
+         AND password_reset_expires > NOW() AND is_archived = 0`,
+      [hashedPassword, user.userId, user.password, tokenHash],
     );
+
+    if (result.affectedRows !== 1) {
+      return res.status(400).json({
+        success: false,
+        message: "This password reset link is invalid or has expired.",
+      });
+    }
 
     /* ===============================================
        AUDIT LOG - RESET PASSWORD
@@ -931,6 +1006,11 @@ export async function login(req, res) {
     );
 
     const user = rows[0];
+    const settings = await getSystemSettingsConfig();
+
+    if (settings.maintenanceMode && normalizeRoleValue(user?.role) !== "super_admin") {
+      return sendMaintenanceResponse(res);
+    }
 
     if (!user) {
       /*
@@ -1022,9 +1102,26 @@ export async function login(req, res) {
 
     const role = normalizeRoleValue(user.role);
 
-    const verificationStatus = normalizeVerificationStatusValue(
+    let verificationStatus = normalizeVerificationStatusValue(
       user.verification_status,
     );
+
+    if (
+      role === "professor" &&
+      verificationStatus === "pending" &&
+      !settings.professorApproval
+    ) {
+      await db.execute(
+        `UPDATE users SET verification_status = 'approved'
+         WHERE userId = ? AND verification_status = 'pending' AND is_verified = 1 AND is_archived = 0`,
+        [user.userId],
+      );
+      const [[current]] = await db.execute(
+        "SELECT verification_status FROM users WHERE userId = ?",
+        [user.userId],
+      );
+      verificationStatus = normalizeVerificationStatusValue(current?.verification_status);
+    }
 
     if (role === "professor" && verificationStatus !== "approved") {
       const isDeclined = verificationStatus === "declined";
@@ -1059,28 +1156,11 @@ export async function login(req, res) {
           )
         : tokenMaxAgeSeconds;
 
-    const token = jwt.sign(
-      {
-        id: user.userId,
-
-        userId: user.userId,
-
-        email: user.email,
-
-        role,
-
-        name: user.name,
-
-        verificationStatus,
-
-        verification_status: verificationStatus,
-      },
-
-      JWT_SECRET,
-
-      {
-        expiresIn: Math.min(tokenMaxAgeSeconds, temporaryRemainingSeconds),
-      },
+    const token = signRoleToken(
+      { ...user, verification_status: verificationStatus },
+      role,
+      Math.floor(Date.now() / 1000) +
+        Math.min(tokenMaxAgeSeconds, temporaryRemainingSeconds),
     );
 
     /* ===============================================
@@ -1129,6 +1209,71 @@ export async function login(req, res) {
     return res.status(500).json({
       success: false,
       message: "Login failed.",
+    });
+  }
+}
+
+function signRoleToken(user, role, expiresAt) {
+  const verificationStatus = normalizeVerificationStatusValue(
+    user.verification_status,
+  );
+  return jwt.sign(
+    {
+      id: user.userId,
+      userId: user.userId,
+      email: user.email,
+      name: user.name,
+      role,
+      verificationStatus,
+      verification_status: verificationStatus,
+      exp: expiresAt,
+    },
+    JWT_SECRET,
+  );
+}
+
+export async function switchProfessorRole(req, res) {
+  const role = req.body?.role;
+  if (role !== "admin" && role !== "professor") {
+    return res.status(400).json({
+      success: false,
+      message: "Choose Admin or Professor.",
+    });
+  }
+
+  if (req.user.primaryRole !== "professor" || !Number.isFinite(req.user.exp)) {
+    return res.status(403).json({
+      success: false,
+      message: "Role switching is unavailable for this account.",
+    });
+  }
+
+  try {
+    const [[user]] = await db.execute(
+      "SELECT * FROM users WHERE userId = ?",
+      [req.user.userId],
+    );
+    if (
+      !hasProfessorAdminAccess(user) ||
+      Number(user.is_archived) === 1 ||
+      isTemporaryAccountExpired(user)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "This professor account does not have admin access.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      token: signRoleToken(user, role, req.user.exp),
+      user: authUserPayload(user, role),
+    });
+  } catch (error) {
+    console.error("Switch professor role error:", error.code || error.name);
+    return res.status(500).json({
+      success: false,
+      message: "Could not switch roles. Please try again.",
     });
   }
 }

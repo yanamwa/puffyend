@@ -270,7 +270,7 @@ async function getAuthenticatedUser(req) {
     );
 
     if (rows[0]) {
-      return rows[0];
+      return { ...rows[0], role: req.user?.role || rows[0].role };
     }
   }
 
@@ -289,7 +289,7 @@ async function getAuthenticatedUser(req) {
     );
 
     if (rows[0]) {
-      return rows[0];
+      return { ...rows[0], role: req.user?.role || rows[0].role };
     }
   }
 

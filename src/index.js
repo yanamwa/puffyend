@@ -18,6 +18,8 @@ import notificationRoutes from "./routes/notificationRoutes.js";
 import systemAnalyticsRoutes from "./routes/systemAnalyticsRoutes.js";
 import backupRoutes from "./routes/backupRoutes.js";
 import systemSettingsRoutes from "./routes/systemSettingsRoutes.js";
+import { getPublicSystemStatus } from "./controllers/systemSettingsController.js";
+import enforceMaintenanceMode from "./middleware/maintenanceMode.js";
 import reportRoutes from "./routes/reportRoutes.js";
 
 import { initDb } from "./db.js";
@@ -190,6 +192,9 @@ app.get("/api/debug/uploads", (req, res) => {
   This prevents broad /api routers from
   intercepting /api/notifications.
 */
+app.get("/api/system-settings/status", getPublicSystemStatus);
+app.use("/api", enforceMaintenanceMode);
+
 app.use("/api/notifications", notificationRoutes);
 
 /*

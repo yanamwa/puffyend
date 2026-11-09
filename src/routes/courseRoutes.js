@@ -132,7 +132,7 @@ function parseLegacyModeBody(req, _res, next) {
 /*
  * Get all courses.
  */
-router.get("/courses", getCourses);
+router.get("/courses", authenticateUser, getCourses);
 
 /*
  * Create a new course.
@@ -167,7 +167,7 @@ router.get("/courses/enrolled", authenticateUser, getEnrolledCourses);
  *   "courseId": 7
  * }
  */
-router.post("/courses/enroll", authenticateUser, enrollCourse);
+router.post("/courses/enroll", authenticateUser, requireRole("student"), enrollCourse);
 
 /*
  * Professor gets enrollment records
@@ -240,9 +240,9 @@ router.put("/courses/:id/unenroll", authenticateUser, unenrollCourse);
 /*
  * Find/join a course using a course code.
  */
-router.get("/courses/join", joinCourseByCode);
+router.get("/courses/join", authenticateUser, joinCourseByCode);
 
-router.post("/courses/join", authenticateUser, enrollCourse);
+router.post("/courses/join", authenticateUser, requireRole("student"), enrollCourse);
 
 /* =====================================================
    ARCHIVED COURSES
@@ -271,7 +271,7 @@ router.get("/courses/archived", authenticateUser, getArchivedCourses);
  * as "enrolled" as the :id parameter.
  */
 
-router.get("/courses/:id", getCourseById);
+router.get("/courses/:id", authenticateUser, getCourseById);
 
 /*
  * Update course.
@@ -311,7 +311,7 @@ router.post("/courses/:id/archive", authenticateUser, archiveCourse);
  *
  * Reading data does not need an audit entry.
  */
-router.get("/modules", getLearningModules);
+router.get("/modules", authenticateUser, getLearningModules);
 
 /*
  * Create learning module.
@@ -324,7 +324,7 @@ router.post("/modules", authenticateUser, createLearningModule);
 /*
  * Get one learning module.
  */
-router.get("/modules/:id", getLearningModuleById);
+router.get("/modules/:id", authenticateUser, getLearningModuleById);
 
 /*
  * Update learning module.
@@ -369,17 +369,22 @@ router.get(
   getAssessmentAttempts,
 );
 
-router.get("/monitoring/:courseId", getCourseMonitoring);
+router.get(
+  "/monitoring/:courseId",
+  authenticateUser,
+  requireRole("professor", "admin", "super_admin"),
+  getCourseMonitoring,
+);
 
-router.get("/getLessonProgress.php", getLessonProgress);
+router.get("/getLessonProgress.php", authenticateUser, getLessonProgress);
 
-router.post("/saveLessonProgress.php", saveLessonProgress);
+router.post("/saveLessonProgress.php", authenticateUser, saveLessonProgress);
 
 router.post("/saveQuizAttempt.php", authenticateUser, saveQuizAttempt);
 
 router.get("/getQuizAttempts.php", authenticateUser, getQuizAttempts);
 
-router.post("/generateAdaptiveFeedback.php", generateAdaptiveFeedback);
+router.post("/generateAdaptiveFeedback.php", authenticateUser, generateAdaptiveFeedback);
 
 /* =====================================================
    LEGACY MODE ROUTES
@@ -407,7 +412,7 @@ router.post(
    LEGACY LEARNING MODULE ROUTES
 ===================================================== */
 
-router.get("/adminLearningModule.php", handleLegacyLearningModule);
+router.get("/adminLearningModule.php", authenticateUser, handleLegacyLearningModule);
 
 router.post(
   "/adminLearningModule.php",

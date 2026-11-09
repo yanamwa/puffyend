@@ -37,6 +37,7 @@ function harness({
     cleanText: (value) => String(value || "").trim(),
     getCourseIdColumn: async () => "id",
     getCourseId: (row) => row.id,
+    getSystemSettingsConfig: async () => ({ enrollmentApproval: true }),
     wantsCourseSummary: (req) => req.query?.summaryOnly === "true",
     getCourseSelect: () => "c.*",
     getCourseLearningModules: async (ids) => {

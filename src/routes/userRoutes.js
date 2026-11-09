@@ -1,5 +1,5 @@
 import express from "express";
-import authenticateUser from "../middleware/authMiddleware.js";
+import authenticateUser, { authenticateAccountSetup } from "../middleware/authMiddleware.js";
 import professorProofUpload from "../middleware/professorProofUpload.js";
 import uploadProfileImage from "../middleware/profileImageUpload.js";
 import { requireRole } from "../middleware/roleMiddleware.js";
@@ -7,7 +7,8 @@ import { requireRole } from "../middleware/roleMiddleware.js";
 import {
   changeUserPassword,
   completeOnboarding,
-  createAdminAccount,
+  completeStudentTutorial,
+  grantProfessorAdminAccess,
   createProfessorAccount,
   createStudentAccount,
   logBulkStudentImport,
@@ -62,7 +63,7 @@ router.post(
   "/users/admin",
   authenticateUser,
   requireRole("super_admin"),
-  createAdminAccount,
+  grantProfessorAdminAccess,
 );
 
 router.post(
@@ -84,7 +85,14 @@ router.post(
    CURRENT USER
 ========================= */
 
-router.get("/users/me", authenticateUser, getCurrentUser);
+router.get("/users/me", authenticateAccountSetup, getCurrentUser);
+
+router.post(
+  "/users/me/complete-tutorial",
+  authenticateAccountSetup,
+  requireRole("student"),
+  completeStudentTutorial,
+);
 
 router.put(
   "/users/me/profile-image",
@@ -93,7 +101,7 @@ router.put(
   updateProfileImage,
 );
 
-router.put("/users/change-password", authenticateUser, changeUserPassword);
+router.put("/users/change-password", authenticateAccountSetup, changeUserPassword);
 
 /* =========================
    USER BY ID
@@ -144,32 +152,32 @@ router.delete(
    PROFILE
 ========================= */
 
-router.post("/profile", getProfile);
+router.post("/profile", authenticateUser, getProfile);
 
 /* =========================
    ONBOARDING
 ========================= */
 
-router.post("/onboarding/name", updateOnboardingName);
+router.post("/onboarding/name", authenticateUser, updateOnboardingName);
 
-router.post("/onboarding/year", updateOnboardingYear);
+router.post("/onboarding/year", authenticateUser, updateOnboardingYear);
 
-router.post("/onboarding/section", updateOnboardingSection);
+router.post("/onboarding/section", authenticateUser, updateOnboardingSection);
 
-router.post("/onboarding/complete", completeOnboarding);
+router.post("/onboarding/complete", authenticateUser, completeOnboarding);
 
 /* =========================
    LEGACY PHP-COMPATIBLE ROUTES
 ========================= */
 
-router.post("/get-profile.php", getProfile);
+router.post("/get-profile.php", authenticateUser, getProfile);
 
-router.post("/update-name.php", updateOnboardingName);
+router.post("/update-name.php", authenticateUser, updateOnboardingName);
 
-router.post("/update-year.php", updateOnboardingYear);
+router.post("/update-year.php", authenticateUser, updateOnboardingYear);
 
-router.post("/update-section.php", updateOnboardingSection);
+router.post("/update-section.php", authenticateUser, updateOnboardingSection);
 
-router.post("/complete-onboarding.php", completeOnboarding);
+router.post("/complete-onboarding.php", authenticateUser, completeOnboarding);
 
 export default router;

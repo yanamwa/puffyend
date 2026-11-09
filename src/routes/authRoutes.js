@@ -7,9 +7,10 @@ import {
   resetPassword,
   verifyEmail,
   resendOtp,
+  switchProfessorRole,
 } from "../controllers/authController.js";
 import professorProofUpload from "../middleware/professorProofUpload.js";
-import authenticateUser from "../middleware/authMiddleware.js";
+import authenticateUser, { authenticateAccountSetup } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
@@ -35,7 +36,8 @@ function handleSignupUpload(req, res, next) {
 
 router.post("/signup", handleSignupUpload, signup);
 router.post("/login", login);
-router.post("/logout", authenticateUser, logout);
+router.post("/switch-role", authenticateUser, switchProfessorRole);
+router.post("/logout", authenticateAccountSetup, logout);
 router.post("/verify-email", verifyEmail);
 router.post("/resend-otp", resendOtp);
 router.post("/forgot-password", forgotPassword);

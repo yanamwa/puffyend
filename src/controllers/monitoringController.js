@@ -410,7 +410,7 @@ async function refreshPerformanceAnalytics(userId, courseId) {
 }
 
 export async function getLessonProgress(req, res) {
-  const userId = req.query.user_id || req.query.userId || 1;
+  const userId = req.user.userId;
   const lessonId = req.query.lesson_id || req.query.lessonId;
 
   if (!lessonId) {
@@ -451,7 +451,7 @@ export async function getLessonProgress(req, res) {
 }
 
 export async function saveLessonProgress(req, res) {
-  const userId = req.body.user_id || req.body.userId || 1;
+  const userId = req.user.userId;
   const lessonId = req.body.lesson_id || req.body.lessonId;
   const requestedCourseId = req.body.course_id || req.body.courseId || null;
   const totalCards = Number(req.body.total_cards || req.body.totalCards || 0);
@@ -588,7 +588,7 @@ export async function saveQuizAttempt(req, res) {
 }
 
 export async function generateAdaptiveFeedback(req, res) {
-  const userId = req.body.user_id || req.body.userId || 1;
+  const userId = req.user.userId;
   const lessonId = req.body.lessonId || req.body.lesson_id || null;
   const source = String(req.body.source || "lesson");
   const quizMode = String(req.body.quizMode || req.body.quiz_mode || "quiz");
