@@ -242,11 +242,7 @@ router.put("/courses/:id/unenroll", authenticateUser, unenrollCourse);
  */
 router.get("/courses/join", authenticateUser, joinCourseByCode);
 
-<<<<<<< HEAD
-router.post("/courses/join", authenticateUser, joinCourseByCode);
-=======
 router.post("/courses/join", authenticateUser, requireRole("student"), enrollCourse);
->>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
 
 /* =====================================================
    ARCHIVED COURSES
@@ -373,16 +369,12 @@ router.get(
   getAssessmentAttempts,
 );
 
-<<<<<<< HEAD
-router.get("/monitoring/:courseId", authenticateUser, getCourseMonitoring);
-=======
 router.get(
   "/monitoring/:courseId",
   authenticateUser,
   requireRole("professor", "admin", "super_admin"),
   getCourseMonitoring,
 );
->>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
 
 router.get("/getLessonProgress.php", authenticateUser, getLessonProgress);
 
@@ -420,11 +412,7 @@ router.post(
    LEGACY LEARNING MODULE ROUTES
 ===================================================== */
 
-<<<<<<< HEAD
 router.get("/adminLearningModule.php", authenticateUser, requireRole("professor", "admin", "super_admin"), handleLegacyLearningModule);
-=======
-router.get("/adminLearningModule.php", authenticateUser, handleLegacyLearningModule);
->>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
 
 router.post(
   "/adminLearningModule.php",

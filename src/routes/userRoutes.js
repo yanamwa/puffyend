@@ -153,17 +153,12 @@ router.delete(
    PROFILE
 ========================= */
 
-<<<<<<< HEAD
 router.post("/profile", authenticateUser, requireOwnAccount, getProfile);
-=======
-router.post("/profile", authenticateUser, getProfile);
->>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
 
 /* =========================
    ONBOARDING
 ========================= */
 
-<<<<<<< HEAD
 router.post("/onboarding/name", authenticateUser, requireOwnAccount, updateOnboardingName);
 
 router.post("/onboarding/year", authenticateUser, requireOwnAccount, updateOnboardingYear);
@@ -171,21 +166,11 @@ router.post("/onboarding/year", authenticateUser, requireOwnAccount, updateOnboa
 router.post("/onboarding/section", authenticateUser, requireOwnAccount, updateOnboardingSection);
 
 router.post("/onboarding/complete", authenticateUser, requireOwnAccount, completeOnboarding);
-=======
-router.post("/onboarding/name", authenticateUser, updateOnboardingName);
-
-router.post("/onboarding/year", authenticateUser, updateOnboardingYear);
-
-router.post("/onboarding/section", authenticateUser, updateOnboardingSection);
-
-router.post("/onboarding/complete", authenticateUser, completeOnboarding);
->>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
 
 /* =========================
    LEGACY PHP-COMPATIBLE ROUTES
 ========================= */
 
-<<<<<<< HEAD
 router.post("/get-profile.php", authenticateUser, requireOwnAccount, getProfile);
 
 router.post("/update-name.php", authenticateUser, requireOwnAccount, updateOnboardingName);
@@ -195,16 +180,5 @@ router.post("/update-year.php", authenticateUser, requireOwnAccount, updateOnboa
 router.post("/update-section.php", authenticateUser, requireOwnAccount, updateOnboardingSection);
 
 router.post("/complete-onboarding.php", authenticateUser, requireOwnAccount, completeOnboarding);
-=======
-router.post("/get-profile.php", authenticateUser, getProfile);
-
-router.post("/update-name.php", authenticateUser, updateOnboardingName);
-
-router.post("/update-year.php", authenticateUser, updateOnboardingYear);
-
-router.post("/update-section.php", authenticateUser, updateOnboardingSection);
-
-router.post("/complete-onboarding.php", authenticateUser, completeOnboarding);
->>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
 
 export default router;

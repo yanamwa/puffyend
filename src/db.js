@@ -2,56 +2,7 @@ import "./environment.js";
 import bcrypt from "bcrypt";
 import { db, initializeDatabase } from "./database/postgres.js";
 
-const dbConfig = {
-  host: process.env.DB_HOST || "127.0.0.1",
-  user: process.env.DB_USER || "root",
-  password: process.env.DB_PASSWORD || "",
-  database: process.env.DB_NAME || "puffybrain",
-};
-
-const pool = mysql.createPool({
-  host: dbConfig.host,
-  user: dbConfig.user,
-  password: dbConfig.password,
-  database: dbConfig.database,
-  waitForConnections: true,
-  connectionLimit: 10,
-});
-
-export const db = pool;
-
-db.query(`
-  SELECT
-    DATABASE() AS database_name,
-    @@hostname AS server_name,
-    @@port AS server_port
-`)
-  .then(([rows]) => {
-    console.log("PUFFYBRAIN DATABASE:", rows[0]);
-  })
-  .catch((error) => {
-    console.error("Database connection check failed:", error);
-  });
-  
-async function ensureDatabaseExists() {
-  const bootstrapPool = mysql.createPool({
-    host: dbConfig.host,
-    user: dbConfig.user,
-    password: dbConfig.password,
-    waitForConnections: true,
-    connectionLimit: 1,
-  });
-
-  try {
-    await bootstrapPool.execute(
-      `CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\`
-       CHARACTER SET utf8mb4
-       COLLATE utf8mb4_general_ci`,
-    );
-  } finally {
-    await bootstrapPool.end();
-  }
-}
+export { db };
 
 async function ensureColumn(columnName, columnDefinition) {
   const [columns] = await db.execute(
@@ -588,55 +539,10 @@ async function ensureSuperAdminUser() {
   );
 }
 
-<<<<<<< HEAD
 export async function initDb({ migrate = false } = {}) {
   await initializeDatabase({ migrate });
   // A populated production database is validated without changing its contents.
   if (!migrate) return db;
-=======
-async function initSystemSettingsTable() {
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS system_settings (
-      setting_id INT AUTO_INCREMENT PRIMARY KEY,
-      system_name VARCHAR(150) NOT NULL DEFAULT 'PuffyBrain',
-      academic_year VARCHAR(30) NOT NULL DEFAULT '',
-      semester VARCHAR(30) NOT NULL DEFAULT '',
-      maintenance_mode TINYINT(1) NOT NULL DEFAULT 0,
-      require_password_change TINYINT(1) NOT NULL DEFAULT 1,
-      professor_approval TINYINT(1) NOT NULL DEFAULT 1,
-      practice_quiz_enabled TINYINT(1) NOT NULL DEFAULT 1,
-      main_quiz_enabled TINYINT(1) NOT NULL DEFAULT 1,
-      record_practice_quiz TINYINT(1) NOT NULL DEFAULT 1,
-      record_main_quiz TINYINT(1) NOT NULL DEFAULT 1,
-      adaptive_quiz_enabled TINYINT(1) NOT NULL DEFAULT 1,
-      quiz_analysis_enabled TINYINT(1) NOT NULL DEFAULT 1,
-      enrollment_approval TINYINT(1) NOT NULL DEFAULT 1,
-      enrollment_accepted_email TINYINT(1) NOT NULL DEFAULT 1,
-      enrollment_declined_email TINYINT(1) NOT NULL DEFAULT 1,
-      enrollment_system_notification TINYINT(1) NOT NULL DEFAULT 1,
-      professor_approval_notification TINYINT(1) NOT NULL DEFAULT 1,
-      announcements_enabled TINYINT(1) NOT NULL DEFAULT 1,
-      passing_percentage DECIMAL(5,2) DEFAULT NULL,
-      semester_start_date DATE DEFAULT NULL,
-      semester_end_date DATE DEFAULT NULL,
-      school_year_start_date DATE DEFAULT NULL,
-      school_year_end_date DATE DEFAULT NULL,
-      updated_by INT DEFAULT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    )
-  `);
-  await db.execute(`
-    INSERT IGNORE INTO system_settings (setting_id, semester)
-    SELECT 1, '1st Semester' FROM DUAL
-    WHERE NOT EXISTS (SELECT 1 FROM system_settings)
-  `);
-}
-
-export async function initDb() {
-  await ensureDatabaseExists();
-  await initSystemSettingsTable();
->>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS users (
@@ -650,13 +556,7 @@ export async function initDb() {
       profile_image VARCHAR(500) NULL,
       year_level VARCHAR(50) NULL,
       section_name VARCHAR(20) NULL,
-<<<<<<< HEAD
       onboarding_completed SMALLINT NOT NULL DEFAULT 0,
-=======
-      course VARCHAR(255) NULL,
-      onboarding_completed TINYINT(1) NOT NULL DEFAULT 0,
-      student_tutorial_pending TINYINT(1) NOT NULL DEFAULT 0,
->>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
       verification_id VARCHAR(100) NULL,
       student_id VARCHAR(100) NULL,
       professor_id VARCHAR(100) NULL,
@@ -665,7 +565,7 @@ export async function initDb() {
       professor_position VARCHAR(255) NULL,
       professor_specialization VARCHAR(255) NULL,
       professor_employment_proof TEXT NULL,
-      professor_admin_access TINYINT(1) NOT NULL DEFAULT 0,
+      professor_admin_access SMALLINT NOT NULL DEFAULT 0,
       verification_status VARCHAR(50) NOT NULL DEFAULT 'pending',
       is_archived SMALLINT NOT NULL DEFAULT 0,
       archived_at TIMESTAMP NULL,
@@ -675,14 +575,8 @@ export async function initDb() {
       otp_code VARCHAR(10) NULL,
       otp_expires TIMESTAMP NULL,
       password_reset_token VARCHAR(64) NULL,
-<<<<<<< HEAD
       password_reset_expires TIMESTAMP NULL,
       is_verified SMALLINT NOT NULL DEFAULT 0,
-=======
-      password_reset_expires DATETIME NULL,
-      is_verified TINYINT(1) NOT NULL DEFAULT 0,
-      last_active DATETIME NULL,
->>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -708,14 +602,13 @@ export async function initDb() {
   await ensureColumn("year_level", "year_level VARCHAR(50) NULL");
   await ensureColumn("section_name", "section_name VARCHAR(20) NULL");
   await ensureColumn("course", "course VARCHAR(255) NULL");
-  await ensureColumn("last_active", "last_active DATETIME NULL");
   await ensureColumn(
     "onboarding_completed",
     "onboarding_completed SMALLINT NOT NULL DEFAULT 0",
   );
   await ensureColumn(
     "student_tutorial_pending",
-    "student_tutorial_pending TINYINT(1) NOT NULL DEFAULT 0",
+    "student_tutorial_pending SMALLINT NOT NULL DEFAULT 0",
   );
   await ensureColumn("verification_id", "verification_id VARCHAR(100) NULL");
   await ensureColumn("student_id", "student_id VARCHAR(100) NULL");
@@ -742,7 +635,7 @@ export async function initDb() {
   );
   await ensureColumn(
     "professor_admin_access",
-    "professor_admin_access TINYINT(1) NOT NULL DEFAULT 0",
+    "professor_admin_access SMALLINT NOT NULL DEFAULT 0",
   );
   await ensureColumn(
     "verification_status",
