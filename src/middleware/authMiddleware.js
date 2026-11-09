@@ -1,5 +1,7 @@
 import jwt from "jsonwebtoken";
 import { db } from "../db.js";
+import { hasPendingStudentTutorial } from "../utils/studentTutorial.js";
+import { hasProfessorAdminAccess } from "../utils/professorAdminAccess.js";
 
 import { JWT_SECRET } from "../config/security.js";
 
@@ -26,7 +28,7 @@ function isTemporaryAccountExpired(user) {
   return !Number.isNaN(expiresAt.getTime()) && expiresAt <= new Date();
 }
 
-export default async function authenticateUser(req, res, next) {
+async function authenticate(req, res, next, allowAccountSetup) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -49,7 +51,8 @@ export default async function authenticateUser(req, res, next) {
     if (decodedUserId) {
       [rows] = await db.execute(
         `SELECT userId, email, role, verification_status, is_archived,
-         is_temporary, temporary_expires_at
+         is_temporary, temporary_expires_at, must_change_password,
+         onboarding_completed, student_tutorial_pending, is_verified, professor_admin_access
          FROM users
          WHERE userId = ?
          LIMIT 1`,
@@ -58,7 +61,8 @@ export default async function authenticateUser(req, res, next) {
     } else if (decodedEmail) {
       [rows] = await db.execute(
         `SELECT userId, email, role, verification_status, is_archived,
-         is_temporary, temporary_expires_at
+         is_temporary, temporary_expires_at, must_change_password,
+         onboarding_completed, student_tutorial_pending, is_verified, professor_admin_access
          FROM users
          WHERE email = ?
          LIMIT 1`,
@@ -92,12 +96,32 @@ export default async function authenticateUser(req, res, next) {
       });
     }
 
-    const role = normalizeRole(user.role);
+    const primaryRole = normalizeRole(user.role);
+    if (
+      primaryRole !== "super_admin" &&
+      Number(user.must_change_password) === 1 &&
+      !allowAccountSetup
+    ) {
+      return res.status(403).json({
+        success: false,
+        code: "PASSWORD_CHANGE_REQUIRED",
+        message: "Change your temporary password in Settings to continue.",
+      });
+    }
+
+    if (!allowAccountSetup && hasPendingStudentTutorial(user)) {
+      return res.status(403).json({
+        success: false,
+        code: "STUDENT_TUTORIAL_REQUIRED",
+        message: "Finish or skip the student tutorial to continue.",
+      });
+    }
+
     const verificationStatus = normalizeVerificationStatus(
       user.verification_status,
     );
 
-    if (role === "professor" && verificationStatus !== "approved") {
+    if (primaryRole === "professor" && verificationStatus !== "approved") {
       const isDeclined = verificationStatus === "declined";
 
       return res.status(403).json({
@@ -112,12 +136,27 @@ export default async function authenticateUser(req, res, next) {
       });
     }
 
+    const hasAdminAccess = hasProfessorAdminAccess(user);
+    if (
+      primaryRole === "professor" &&
+      decoded.role === "admin" &&
+      !hasAdminAccess
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Admin access is unavailable for this professor account.",
+      });
+    }
+    const role =
+      hasAdminAccess && decoded.role === "admin" ? "admin" : primaryRole;
     req.user = {
       ...decoded,
       id: user.userId,
       userId: user.userId,
       email: user.email,
       role,
+      primaryRole,
+      hasAdminAccess,
       verificationStatus,
       verification_status: verificationStatus,
     };
@@ -136,4 +175,12 @@ export default async function authenticateUser(req, res, next) {
       message: "Invalid or expired token.",
     });
   }
+}
+
+export default function authenticateUser(req, res, next) {
+  return authenticate(req, res, next, false);
+}
+
+export function authenticateAccountSetup(req, res, next) {
+  return authenticate(req, res, next, true);
 }

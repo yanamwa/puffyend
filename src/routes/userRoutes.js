@@ -1,6 +1,6 @@
 import requireOwnAccount from "../middleware/requireOwnAccount.js";
 import express from "express";
-import authenticateUser from "../middleware/authMiddleware.js";
+import authenticateUser, { authenticateAccountSetup } from "../middleware/authMiddleware.js";
 import professorProofUpload from "../middleware/professorProofUpload.js";
 import uploadProfileImage from "../middleware/profileImageUpload.js";
 import { requireRole } from "../middleware/roleMiddleware.js";
@@ -8,7 +8,8 @@ import { requireRole } from "../middleware/roleMiddleware.js";
 import {
   changeUserPassword,
   completeOnboarding,
-  createAdminAccount,
+  completeStudentTutorial,
+  grantProfessorAdminAccess,
   createProfessorAccount,
   createStudentAccount,
   logBulkStudentImport,
@@ -63,7 +64,7 @@ router.post(
   "/users/admin",
   authenticateUser,
   requireRole("super_admin"),
-  createAdminAccount,
+  grantProfessorAdminAccess,
 );
 
 router.post(
@@ -85,7 +86,14 @@ router.post(
    CURRENT USER
 ========================= */
 
-router.get("/users/me", authenticateUser, getCurrentUser);
+router.get("/users/me", authenticateAccountSetup, getCurrentUser);
+
+router.post(
+  "/users/me/complete-tutorial",
+  authenticateAccountSetup,
+  requireRole("student"),
+  completeStudentTutorial,
+);
 
 router.put(
   "/users/me/profile-image",
@@ -94,7 +102,7 @@ router.put(
   updateProfileImage,
 );
 
-router.put("/users/change-password", authenticateUser, changeUserPassword);
+router.put("/users/change-password", authenticateAccountSetup, changeUserPassword);
 
 /* =========================
    USER BY ID
@@ -145,12 +153,17 @@ router.delete(
    PROFILE
 ========================= */
 
+<<<<<<< HEAD
 router.post("/profile", authenticateUser, requireOwnAccount, getProfile);
+=======
+router.post("/profile", authenticateUser, getProfile);
+>>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
 
 /* =========================
    ONBOARDING
 ========================= */
 
+<<<<<<< HEAD
 router.post("/onboarding/name", authenticateUser, requireOwnAccount, updateOnboardingName);
 
 router.post("/onboarding/year", authenticateUser, requireOwnAccount, updateOnboardingYear);
@@ -158,11 +171,21 @@ router.post("/onboarding/year", authenticateUser, requireOwnAccount, updateOnboa
 router.post("/onboarding/section", authenticateUser, requireOwnAccount, updateOnboardingSection);
 
 router.post("/onboarding/complete", authenticateUser, requireOwnAccount, completeOnboarding);
+=======
+router.post("/onboarding/name", authenticateUser, updateOnboardingName);
+
+router.post("/onboarding/year", authenticateUser, updateOnboardingYear);
+
+router.post("/onboarding/section", authenticateUser, updateOnboardingSection);
+
+router.post("/onboarding/complete", authenticateUser, completeOnboarding);
+>>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
 
 /* =========================
    LEGACY PHP-COMPATIBLE ROUTES
 ========================= */
 
+<<<<<<< HEAD
 router.post("/get-profile.php", authenticateUser, requireOwnAccount, getProfile);
 
 router.post("/update-name.php", authenticateUser, requireOwnAccount, updateOnboardingName);
@@ -172,5 +195,16 @@ router.post("/update-year.php", authenticateUser, requireOwnAccount, updateOnboa
 router.post("/update-section.php", authenticateUser, requireOwnAccount, updateOnboardingSection);
 
 router.post("/complete-onboarding.php", authenticateUser, requireOwnAccount, completeOnboarding);
+=======
+router.post("/get-profile.php", authenticateUser, getProfile);
+
+router.post("/update-name.php", authenticateUser, updateOnboardingName);
+
+router.post("/update-year.php", authenticateUser, updateOnboardingYear);
+
+router.post("/update-section.php", authenticateUser, updateOnboardingSection);
+
+router.post("/complete-onboarding.php", authenticateUser, completeOnboarding);
+>>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
 
 export default router;

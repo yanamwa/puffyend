@@ -64,6 +64,21 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+export async function sendProfessorAdminAccessEmail({ email, name }) {
+  const { transporter, from } = createSmtpMailer();
+  await transporter.sendMail({
+    from,
+    to: email,
+    subject: "PuffyBrain admin access granted",
+    text: [
+      `Hi ${name},`,
+      "You’ve been granted administrator access in PuffyBrain.",
+      "Sign in with your existing professor credentials. Open your profile menu and choose Switch to Admin to go to the Admin Dashboard.",
+      "Use Switch to Professor to return to your professor dashboard.",
+    ].join("\n\n"),
+  });
+}
+
 export async function sendQuizResultEmail(email, subject, report, result) {
   const { transporter, from } = createSmtpMailer();
   const info = await transporter.sendMail({
@@ -214,6 +229,16 @@ Here's your temporary password for your Puffybrain account. Make sure to change 
 ${temporaryPassword}
 
 This email was sent because a temporary password was generated for your account. If you did not expect this, please contact your administrator.`,
+  });
+}
+
+export async function sendEnrollmentAcceptedEmail(email, studentName, courseName) {
+  const { transporter, from } = createSmtpMailer();
+  await transporter.sendMail({
+    from,
+    to: email,
+    subject: `PuffyBrain Enrollment Approved - ${courseName}`,
+    text: `Hi ${studentName},\n\nYour enrollment in ${courseName} has been approved. The course is now available in Enrolled Courses.\n\nPuffyBrain`,
   });
 }
 

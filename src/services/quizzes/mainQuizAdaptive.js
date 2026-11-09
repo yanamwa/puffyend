@@ -1,3 +1,5 @@
+import { randomInt } from "node:crypto";
+
 const LEVELS = [
   "Remember",
   "Understand",
@@ -252,6 +254,22 @@ export function validateAdaptiveQuestions(questions, slots, previous = []) {
   });
   return questions;
 }
+
+export function shuffleMainQuizQuestions(questions, randomIndex = randomInt) {
+  const shuffled = questions.map((question, index) => ({
+    ...question,
+    source_question_index: index,
+  }));
+  for (let index = shuffled.length - 1; index > 0; index--) {
+    const swapIndex = randomIndex(index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [
+      shuffled[swapIndex],
+      shuffled[index],
+    ];
+  }
+  return shuffled;
+}
+
 export function gradeMainQuiz(questions, answers, passingPercentage) {
   if (
     !Array.isArray(answers) ||

@@ -3,8 +3,22 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import fs from "node:fs/promises";
 import authenticateUser from "../middleware/authMiddleware.js";
-import { sendStudentTemporaryPasswordEmail, sendProfessorRegistrationDecisionEmail } from "../utils/mailer.js";
+import {
+  sendProfessorAdminAccessEmail,
+  sendProfessorRegistrationDecisionEmail,
+  sendStudentTemporaryPasswordEmail,
+} from "../utils/mailer.js";
+import {
+  getSystemSettingsConfig,
+  isPasswordChangeRequired,
+} from "../services/system/systemSettingsService.js";
+import { createNotification } from "../utils/notification.js";
 import { logAuditFromRequest } from "../services/system/auditLogService.js";
+import { hasPendingStudentTutorial } from "../utils/studentTutorial.js";
+import {
+  hasProfessorAdminAccess,
+  isApprovedProfessor,
+} from "../utils/professorAdminAccess.js";
 
 const YEAR_LEVELS = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
 const APPROVAL_STATUSES = ["pending", "approved", "declined"];
@@ -229,6 +243,7 @@ function rowToUser(user) {
     userId: user.id || user.userId,
     email: user.email,
     role: user.role,
+    hasAdminAccess: hasProfessorAdminAccess(user),
     name: user.name,
 
     profileImage: user.profile_image || "",
@@ -292,6 +307,15 @@ function rowToUser(user) {
   };
 }
 
+function rowToSessionUser(user, role) {
+  return {
+    ...rowToUser(user),
+    role: role || user.role,
+    primaryRole: user.role,
+    studentTutorialPending: hasPendingStudentTutorial(user),
+  };
+}
+
 async function getUserByEmail(email) {
   const [rows] = await db.execute(
     `SELECT
@@ -314,6 +338,7 @@ async function getUserByEmail(email) {
        professor_specialization,
        professor_employment_proof,
        verification_status,
+       professor_admin_access,
        is_archived,
        archived_at,
        must_change_password,
@@ -370,6 +395,7 @@ export async function getUsers(_req, res) {
         professor_specialization,
         professor_employment_proof,
         verification_status,
+        professor_admin_access,
         is_archived,
         archived_at,
         must_change_password,
@@ -412,7 +438,7 @@ export async function getUserById(req, res) {
        section_name, course, onboarding_completed, is_verified, verification_id,
        student_id, professor_id, professor_faculty_id, professor_department,
        professor_position, professor_specialization,
-       professor_employment_proof, verification_status, is_archived,
+       professor_employment_proof, verification_status, professor_admin_access, is_archived,
        archived_at, must_change_password, is_temporary, temporary_expires_at,
        created_at
        FROM users
@@ -543,11 +569,7 @@ export async function createStudentAccount(req, res) {
 
     const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
 
-    /*
-      Account is created directly by Admin/Super Admin.
-      Student only needs to change the temporary password.
-    */
-    const onboardingCompleted = 1;
+    const mustChangePassword = await isPasswordChangeRequired();
 
     /* =================================================
        CREATE STUDENT
@@ -566,6 +588,7 @@ export async function createStudentAccount(req, res) {
         verification_status,
         is_verified,
         onboarding_completed,
+        student_tutorial_pending,
         year_level,
         section_name,
         must_change_password,
@@ -584,10 +607,11 @@ export async function createStudentAccount(req, res) {
         ?,
         'approved',
         1,
-        ?,
-        ?,
-        ?,
+        0,
         1,
+        ?,
+        ?,
+        ?,
         0,
         ?,
         ?
@@ -600,9 +624,9 @@ export async function createStudentAccount(req, res) {
         studentId,
         studentId,
         gender,
-        onboardingCompleted,
         yearLevel,
         sectionName,
+        Number(mustChangePassword),
         temporaryAccount.isTemporary,
         temporaryAccount.temporaryExpiresAt,
       ],
@@ -651,11 +675,7 @@ export async function createStudentAccount(req, res) {
     ================================================= */
 
     try {
-      await sendStudentTemporaryPasswordEmail({
-        to: email,
-        studentName: name,
-        temporaryPassword,
-      });
+      await sendStudentTemporaryPasswordEmail(email, temporaryPassword);
     } catch (emailError) {
       console.error("Student temporary password email error:", emailError);
     }
@@ -697,143 +717,80 @@ export async function createStudentAccount(req, res) {
   }
 }
 
-export async function createAdminAccount(req, res) {
-  const email = cleanEmail(req.body.email);
-  const name = cleanText(req.body.name || req.body.displayName);
-
-  const temporaryAccount = getTemporaryAccountSettings(req.body);
-
-  if (!name || !email) {
+export async function grantProfessorAdminAccess(req, res) {
+  const professorId = Number(String(req.body?.professorId ?? ""));
+  if (!Number.isSafeInteger(professorId) || professorId <= 0) {
     return res.status(400).json({
       success: false,
-      message: "Admin name and email are required.",
-    });
-  }
-
-  if (temporaryAccount.error) {
-    return res.status(400).json({
-      success: false,
-      message: temporaryAccount.error,
+      message: "Select a professor to grant admin access.",
     });
   }
 
   try {
-    const [existingEmail] = await db.execute(
-      "SELECT userId FROM users WHERE email = ? LIMIT 1",
-      [email],
+    const [[user]] = await db.execute(
+      "SELECT * FROM users WHERE userId = ?",
+      [professorId],
     );
-
-    if (existingEmail.length > 0) {
-      return res.status(409).json({
+    if (
+      !isApprovedProfessor(user) ||
+      Number(user.is_archived) === 1 ||
+      isTemporaryAccountExpired(user)
+    ) {
+      return res.status(400).json({
         success: false,
-        message: "Email is already registered.",
+        message: "Choose an active, approved professor with a verified email.",
       });
     }
 
-    const temporaryPassword = generateTemporaryPassword();
-
-    const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
-
     const [result] = await db.execute(
-      `INSERT INTO users (
-        email,
-        password,
-        role,
-        name,
-        display_name,
-        verification_status,
-        is_verified,
-        onboarding_completed,
-        must_change_password,
-        is_archived,
-        is_temporary,
-        temporary_expires_at
-      )
-      VALUES (
-        ?,
-        ?,
-        'admin',
-        ?,
-        ?,
-        'approved',
-        1,
-        1,
-        1,
-        0,
-        ?,
-        ?
-      )`,
-      [
-        email,
-        hashedPassword,
-        name,
-        name,
-        temporaryAccount.isTemporary,
-        temporaryAccount.temporaryExpiresAt,
-      ],
+      `UPDATE users
+       SET professor_admin_access = 1
+       WHERE userId = ? AND role = 'professor' AND verification_status = 'approved'
+         AND is_verified = 1 AND is_archived = 0 AND professor_admin_access = 0
+         AND (is_temporary <> 1 OR temporary_expires_at IS NULL OR temporary_expires_at > NOW())`,
+      [professorId],
     );
 
-    const [rows] = await db.execute(
-      `SELECT
-        userId AS id,
-        email,
-        role,
-        name,
-        display_name,
-        profile_image,
-        year_level,
-        section_name, course,
-        onboarding_completed,
-        is_verified,
-        verification_id,
-        student_id,
-        gender,
-        professor_id,
-        professor_faculty_id,
-        professor_department,
-        professor_position,
-        professor_specialization,
-        professor_employment_proof,
-        verification_status,
-        is_archived,
-        archived_at,
-        must_change_password,
-        is_temporary,
-        temporary_expires_at,
-        created_at
-       FROM users
-       WHERE userId = ?
-       LIMIT 1`,
-      [result.insertId],
-    );
+    if (result.affectedRows !== 1) {
+      return res.status(409).json({
+        success: false,
+        message: "This professor already has admin access or is no longer eligible.",
+      });
+    }
 
-    /* =================================================
-          AUDIT LOG
-        ================================================= */
-
+    const name = user.display_name || user.name || user.email;
     await logAuditFromRequest(req, {
       category: "User Management",
-      action: "Created administrator account",
+      action: "Granted professor admin access",
       target: name,
       status: "Success",
-      details:
-        `Admin ID: ${result.insertId}; ` +
-        `Email: ${email}; ` +
-        `Temporary Account: ${temporaryAccount.isTemporary ? "Yes" : "No"}`,
+      details: `Professor ID: ${professorId}; Email: ${user.email}`,
     });
+
+    let emailSent = false;
+    try {
+      await sendProfessorAdminAccessEmail({ email: user.email, name });
+      emailSent = true;
+    } catch (error) {
+      console.error(
+        "Professor admin access email failed:",
+        error.code || error.name,
+      );
+    }
 
     return res.status(201).json({
       success: true,
-      message: "Admin account created.",
-      temporaryPassword,
-      user: rowToUser(rows[0]),
+      message: emailSent
+        ? "Admin access granted. The professor was notified by email."
+        : "Admin access granted. The notification email could not be sent.",
+      emailSent,
+      user: rowToUser({ ...user, professor_admin_access: 1 }),
     });
   } catch (error) {
-    console.error("Create admin error:", error);
-
+    console.error("Grant professor admin access error:", error.code || error.name);
     return res.status(500).json({
       success: false,
-      message: "Failed to create admin account.",
+      message: "Could not grant admin access.",
     });
   }
 }
@@ -946,6 +903,7 @@ export async function createProfessorAccount(req, res) {
     const temporaryPassword = generateTemporaryPassword();
 
     const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+    const mustChangePassword = await isPasswordChangeRequired();
 
     const [result] = await db.execute(
       `INSERT INTO users (
@@ -987,7 +945,7 @@ export async function createProfessorAccount(req, res) {
         'approved',
         1,
         1,
-        1,
+        ?,
         0,
         ?,
         ?
@@ -1005,6 +963,7 @@ export async function createProfessorAccount(req, res) {
         specialization || null,
         employmentProof || null,
 
+        Number(mustChangePassword),
         temporaryAccount.isTemporary,
         temporaryAccount.temporaryExpiresAt,
       ],
@@ -1130,6 +1089,8 @@ export async function updateProfessorRegistration(req, res) {
       });
     }
 
+    const { professorApprovalNotification } = await getSystemSettingsConfig();
+
     await db.execute(
       `UPDATE users SET verification_status = ?,
        professor_declined_at = CASE WHEN ? = 'declined'
@@ -1143,7 +1104,7 @@ export async function updateProfessorRegistration(req, res) {
        section_name, course, onboarding_completed, is_verified, verification_id,
        student_id, professor_id, professor_faculty_id, professor_department,
        professor_position, professor_specialization,
-       professor_employment_proof, verification_status, is_archived,
+       professor_employment_proof, verification_status, professor_admin_access, is_archived,
        archived_at, must_change_password, is_temporary, temporary_expires_at,
        created_at
        FROM users
@@ -1178,23 +1139,38 @@ export async function updateProfessorRegistration(req, res) {
     });
 
     let emailSent = false;
-    try {
-      await sendProfessorRegistrationDecisionEmail({
-        email: user.email,
-        name: targetName,
-        status,
-        reason,
-      });
-      emailSent = true;
-    } catch (error) {
-      console.error("Professor decision email failed:", error.code || "EMAIL_DELIVERY_FAILED");
+    let message = `Professor registration ${status}.`;
+    if (professorApprovalNotification) {
+      try {
+        await sendProfessorRegistrationDecisionEmail({
+          email: user.email,
+          name: targetName,
+          status,
+          reason,
+        });
+        emailSent = true;
+        message += " Notification email sent to the registered address.";
+      } catch (error) {
+        console.error("Professor decision email failed:", error.code || "EMAIL_DELIVERY_FAILED");
+        message += " The notification email could not be sent.";
+      }
+
+      try {
+        await createNotification({
+          recipientUserId: user.userId,
+          title: `Professor Registration ${status === "approved" ? "Approved" : "Declined"}`,
+          message: reason ? `Professor registration declined. Reason: ${reason}` : "Your professor registration has been approved.",
+          target: "professor",
+          type: "professor_registration_decision",
+        });
+      } catch (error) {
+        console.error("Professor decision notification failed:", error);
+      }
     }
 
     return res.json({
       success: true,
-      message: `Professor registration ${status}. ${emailSent
-        ? "Notification email sent to the registered address."
-        : "The notification email could not be sent. Please contact the professor directly."}`,
+      message,
       emailSent,
       user: rowToUser(rows[0]),
     });
@@ -1254,7 +1230,7 @@ export async function updateAccountArchive(req, res) {
        section_name, course, onboarding_completed, is_verified, verification_id,
        student_id, professor_id, professor_faculty_id, professor_department,
        professor_position, professor_specialization,
-       professor_employment_proof, verification_status, is_archived,
+       professor_employment_proof, verification_status, professor_admin_access, is_archived,
        archived_at, must_change_password, is_temporary, temporary_expires_at,
        created_at
        FROM users
@@ -1338,7 +1314,8 @@ export async function resetUserCredentials(req, res) {
 
     await db.execute(
       `UPDATE users
-       SET password = ?, must_change_password = 1, is_verified = 1
+       SET password = ?, must_change_password = 1, is_verified = 1,
+           password_reset_token = NULL, password_reset_expires = NULL
        WHERE userId = ?`,
       [hashedPassword, id],
     );
@@ -1530,7 +1507,8 @@ export async function changeUserPassword(req, res) {
 
     if (authenticatedUserId) {
       [rows] = await db.execute(
-        `SELECT userId, email, password, is_archived
+        `SELECT userId, email, role, password, is_archived, must_change_password,
+                onboarding_completed, student_tutorial_pending
          FROM users
          WHERE userId = ?
          LIMIT 1`,
@@ -1538,7 +1516,8 @@ export async function changeUserPassword(req, res) {
       );
     } else {
       [rows] = await db.execute(
-        `SELECT userId, email, password, is_archived
+        `SELECT userId, email, role, password, is_archived, must_change_password,
+                onboarding_completed, student_tutorial_pending
          FROM users
          WHERE email = ?
          LIMIT 1`,
@@ -1559,6 +1538,14 @@ export async function changeUserPassword(req, res) {
       return res.status(403).json({
         success: false,
         message: "This account has been archived.",
+      });
+    }
+
+    if (hasPendingStudentTutorial(user)) {
+      return res.status(409).json({
+        success: false,
+        code: "STUDENT_TUTORIAL_REQUIRED",
+        message: "Finish or skip the student tutorial before changing your password.",
       });
     }
 
@@ -1589,15 +1576,22 @@ export async function changeUserPassword(req, res) {
 
     const hashedPassword = await bcrypt.hash(newPassword, 12);
 
-    await db.execute(
+    const [result] = await db.execute(
       `UPDATE users
        SET password = ?,
            must_change_password = 0,
            password_reset_token = NULL,
            password_reset_expires = NULL
-       WHERE userId = ?`,
-      [hashedPassword, user.userId],
+       WHERE userId = ? AND password = ? AND is_archived = 0`,
+      [hashedPassword, user.userId, user.password],
     );
+
+    if (result.affectedRows !== 1) {
+      return res.status(409).json({
+        success: false,
+        message: "Your account changed while updating the password. Please try again.",
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -1614,7 +1608,7 @@ export async function changeUserPassword(req, res) {
 }
 
 export async function getProfile(req, res) {
-  const email = cleanEmail(req.body.email || req.query.email);
+  const email = cleanEmail(req.user.email);
 
   if (!email) {
     return res.status(400).json({
@@ -1655,6 +1649,7 @@ export async function getCurrentUser(req, res) {
           year_level,
           section_name, course,
           onboarding_completed,
+          student_tutorial_pending,
           is_verified,
           verification_id,
           student_id,
@@ -1667,6 +1662,7 @@ export async function getCurrentUser(req, res) {
           professor_employment_proof,
 
           verification_status,
+          professor_admin_access,
           is_archived,
           archived_at,
           must_change_password,
@@ -1691,6 +1687,7 @@ export async function getCurrentUser(req, res) {
           year_level,
           section_name, course,
           onboarding_completed,
+          student_tutorial_pending,
           is_verified,
           verification_id,
           student_id,
@@ -1703,6 +1700,7 @@ export async function getCurrentUser(req, res) {
           professor_employment_proof,
 
           verification_status,
+          professor_admin_access,
           is_archived,
           archived_at,
           must_change_password,
@@ -1740,7 +1738,7 @@ export async function getCurrentUser(req, res) {
 
     return res.json({
       success: true,
-      user: rowToUser(user),
+      user: rowToSessionUser(user, req.user.role),
     });
   } catch (error) {
     console.error("Get current user error:", error);
@@ -1753,7 +1751,7 @@ export async function getCurrentUser(req, res) {
 }
 
 export async function updateOnboardingName(req, res) {
-  const email = cleanEmail(req.body.email);
+  const email = cleanEmail(req.user.email);
   const displayName = cleanText(
     req.body.displayName || req.body.display_name || req.body.name,
   );
@@ -1799,7 +1797,7 @@ export async function updateOnboardingName(req, res) {
 }
 
 export async function updateOnboardingYear(req, res) {
-  const email = cleanEmail(req.body.email);
+  const email = cleanEmail(req.user.email);
   const yearLevel = normalizeYearLevel(
     req.body.yearLevel || req.body.year_level,
   );
@@ -1838,7 +1836,7 @@ export async function updateOnboardingYear(req, res) {
 }
 
 export async function updateOnboardingSection(req, res) {
-  const email = cleanEmail(req.body.email);
+  const email = cleanEmail(req.user.email);
   const sectionName = normalizeSectionName(
     req.body.sectionName || req.body.section_name || req.body.section,
   );
@@ -1898,8 +1896,27 @@ export async function updateOnboardingSection(req, res) {
   }
 }
 
+export async function completeStudentTutorial(req, res) {
+  try {
+    await db.execute(
+      `UPDATE users
+       SET onboarding_completed = 1, student_tutorial_pending = 0
+       WHERE userId = ? AND onboarding_completed = 0
+         AND (student_tutorial_pending = 1 OR must_change_password = 1)`,
+      [req.user.userId],
+    );
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("Complete student tutorial error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Could not save the tutorial. Please try again.",
+    });
+  }
+}
+
 export async function completeOnboarding(req, res) {
-  const email = cleanEmail(req.body.email);
+  const email = cleanEmail(req.user.email);
 
   if (!email) {
     return res.status(400).json({
@@ -2039,6 +2056,7 @@ export async function updateProfileImage(req, res) {
             professor_specialization,
             professor_employment_proof,
             verification_status,
+            professor_admin_access,
             is_archived,
             archived_at,
             must_change_password,
@@ -2074,6 +2092,7 @@ export async function updateProfileImage(req, res) {
             professor_specialization,
             professor_employment_proof,
             verification_status,
+            professor_admin_access,
             is_archived,
             archived_at,
             must_change_password,
@@ -2100,7 +2119,7 @@ export async function updateProfileImage(req, res) {
     return res.status(200).json({
       success: true,
       message: "Profile picture updated successfully.",
-      user: rowToUser(updatedUser),
+      user: rowToSessionUser(updatedUser, req.user.role),
     });
   } catch (error) {
     console.error("Update profile image error:", error);

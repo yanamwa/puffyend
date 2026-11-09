@@ -18,10 +18,12 @@ async function authenticateDeletion(req, res) {
   return authenticated;
 }
 import {
+  sendEnrollmentAcceptedEmail,
   sendEnrollmentDeclinedEmail,
   sendEnrollmentRequestEmail,
   sendStudentUnenrolledEmail,
 } from "../utils/mailer.js";
+import { getSystemSettingsConfig } from "../services/system/systemSettingsService.js";
 import { createNotification } from "../utils/notification.js";
 import { logAuditFromRequest } from "../services/system/auditLogService.js";
 
@@ -167,7 +169,7 @@ async function getRequestUserProfile(req) {
         id: user.userId,
         userId: user.userId,
         email: user.email,
-        role: user.role,
+        role: req.user?.role || user.role,
         name: user.name,
         displayName: user.display_name || user.name || "",
         display_name: user.display_name || user.name || "",
@@ -1371,8 +1373,96 @@ export async function getArchivedCourses(req, res) {
   }
 }
 
+async function notifyEnrollmentApproved(
+  settings,
+  { email, studentName, courseName, notification },
+) {
+  if (settings.enrollmentSystemNotification) {
+    try {
+      await createNotification({
+        ...notification,
+        title: "Enrollment Approved",
+        message: `Your enrollment in ${courseName} has been approved.`,
+        target: "student",
+        type: "enrollment_approved",
+      });
+    } catch (error) {
+      console.error("Failed to create approval notification:", error);
+    }
+  }
+
+  if (settings.enrollmentAcceptedEmail && email) {
+    try {
+      await sendEnrollmentAcceptedEmail(email, studentName, courseName);
+    } catch (error) {
+      console.error("Failed to send enrollment approval email:", error);
+    }
+  }
+}
+
+async function enrollWithoutApproval(idColumn, courseId, userId, courseCode) {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [[course]] = await connection.execute(
+      `SELECT ${idColumn} FROM courses
+       WHERE ${idColumn} = ? AND archived = 0 AND status = 'published'
+         AND (visibility = 'public' OR (? <> '' AND (UPPER(course_code) = ? OR UPPER(code) = ?)))
+       FOR UPDATE`,
+      [courseId, courseCode, courseCode, courseCode],
+    );
+    if (!course) {
+      throw Object.assign(new Error("Course not found or unavailable for enrollment."), {
+        statusCode: 404,
+      });
+    }
+
+    const [[existing]] = await connection.execute(
+      `SELECT enrollment_id, status, archived FROM course_enrollments
+       WHERE course_id = ? AND user_id = ? FOR UPDATE`,
+      [courseId, userId],
+    );
+    if (existing?.status === "approved" && !existing.archived) {
+      await connection.commit();
+      return null;
+    }
+
+    let enrollmentId = existing?.enrollment_id;
+    if (existing) {
+      await connection.execute(
+        `UPDATE course_enrollments
+         SET status = 'approved', archived = 0, approved_at = NOW(), rejection_reason = NULL
+         WHERE enrollment_id = ?`,
+        [enrollmentId],
+      );
+    } else {
+      const [result] = await connection.execute(
+        `INSERT INTO course_enrollments (course_id, user_id, status, approved_at, archived)
+         VALUES (?, ?, 'approved', NOW(), 0)`,
+        [courseId, userId],
+      );
+      enrollmentId = result.insertId;
+    }
+
+    await connection.execute(
+      `UPDATE courses SET students = (
+         SELECT COUNT(*) FROM course_enrollments
+         WHERE course_id = ? AND status = 'approved' AND archived = 0
+       ) WHERE ${idColumn} = ?`,
+      [courseId, courseId],
+    );
+    await connection.commit();
+    return enrollmentId;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 export async function enrollCourse(req, res) {
-  const userId = getRequestUserId(req);
+  const userId = req.user?.userId || req.user?.id;
 
   if (!userId) {
     return res.status(401).json({
@@ -1456,6 +1546,49 @@ export async function enrollCourse(req, res) {
     const student = studentRows[0];
 
     const studentName = student?.display_name || student?.name || "A student";
+    const courseName =
+      selectedCourse.course_name || selectedCourse.title || "your course";
+    const settings = await getSystemSettingsConfig();
+
+    if (!settings.enrollmentApproval) {
+      const enrollmentId = await enrollWithoutApproval(
+        idColumn, selectedCourseId, userId, courseCode,
+      );
+      if (!enrollmentId) {
+        return res.status(409).json({
+          success: false,
+          status: "approved",
+          message: "You are already enrolled in this course.",
+        });
+      }
+
+      await notifyEnrollmentApproved(settings, {
+        email: student?.email,
+        studentName,
+        courseName,
+        notification: {
+          recipientUserId: userId,
+          courseId: selectedCourseId,
+          enrollmentId,
+        },
+      });
+      await logAuditFromRequest(req, {
+        category: "Enrollment Management",
+        action: "Enrolled in Course",
+        target: courseName,
+        status: "Success",
+        details: `${studentName} enrolled in "${courseName}" without requiring approval.`,
+      });
+
+      return res.status(201).json({
+        success: true,
+        status: "approved",
+        pending: false,
+        enrolled: true,
+        enrollmentId,
+        message: `You are now enrolled in ${courseName}.`,
+      });
+    }
 
     // Get professor
     let professor = null;
@@ -1508,9 +1641,6 @@ export async function enrollCourse(req, res) {
       selectedCourse.professor_name ||
       selectedCourse.instructor ||
       "Professor";
-
-    const courseName =
-      selectedCourse.course_name || selectedCourse.title || "your course";
 
     /*
      * Sends BOTH:
@@ -1635,7 +1765,7 @@ export async function enrollCourse(req, res) {
         [existing.enrollment_id],
       );
 
-      const notificationResult = await notifyProfessor(result.insertId);
+      const notificationResult = await notifyProfessor(existing.enrollment_id);
 
       /* =====================================================
         AUDIT LOG - REQUEST ENROLLMENT
@@ -1697,11 +1827,11 @@ export async function enrollCourse(req, res) {
         : "Enrollment request sent. Waiting for professor approval.",
     });
   } catch (error) {
-    console.error("Enrollment request error:", error);
+    if (!error.statusCode) console.error("Enrollment request error:", error);
 
-    return res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: error?.message || "Failed to send enrollment request.",
+      message: error?.message || "Failed to enroll in the course.",
     });
   }
 }
@@ -2295,99 +2425,19 @@ export async function joinCourseByCode(req, res) {
       });
     }
 
-    const userId = getRequestUserId(req);
-
-    let enrolled = false;
-    let pending = false;
-    let enrollmentCreated = false;
-
-    if (userId) {
-      const [existingRows] = await db.execute(
-        `SELECT *
-     FROM course_enrollments
-     WHERE course_id = ?
-       AND user_id = ?
-     LIMIT 1`,
-        [courseId, userId],
-      );
-
-      if (existingRows.length > 0) {
-        const existing = existingRows[0];
-
-        if (existing.status === "approved" && !existing.archived) {
-          enrolled = true;
-        } else if (existing.status === "pending" && !existing.archived) {
-          pending = true;
-        } else {
-          await db.execute(
-            `UPDATE course_enrollments
-         SET
-         status = 'pending',
-         approved_at = NULL,
-         rejection_reason = NULL,
-         archived = 0,
-         created_at = CURRENT_TIMESTAMP
-       WHERE enrollment_id = ?`,
-            [existing.enrollment_id],
-          );
-
-          pending = true;
-        }
-      } else {
-        await db.execute(
-          `INSERT INTO course_enrollments (
-         course_id,
-         user_id,
-         status,
-         approved_at,
-         archived
-       )
-       VALUES (?, ?, 'pending', NULL, 0)`,
-          [courseId, userId],
-        );
-
-        pending = true;
-        enrollmentCreated = true;
-      }
-    }
-
+    const courseId = getCourseId(rows[0]);
     const modulesByCourse = summaryOnly
       ? new Map()
       : await getCourseLearningModules([courseId]);
 
-    const [updatedRows] = await db.execute(
-      `SELECT
-           ${courseSelect},
-           u.display_name AS database_professor_display_name,
-           u.name AS database_professor_name,
-           u.email AS database_professor_email,
-           u.professor_department AS database_professor_department,
-           u.profile_image AS database_professor_profile_image
-         FROM courses c
-         LEFT JOIN users u
-           ON u.userId = c.professor_id
-         WHERE c.${idColumn} = ?
-         LIMIT 1`,
-      [courseId],
-    );
-
     const course = rowToCourse(
-      updatedRows[0] || rows[0],
+      rows[0],
       modulesByCourse.get(String(courseId)) || [],
     );
 
     return res.json({
       success: true,
-      enrolled,
-      pending,
-      enrollmentCreated,
-
-      message: enrolled
-        ? "You are already enrolled in this course."
-        : pending
-          ? "Enrollment request sent. Waiting for professor approval."
-          : "Course found.",
-
+      message: "Course found.",
       course,
     });
   } catch (error) {
@@ -2494,6 +2544,7 @@ export async function createCourse(req, res) {
     connection = await db.getConnection();
     await connection.beginTransaction();
     const {course: catalog, versionId, joinCode} = await resolveClassCatalog(connection, req.body);
+<<<<<<< HEAD
     // Serialize creation per professor so simultaneous requests cannot duplicate a catalog course.
     await connection.execute("SELECT userId FROM users WHERE userId=? FOR UPDATE", [ownerFields.professorId]);
     const [existingCatalogCourses] = await connection.execute(
@@ -2502,6 +2553,14 @@ export async function createCourse(req, res) {
     );
     if (existingCatalogCourses.length) throw Object.assign(new Error("You have already created this catalog course. Please manage the existing course in Course Management."), {statusCode:409});
     const period = classPeriod(req.body);
+=======
+    const { academicYear, semester } = await getSystemSettingsConfig(connection);
+    const period = classPeriod({
+      ...req.body,
+      academicYear: cleanText(req.body.academicYear ?? req.body.academic_year) || academicYear,
+      semester: cleanText(req.body.semester) || semester,
+    });
+>>>>>>> a67d8a6b23d408c9b8f48f28f9262d50e3f80bff
     let fields = payloadToCourseFields({...req.body, title: catalog.title, courseName: catalog.title,
       code: joinCode, courseCode: joinCode, course_code: joinCode,
       summary: catalog.description || req.body.summary || '', description: catalog.description || req.body.description || '', subject: catalog.title});
@@ -3316,6 +3375,7 @@ export async function approveEnrollment(req, res) {
         c.title AS course_title,
         c.course_code,
 
+        s.email AS student_email,
         s.name AS student_name,
         s.display_name AS student_display_name
 
@@ -3374,17 +3434,23 @@ export async function approveEnrollment(req, res) {
         currentUser.displayName || currentUser.display_name || currentUser.name,
       ) || "Professor";
 
-    // Approve enrollment
-    await db.execute(
+    const settings = await getSystemSettingsConfig();
+    const [approved] = await db.execute(
       `UPDATE course_enrollments
        SET
          status = 'approved',
          approved_at = CURRENT_TIMESTAMP,
          rejection_reason = NULL,
          archived = 0
-       WHERE enrollment_id = ?`,
+       WHERE enrollment_id = ? AND status = 'pending' AND archived = 0`,
       [enrollmentId],
     );
+    if (!approved.affectedRows) {
+      return res.status(409).json({
+        success: false,
+        message: "This enrollment request has already been updated.",
+      });
+    }
 
     // Update student count
     await db.execute(
@@ -3400,42 +3466,19 @@ export async function approveEnrollment(req, res) {
       [enrollment.course_id, enrollment.course_id],
     );
 
-    /*
-     * Create student notification BEFORE
-     * returning the API response.
-     */
-    try {
-      await createNotification({
+    await notifyEnrollmentApproved(settings, {
+      email: enrollment.student_email,
+      studentName,
+      courseName,
+      notification: {
         recipientUserId: enrollment.user_id,
-
         courseId: enrollment.course_id,
-
         enrollmentId: Number(enrollmentId),
-
-        title: "Enrollment Approved",
-
-        message: `Your enrollment request for ${courseName} has been approved.`,
-
-        target: "student",
-
-        type: "enrollment_approved",
-
         createdByUserId: currentUser.userId || currentUser.id,
-
         createdByName: professorName,
-
         createdByRole: "professor",
-      });
-
-      console.log(
-        `Enrollment approval notification created for user ${enrollment.user_id}`,
-      );
-    } catch (notificationError) {
-      console.error(
-        "Failed to create approval notification:",
-        notificationError,
-      );
-    }
+      },
+    });
 
     /* =====================================================
         AUDIT LOG - APPROVE ENROLLMENT
@@ -3565,15 +3608,22 @@ export async function declineEnrollment(req, res) {
       });
     }
 
-    await db.execute(
+    const settings = await getSystemSettingsConfig();
+    const [declined] = await db.execute(
       `UPDATE course_enrollments
        SET
          status = 'declined',
          approved_at = NULL,
          rejection_reason = ?
-       WHERE enrollment_id = ?`,
+       WHERE enrollment_id = ? AND status = 'pending' AND archived = 0`,
       [rejectionReason, enrollmentId],
     );
+    if (!declined.affectedRows) {
+      return res.status(409).json({
+        success: false,
+        message: "This enrollment request has already been updated.",
+      });
+    }
 
     const studentEmail = enrollment.student_email;
 
@@ -3596,10 +3646,10 @@ export async function declineEnrollment(req, res) {
     let emailSent = false;
     let emailError = null;
 
-    if (!studentEmail) {
+    if (settings.enrollmentDeclinedEmail && !studentEmail) {
       emailError =
         "The enrollment was declined, but the student does not have an email address.";
-    } else {
+    } else if (settings.enrollmentDeclinedEmail) {
       try {
         await sendEnrollmentDeclinedEmail(
           studentEmail,
@@ -3621,42 +3671,23 @@ export async function declineEnrollment(req, res) {
       }
     }
 
-    /*
-     * CREATE STUDENT NOTIFICATION
-     */
-    try {
-      await createNotification({
-        recipientUserId: enrollment.user_id,
-
-        courseId: enrollment.course_id,
-
-        enrollmentId: Number(enrollmentId),
-
-        title: "Enrollment Request Declined",
-
-        message:
-          `Your enrollment request for ${courseName} was declined. ` +
-          `Reason: ${rejectionReason}`,
-
-        target: "student",
-
-        type: "enrollment_declined",
-
-        createdByUserId: currentUser.userId || currentUser.id,
-
-        createdByName: professorName,
-
-        createdByRole: "professor",
-      });
-
-      console.log(
-        `Enrollment decline notification created for user ${enrollment.user_id}`,
-      );
-    } catch (notificationError) {
-      console.error(
-        "Failed to create decline notification:",
-        notificationError,
-      );
+    if (settings.enrollmentSystemNotification) {
+      try {
+        await createNotification({
+          recipientUserId: enrollment.user_id,
+          courseId: enrollment.course_id,
+          enrollmentId: Number(enrollmentId),
+          title: "Enrollment Request Declined",
+          message: `Your enrollment request for ${courseName} was declined. Reason: ${rejectionReason}`,
+          target: "student",
+          type: "enrollment_declined",
+          createdByUserId: currentUser.userId || currentUser.id,
+          createdByName: professorName,
+          createdByRole: "professor",
+        });
+      } catch (error) {
+        console.error("Failed to create decline notification:", error);
+      }
     }
     /* =====================================================
         AUDIT LOG - DECLINE ENROLLMENT
@@ -3679,7 +3710,8 @@ export async function declineEnrollment(req, res) {
 
       message: emailSent
         ? "Enrollment declined and email sent successfully."
-        : "Enrollment was declined, but the email notification could not be sent.",
+        : "Enrollment declined.",
+      emailEnabled: settings.enrollmentDeclinedEmail,
 
       emailError,
 

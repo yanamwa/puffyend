@@ -10,6 +10,7 @@ import {
   mainQuizBlueprint,
   validateAdaptiveQuestions,
   gradeMainQuiz,
+  shuffleMainQuizQuestions,
 } from "./mainQuizAdaptive.js";
 const parse = (value) =>
   typeof value === "string" ? JSON.parse(value) : value;
@@ -156,6 +157,7 @@ const publicQuiz = (row) => {
         explanation,
         source_chunks,
         grounding,
+        source_question_index,
         ...question
       }) => question,
     ),
@@ -240,7 +242,7 @@ export async function startMainQuiz(user, body) {
         user.userId,
         stored.revision,
         0,
-        JSON.stringify(questions),
+        JSON.stringify(shuffleMainQuizQuestions(questions)),
         JSON.stringify(blueprint),
         JSON.stringify(snapshot),
       ],
@@ -293,7 +295,7 @@ async function generatePersonalized(
         user.userId,
         stored.revision,
         0,
-        JSON.stringify(questions),
+        JSON.stringify(shuffleMainQuizQuestions(questions)),
         JSON.stringify(blueprint),
         JSON.stringify(config),
       ],
@@ -427,7 +429,7 @@ async function generatePersonalized(
       user.userId,
       stored.revision,
       practiceAttemptId,
-      JSON.stringify(questions),
+      JSON.stringify(shuffleMainQuizQuestions(questions)),
       JSON.stringify(blueprint),
       JSON.stringify(config),
     ],

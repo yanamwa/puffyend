@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { getSystemSettingsConfig } from "../services/system/systemSettingsService.js";
 import { logAuditFromRequest } from "../services/system/auditLogService.js";
 /* =====================================================
    HELPERS
@@ -91,12 +92,15 @@ function payloadToSettings(body = {}) {
     schoolYearEndDate: cleanText(body.schoolYearEndDate) || null,
   };
 }
-function validateSettings(settings) {
+function validateSettings(settings, submitted) {
   if (!settings.systemName) {
     return "System name is required.";
   }
-  if (!settings.academicYear) {
-    return "Academic year is required.";
+  if (Object.hasOwn(submitted, "academicYear")) {
+    const [start, end] = settings.academicYear.split("-").map(Number);
+    if (!/^\d{4}-\d{4}$/.test(settings.academicYear) || end !== start + 1) {
+      return "Enter consecutive academic years, such as 2026-2027.";
+    }
   }
   const allowedSemesters = ["1st Semester", "2nd Semester", "Summer"];
   if (!allowedSemesters.includes(settings.semester)) {
@@ -104,6 +108,7 @@ function validateSettings(settings) {
   }
 
   if (
+    Object.hasOwn(submitted, "passingPercentage") &&
     settings.passingPercentage !== null &&
     (!Number.isFinite(settings.passingPercentage) ||
       settings.passingPercentage < 0 ||
@@ -118,6 +123,10 @@ function validateSettings(settings) {
   ];
 
   for (const [startKey, endKey] of dateFields) {
+    if (!Object.hasOwn(submitted, startKey) && !Object.hasOwn(submitted, endKey)) {
+      continue;
+    }
+
     const start = settings[startKey];
     const end = settings[endKey];
 
@@ -150,29 +159,30 @@ function validateSettings(settings) {
 function getChangedSettings(previous, next) {
   const changes = [];
   const fields = [
-    ["systemName", "System Name"],
-    ["academicYear", "Academic Year"],
-    ["semester", "Semester"],
-    ["maintenanceMode", "Maintenance Mode"],
-    ["requirePasswordChange", "Require Password Change"],
-    ["professorApproval", "Professor Approval"],
-    ["practiceQuizEnabled", "Practice Quiz"],
-    ["mainQuizEnabled", "Main Quiz"],
-    ["recordPracticeQuiz", "Record Practice Quiz"],
-    ["recordMainQuiz", "Record Main Quiz"],
-    ["adaptiveQuizEnabled", "Adaptive Quiz"],
-    ["quizAnalysisEnabled", "Quiz Analysis"],
-    ["enrollmentApproval", "Enrollment Approval"],
-    ["enrollmentAcceptedEmail", "Enrollment Accepted Email"],
-    ["enrollmentDeclinedEmail", "Enrollment Declined Email"],
-    ["enrollmentSystemNotification", "Enrollment System Notification"],
-    ["professorApprovalNotification", "Professor Approval Notification"],
-    ["announcementsEnabled", "System Announcements"],
+    ["systemName", "system_name", "System Name"],
+    ["academicYear", "academic_year", "Academic Year"],
+    ["semester", "semester", "Semester"],
+    ["maintenanceMode", "maintenance_mode", "Maintenance Mode"],
+    ["requirePasswordChange", "require_password_change", "Require Password Change"],
+    ["professorApproval", "professor_approval", "Professor Approval"],
+    ["practiceQuizEnabled", "practice_quiz_enabled", "Practice Quiz"],
+    ["mainQuizEnabled", "main_quiz_enabled", "Main Quiz"],
+    ["recordPracticeQuiz", "record_practice_quiz", "Record Practice Quiz"],
+    ["recordMainQuiz", "record_main_quiz", "Record Main Quiz"],
+    ["adaptiveQuizEnabled", "adaptive_quiz_enabled", "Adaptive Quiz"],
+    ["quizAnalysisEnabled", "quiz_analysis_enabled", "Quiz Analysis"],
+    ["enrollmentApproval", "enrollment_approval", "Enrollment Approval"],
+    ["enrollmentAcceptedEmail", "enrollment_accepted_email", "Enrollment Accepted Email"],
+    ["enrollmentDeclinedEmail", "enrollment_declined_email", "Enrollment Declined Email"],
+    ["enrollmentSystemNotification", "enrollment_system_notification", "Enrollment System Notification"],
+    ["professorApprovalNotification", "professor_approval_notification", "Professor Approval Notification"],
+    ["announcementsEnabled", "announcements_enabled", "System Announcements"],
   ];
-  for (const [key, label] of fields) {
+  for (const [key, column, label] of fields) {
     if (previous[key] !== next[key]) {
       changes.push({
         key,
+        column,
         label,
         from: previous[key],
         to: next[key],
@@ -201,6 +211,21 @@ function formatAuditDetails(changes) {
 /* =====================================================
    GET SYSTEM SETTINGS
 ===================================================== */
+export async function getPublicSystemStatus(req, res, next) {
+  try {
+    const { academicYear, semester, enrollmentApproval, maintenanceMode } =
+      await getSystemSettingsConfig();
+    res.set("Cache-Control", "no-store").json({
+      academicYear,
+      semester,
+      enrollmentApproval,
+      maintenanceMode,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function getSystemSettings(req, res) {
   try {
     const [rows] = await db.execute(`SELECT *
@@ -248,8 +273,12 @@ export async function updateSystemSettings(req, res) {
       rowToSettings(currentRow); /* -----------------------------------------
        Validate incoming settings
     ----------------------------------------- */
-    const settings = payloadToSettings(req.body);
-    const validationMessage = validateSettings(settings);
+    const submitted = req.body ?? {};
+    const updates = Object.entries(payloadToSettings(submitted)).filter(
+      ([key]) => Object.hasOwn(submitted, key),
+    );
+    const settings = { ...currentSettings, ...Object.fromEntries(updates) };
+    const validationMessage = validateSettings(settings, submitted);
     if (validationMessage) {
       return res.status(400).json({
         success: false,
@@ -279,48 +308,13 @@ export async function updateSystemSettings(req, res) {
       null; /* -----------------------------------------
        Update database
     ----------------------------------------- */
+    const assignments = changes.map(({ column }) => `${column} = ?`);
     await db.execute(
       `UPDATE system_settings
-       SET
-         system_name = ?,
-         academic_year = ?,
-         semester = ?,
-         maintenance_mode = ?,
-         require_password_change = ?,
-         professor_approval = ?,
-         practice_quiz_enabled = ?,
-         main_quiz_enabled = ?,
-         record_practice_quiz = ?,
-         record_main_quiz = ?,
-         adaptive_quiz_enabled = ?,
-         quiz_analysis_enabled = ?,
-         enrollment_approval = ?,
-         enrollment_accepted_email = ?,
-         enrollment_declined_email = ?,
-         enrollment_system_notification = ?,
-         professor_approval_notification = ?,
-         announcements_enabled = ?,
-         updated_by = ?
+       SET ${assignments.join(", ")}, updated_by = ?
        WHERE setting_id = ?`,
       [
-        settings.systemName,
-        settings.academicYear,
-        settings.semester,
-        settings.maintenanceMode ? 1 : 0,
-        settings.requirePasswordChange ? 1 : 0,
-        settings.professorApproval ? 1 : 0,
-        settings.practiceQuizEnabled ? 1 : 0,
-        settings.mainQuizEnabled ? 1 : 0,
-        settings.recordPracticeQuiz ? 1 : 0,
-        settings.recordMainQuiz ? 1 : 0,
-        settings.adaptiveQuizEnabled ? 1 : 0,
-        settings.quizAnalysisEnabled ? 1 : 0,
-        settings.enrollmentApproval ? 1 : 0,
-        settings.enrollmentAcceptedEmail ? 1 : 0,
-        settings.enrollmentDeclinedEmail ? 1 : 0,
-        settings.enrollmentSystemNotification ? 1 : 0,
-        settings.professorApprovalNotification ? 1 : 0,
-        settings.announcementsEnabled ? 1 : 0,
+        ...changes.map(({ to }) => (typeof to === "boolean" ? Number(to) : to)),
         userId,
         currentRow.setting_id,
       ],

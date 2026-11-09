@@ -20,10 +20,18 @@ test("settings load and save using valid SQL whitespace", async () => {
   assert.equal(loaded.code, 200); assert.equal(loaded.body.success, true);
   assert.equal(loaded.body.settings.systemName, "Test System");
   const saved = response();
-  await updateSystemSettings({ body: { ...loaded.body.settings, systemName: "Updated Test System" }, user: { userId: 1, role: "super_admin", name: "Test Admin" }, headers: {} }, saved);
+  const user = { userId: 1, role: "super_admin", name: "Test Admin" };
+  await updateSystemSettings({ body: { ...loaded.body.settings, systemName: "Updated Test System", practiceQuizEnabled: true }, user, headers: {} }, saved);
   assert.equal(saved.code, 200); assert.equal(saved.body.success, true);
   const reloaded = response(); await getSystemSettings({}, reloaded);
   assert.equal(reloaded.body.settings.systemName, "Updated Test System");
+  const partial = response();
+  await updateSystemSettings({ body: { semester: "Summer" }, user, headers: {} }, partial);
+  assert.equal(partial.code, 200);
+  assert.deepEqual(partial.body.changedFields, ["semester"]);
+  assert.equal(partial.body.settings.semester, "Summer");
+  assert.equal(partial.body.settings.systemName, "Updated Test System");
+  assert.equal(partial.body.settings.practiceQuizEnabled, true);
  } finally {
   if (pool) await pool.end();
   await bootstrap.query("DROP DATABASE IF EXISTS ??", [schema]); await bootstrap.end();

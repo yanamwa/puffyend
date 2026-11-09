@@ -93,9 +93,9 @@ function rowToSystemSettings(row) {
    settings are needed.
 ===================================================== */
 
-export async function getSystemSettingsConfig() {
+export async function getSystemSettingsConfig(database = db) {
   try {
-    const [rows] = await db.execute(
+    const [rows] = await database.execute(
       `SELECT *
        FROM system_settings
        ORDER BY setting_id ASC
