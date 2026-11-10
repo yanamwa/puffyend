@@ -1,3 +1,5 @@
+export const DUPLICATE_QUIZ_QUESTION = "DUPLICATE_QUIZ_QUESTION";
+
 function normalizeQuizText(value) {
   return String(value ?? "")
     .normalize("NFC")
@@ -18,7 +20,10 @@ export function validateQuizUniqueness(questions, previousQuestions = []) {
   for (const [index, item] of questions.entries()) {
     const question = normalizeQuestion(item.question);
     if (seen.has(question))
-      throw new Error(`Duplicate quiz question at position ${index + 1}.`);
+      throw Object.assign(
+        new Error(`Duplicate quiz question at position ${index + 1}.`),
+        { code: DUPLICATE_QUIZ_QUESTION },
+      );
     seen.add(question);
     if (item.type === "multiple_choice") {
       const options = item.options.map((option) =>

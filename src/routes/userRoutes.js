@@ -8,7 +8,7 @@ import { requireRole } from "../middleware/roleMiddleware.js";
 import {
   changeUserPassword,
   completeOnboarding,
-  completeStudentTutorial,
+  completeUserTutorial,
   grantProfessorAdminAccess,
   createProfessorAccount,
   createStudentAccount,
@@ -91,8 +91,8 @@ router.get("/users/me", authenticateAccountSetup, getCurrentUser);
 router.post(
   "/users/me/complete-tutorial",
   authenticateAccountSetup,
-  requireRole("student"),
-  completeStudentTutorial,
+  requireRole("student", "professor"),
+  completeUserTutorial,
 );
 
 router.put(

@@ -5,6 +5,10 @@ import {
   validateCoverageModules,
 } from "../../src/services/catalog/catalogRules.js";
 import { coverageHeadings } from "../../src/services/catalog/syllabusExtraction.js";
+import {
+  buildSyllabusIndex,
+  retrieveSyllabusExcerpts,
+} from "../../src/services/catalog/syllabusRetrieval.js";
 
 test("table labels without colons, split labels, wrapped descriptions and semester header autofill", () => {
   const result = parseSyllabus(
@@ -19,6 +23,101 @@ test("table labels without colons, split labels, wrapped descriptions and semest
     academic_year: "2024-2025",
     semester: "2nd Semester",
   });
+});
+
+function syllabusIndex(pages) {
+  let text = "";
+  const positions = pages.map(([page, content]) => {
+    const start = text.length;
+    text += content;
+    const end = text.length;
+    text += "\n\n";
+    return { page, start, end };
+  });
+  return buildSyllabusIndex({ text, positions });
+}
+
+test("retrieval finds a wrapped module title and prefers its reviewed source page", () => {
+  const index = syllabusIndex([
+    [2, "The Self from Various Perspectives\nOverview of course coverage"],
+    [
+      4,
+      "The Self from Various\nPerspectives\nPsychological and philosophical views of the self",
+    ],
+    [5, "Assessment instructions and grading"],
+  ]);
+  const excerpts = retrieveSyllabusExcerpts(index, {
+    title: "The Self from Various Perspectives",
+    source_page: 4,
+  });
+  assert.deepEqual(
+    excerpts.map(({ page }) => page),
+    [4, 2],
+  );
+  assert.match(excerpts[0].text, /Psychological and philosophical/);
+});
+
+test("retrieval prioritizes the matching section when a page contains several module headings", () => {
+  const index = syllabusIndex([
+    [
+      5,
+      [
+        "Communication Process and Its Components\nThe sender encodes the message.",
+        "Communication channels include verbal and written media. ".repeat(30),
+        "Evaluating Messages and/or Images\nReaders examine whether claims are credible.",
+      ].join("\n\n"),
+    ],
+  ]);
+  const excerpts = retrieveSyllabusExcerpts(index, {
+    title: "Evaluating Messages and/or Images",
+    source_page: 5,
+  });
+  assert.equal(excerpts[0].page, 5);
+  assert.match(excerpts[0].text, /Readers examine/);
+  assert.doesNotMatch(excerpts[0].text, /The sender encodes/);
+});
+
+test("retrieval follows a heading that continues across two pages", () => {
+  const index = syllabusIndex([
+    [5, "II. Local and Global Communication\nIII. Evaluating Messages and/or"],
+    [6, "Images\n1. What is the message?"],
+  ]);
+  const excerpts = retrieveSyllabusExcerpts(index, {
+    title: "Evaluating Messages and/or Images",
+    source_page: 5,
+  });
+  assert.deepEqual(
+    excerpts.map(({ page }) => page),
+    [5, 6],
+  );
+  assert.match(excerpts[1].text, /What is the message/);
+});
+
+test("retrieval can use reviewed topics, limits output, and ignores irrelevant source pages", () => {
+  const pageText = "Visual credibility and verification of claims. ".repeat(
+    150,
+  );
+  const index = syllabusIndex([
+    [4, "Course grading and class attendance"],
+    [8, pageText],
+  ]);
+  const excerpts = retrieveSyllabusExcerpts(index, {
+    title: "Evaluating Media",
+    topics: ["Visual credibility"],
+    source_page: 4,
+  });
+  assert.equal(excerpts.length, 3);
+  assert.ok(
+    excerpts.every(({ page, text }) => page === 8 && text.length <= 1000),
+  );
+  assert.deepEqual(
+    retrieveSyllabusExcerpts(index, {
+      title: "Introduction to Mathematics",
+      source_page: 4,
+    }),
+    [],
+  );
+  assert.deepEqual(retrieveSyllabusExcerpts([], { title: "Mathematics" }), []);
 });
 const item = (str, x, y, width = 60) => ({
   str,

@@ -1,4 +1,5 @@
 import { studentMainQuizHistory } from "../services/quizzes/studentQuizHistory.js";
+import { startModulePractice, submitModulePractice } from "../services/quizzes/modulePracticeService.js";
 import {
   saveMainQuizPreview,
   generateMainQuizPreview,
@@ -27,6 +28,23 @@ import {
 } from "../controllers/lessonController.js";
 
 const router = express.Router();
+const practiceHandler = (key, handler) => async (req, res) => {
+  try {
+    res.json({ success: true, [key]: await handler(req.user, req.body) });
+  } catch (error) {
+    if (!error.statusCode) console.error("Module Practice:", error.message);
+    res.status(error.statusCode || 500).json({
+      success: false,
+      ...(error.code === "QUICK_RECAP_REQUIRED" ? { code: error.code } : {}),
+      message: error.statusCode
+        ? error.message
+        : "Module Practice could not load. Please try again.",
+    });
+  }
+};
+router.post("/practice/start", authenticateUser, practiceHandler("attempt", startModulePractice));
+router.post("/practice/submit", authenticateUser, practiceHandler("result", submitModulePractice));
+
 const mainHandler = (handler) => async (req, res) => {
   try {
     res.json({ success: true, ...(await handler(req)) });

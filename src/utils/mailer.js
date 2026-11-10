@@ -38,21 +38,22 @@ function getSmtpConfig() {
   return config;
 }
 
-function createSmtpMailer() {
+async function sendEmail(message) {
   const config = getSmtpConfig();
-
-  return {
-    transporter: nodemailer.createTransport({
-      host: config.host,
-      port: config.port,
-      secure: config.port === 465,
-      auth: {
-        user: config.username,
-        pass: config.password,
-      },
-    }),
-    from: `"${config.fromName}" <${config.fromEmail}>`,
-  };
+  const transporter = nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.port === 465,
+    auth: {
+      user: config.username,
+      pass: config.password,
+    },
+  });
+  const from = `"${config.fromName}" <${config.fromEmail}>`;
+  const info = await transporter.sendMail({ from, ...message });
+  if (!info.accepted?.length) {
+    throw new Error("The mail server did not accept the recipient.");
+  }
 }
 
 function escapeHtml(value) {
@@ -65,9 +66,7 @@ function escapeHtml(value) {
 }
 
 export async function sendProfessorAdminAccessEmail({ email, name }) {
-  const { transporter, from } = createSmtpMailer();
-  await transporter.sendMail({
-    from,
+  await sendEmail({
     to: email,
     subject: "PuffyBrain admin access granted",
     text: [
@@ -80,30 +79,23 @@ export async function sendProfessorAdminAccessEmail({ email, name }) {
 }
 
 export async function sendQuizResultEmail(email, subject, report, result) {
-  const { transporter, from } = createSmtpMailer();
-  const info = await transporter.sendMail({
-    from,
+  await sendEmail({
     to: email,
     subject,
     text: report,
     html: renderQuizResultEmail(result),
   });
-  if (!info.accepted?.length)
-    throw new Error("The mail server did not accept the recipient.");
 }
 
 export async function sendOtpEmail(email, name, otp) {
-  const { transporter, from } = createSmtpMailer();
-
-  await transporter.sendMail({
-    from,
+  await sendEmail({
     to: email,
     subject: "PuffyBrain Verification Code",
     html: `
       <h2>Verify Your Email</h2>
-      <p>Hi ${name},</p>
+      <p>Hi ${escapeHtml(name)},</p>
       <p>Your PuffyBrain verification code is:</p>
-      <h1 style="letter-spacing:4px;">${otp}</h1>
+      <h1 style="letter-spacing:4px;">${escapeHtml(otp)}</h1>
       <p>This code expires in 5 minutes.</p>
       <p>The PuffyBrain Team</p>
     `,
@@ -117,9 +109,7 @@ export async function sendProfessorRegistrationDecisionEmail({ email, name, stat
   const message = approved
     ? "Your professor account has been approved by an administrator. You can sign in using your registered email and password once your email is verified."
     : "Your professor registration has been declined by an administrator. Your registration will be deleted after 24 hours, and you can register again using the same email address.";
-  const { transporter, from } = createSmtpMailer();
-  const info = await transporter.sendMail({
-    from,
+  await sendEmail({
     to: email,
     subject: `PuffyBrain — ${heading}`,
     text: `Hi ${name || "Professor"},\n\n${message}${approved ? "" : `\n\nReason for decline:\n${reason}`}\n\nPuffyBrain Team`,
@@ -133,16 +123,13 @@ export async function sendProfessorRegistrationDecisionEmail({ email, name, stat
       </div>
     </div>`,
   });
-  if (!info.accepted?.length) throw new Error("The mail server did not accept the recipient.");
 }
 
 export async function sendPasswordResetEmail(email, name, resetLink) {
-  const { transporter, from } = createSmtpMailer();
   const nameHtml = escapeHtml(name || "there");
   const resetLinkHtml = escapeHtml(resetLink);
 
-  await transporter.sendMail({
-    from,
+  await sendEmail({
     to: email,
     subject: "Reset your PuffyBrain password",
     html: `
@@ -188,11 +175,9 @@ export async function sendStudentTemporaryPasswordEmail(
   email,
   temporaryPassword,
 ) {
-  const { transporter, from } = createSmtpMailer();
   const passwordHtml = escapeHtml(temporaryPassword);
 
-  await transporter.sendMail({
-    from,
+  await sendEmail({
     to: email,
     subject: "Your Puffybrain temporary password",
     html: `
@@ -233,9 +218,7 @@ This email was sent because a temporary password was generated for your account.
 }
 
 export async function sendEnrollmentAcceptedEmail(email, studentName, courseName) {
-  const { transporter, from } = createSmtpMailer();
-  await transporter.sendMail({
-    from,
+  await sendEmail({
     to: email,
     subject: `PuffyBrain Enrollment Approved - ${courseName}`,
     text: `Hi ${studentName},\n\nYour enrollment in ${courseName} has been approved. The course is now available in Enrolled Courses.\n\nPuffyBrain`,
@@ -249,15 +232,12 @@ export async function sendEnrollmentDeclinedEmail(
   courseCode,
   reason,
 ) {
-  const { transporter, from } = createSmtpMailer();
-
   const nameHtml = escapeHtml(studentName || "Student");
   const courseNameHtml = escapeHtml(courseName || "your course");
   const courseCodeHtml = escapeHtml(courseCode || "");
   const reasonHtml = escapeHtml(reason);
 
-  await transporter.sendMail({
-    from,
+  await sendEmail({
     to: email,
     subject: `Enrollment Request Declined - ${courseName}`,
 
@@ -337,14 +317,11 @@ export async function sendEnrollmentRequestEmail(
   studentName,
   courseName,
 ) {
-  const { transporter, from } = createSmtpMailer();
-
   const professorNameHtml = escapeHtml(professorName || "Professor");
   const studentNameHtml = escapeHtml(studentName || "A student");
   const courseNameHtml = escapeHtml(courseName || "your course");
 
-  await transporter.sendMail({
-    from,
+  await sendEmail({
     to: professorEmail,
     subject: `New Enrollment Request - ${courseName}`,
 
@@ -469,8 +446,6 @@ export async function sendStudentUnenrolledEmail(
   reason,
   professorName,
 ) {
-  const { transporter, from } = createSmtpMailer();
-
   const nameHtml = escapeHtml(studentName || "Student");
 
   const courseNameHtml = escapeHtml(courseName || "your course");
@@ -479,8 +454,7 @@ export async function sendStudentUnenrolledEmail(
 
   const professorNameHtml = escapeHtml(professorName || "Professor");
 
-  await transporter.sendMail({
-    from,
+  await sendEmail({
     to: email,
 
     subject: `Course Unenrollment - ${courseName}`,

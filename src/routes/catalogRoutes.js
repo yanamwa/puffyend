@@ -6,11 +6,14 @@ import multer from "multer";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { db } from "../db.js";
 import authenticateUser from "../middleware/authMiddleware.js";
 import { requireRole } from "../middleware/roleMiddleware.js";
 import { extractSyllabus } from "../services/catalog/syllabusExtraction.js";
+import {
+  syllabusDirectory as directory,
+  syllabusFilePath as filePath,
+} from "../services/catalog/syllabusStorage.js";
 import { validateCoverageModules } from "../services/catalog/catalogRules.js";
 import {
   catalogDetails,
@@ -21,9 +24,6 @@ import { getRequestIp } from "../services/system/auditLogService.js";
 
 const router = express.Router();
 const admin = requireRole("admin", "super_admin");
-const directory = fileURLToPath(
-  new URL("../private/syllabi/", import.meta.url),
-);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024, files: 1, fields: 0 },
@@ -56,10 +56,6 @@ const windowFor = (req) => ({
   page: Math.max(1, parseInt(req.query.page) || 1),
   size: Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 10)),
 });
-const filePath = (name) => {
-  if (!/^[a-f0-9]{36}\.pdf$/.test(name)) fail("Invalid file reference.", 404);
-  return path.join(directory, name);
-};
 async function transaction(fn) {
   const connection = await db.getConnection();
   try {

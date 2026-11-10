@@ -17,6 +17,7 @@ import {
   assertPrivatePath,
 } from "../services/rag/sourceLifecycleService.js";
 import { generateQuizWithRag } from "../services/rag/quizRagService.js";
+import { generateModuleRecap } from "../services/quizzes/moduleRecapService.js";
 
 function reportError(res, error) {
   console.error("Lesson RAG:", error.message);
@@ -196,9 +197,13 @@ export async function generateLessonQuiz(req, res) {
         "Configure Main Quiz separately. Personalized questions are generated when the student starts Main Quiz.",
     });
   try {
-    const result = await generateQuizWithRag({
+    const body = req.body || {};
+    const generate = body.assessment_type === "recap"
+      ? generateModuleRecap
+      : generateQuizWithRag;
+    const result = await generate({
       user: req.user,
-      body: req.body || {},
+      body,
     });
     return res.json({
       success: true,
@@ -216,7 +221,9 @@ export async function generateLessonQuiz(req, res) {
             lots_count: result.lotsCount,
             hots_count: result.hotsCount,
           }
-        : {}),
+        : result.assessmentType === "recap"
+          ? { assessment_type: "recap" }
+          : {}),
       difficulty: result.difficulty,
       document_ids: result.document_ids,
       rag_version: "quiz-1",

@@ -1,8 +1,10 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import nodemailer from "nodemailer";
 import { db } from "../src/db.js";
 import { updateProfessorRegistration } from "../src/controllers/userController.js";
+
+after(() => db.end());
 
 function response() {
   return {
@@ -46,6 +48,7 @@ for (const status of ["approved", "declined"]) {
     });
     context.mock.method(db, "execute", async (sql, values) => {
       queries.push({ sql, values });
+      if (sql.includes("FROM system_settings")) return [[{ professor_approval_notification: 1 }]];
       if (sql.includes("SELECT")) return [[{ id: 1, userId: 1, role: "professor", name: "Professor Test", email: "professor@example.test", verification_status: status }]];
       return [{ affectedRows: 1, insertId: 1 }];
     });
@@ -66,9 +69,11 @@ for (const status of ["approved", "declined"]) {
 
 test("mail failure reports the saved decision without claiming the email was sent", async (context) => {
   mockMailer(context, async () => { throw new Error("Test delivery failure"); });
-  context.mock.method(db, "execute", async (sql) => sql.includes("SELECT")
-    ? [[{ id: 1, userId: 1, role: "professor", email: "professor@example.test", verification_status: "approved" }]]
-    : [{ affectedRows: 1, insertId: 1 }]);
+  context.mock.method(db, "execute", async (sql) => {
+    if (sql.includes("FROM system_settings")) return [[{ professor_approval_notification: 1 }]];
+    if (sql.includes("SELECT")) return [[{ id: 1, userId: 1, role: "professor", email: "professor@example.test", verification_status: "approved" }]];
+    return [{ affectedRows: 1, insertId: 1 }];
+  });
   context.mock.method(console, "error", () => {});
   const result = response();
   await updateProfessorRegistration({ params: { id: "1" }, body: { status: "approved" } }, result);

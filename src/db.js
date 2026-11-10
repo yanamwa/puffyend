@@ -414,6 +414,39 @@ async function initMonitoringTables() {
     answers_json TEXT NOT NULL, module_index INT NULL
   )`);
 
+  await db.execute(`CREATE TABLE IF NOT EXISTS module_practice_attempts (
+    attempt_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    course_id INT NOT NULL,
+    module_id VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    question_format ENUM('mixed', 'qna') NOT NULL DEFAULT 'mixed',
+    previous_attempt_id INT NOT NULL,
+    questions_json LONGTEXT NOT NULL,
+    result_json LONGTEXT NULL,
+    completed_at TIMESTAMP(6) NULL DEFAULT NULL,
+    UNIQUE KEY module_practice_sequence_by_format (user_id, course_id, module_id, question_format, previous_attempt_id)
+  )`);
+  await ensureTableColumn(
+    "module_practice_attempts",
+    "question_format",
+    "question_format ENUM('mixed', 'qna') NOT NULL DEFAULT 'mixed'",
+  );
+  await ensureTableColumn(
+    "module_practice_attempts",
+    "completed_at",
+    "completed_at TIMESTAMP(6) NULL DEFAULT NULL",
+  );
+  const [legacyPracticeIndex] = await db.execute(
+    "SHOW INDEX FROM module_practice_attempts WHERE Key_name = 'module_practice_sequence'",
+  );
+  if (legacyPracticeIndex.length) {
+    await db.execute(`
+      ALTER TABLE module_practice_attempts
+        DROP INDEX module_practice_sequence,
+        ADD UNIQUE KEY module_practice_sequence_by_format (user_id, course_id, module_id, question_format, previous_attempt_id)
+    `);
+  }
+
   await db.execute(`
     CREATE TABLE IF NOT EXISTS performance_analytics (
       analytics_id SERIAL PRIMARY KEY,
@@ -556,7 +589,10 @@ export async function initDb({ migrate = false } = {}) {
       profile_image VARCHAR(500) NULL,
       year_level VARCHAR(50) NULL,
       section_name VARCHAR(20) NULL,
-      onboarding_completed SMALLINT NOT NULL DEFAULT 0,
+      course VARCHAR(255) NULL,
+      onboarding_completed TINYINT(1) NOT NULL DEFAULT 0,
+      student_tutorial_pending TINYINT(1) NOT NULL DEFAULT 0,
+      professor_tutorial_pending TINYINT(1) NOT NULL DEFAULT 0,
       verification_id VARCHAR(100) NULL,
       student_id VARCHAR(100) NULL,
       professor_id VARCHAR(100) NULL,
@@ -609,6 +645,10 @@ export async function initDb({ migrate = false } = {}) {
   await ensureColumn(
     "student_tutorial_pending",
     "student_tutorial_pending SMALLINT NOT NULL DEFAULT 0",
+  );
+  await ensureColumn(
+    "professor_tutorial_pending",
+    "professor_tutorial_pending TINYINT(1) NOT NULL DEFAULT 0",
   );
   await ensureColumn("verification_id", "verification_id VARCHAR(100) NULL");
   await ensureColumn("student_id", "student_id VARCHAR(100) NULL");
