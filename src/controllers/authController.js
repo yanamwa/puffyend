@@ -7,6 +7,7 @@ import { db } from "../db.js";
 import { cleanupDeclinedRegistrations } from "../services/declinedRegistrationCleanup.js";
 import { sendOtpEmail, sendPasswordResetEmail } from "../utils/mailer.js";
 import { hasPendingStudentTutorial } from "../utils/studentTutorial.js";
+import { hasPendingProfessorTutorial } from "../utils/professorTutorial.js";
 import { hasProfessorAdminAccess } from "../utils/professorAdminAccess.js";
 
 import {
@@ -189,6 +190,7 @@ function authUserPayload(user, role = user.role) {
 
     onboarding_completed: Number(user.onboarding_completed) === 1 ? 1 : 0,
     studentTutorialPending: hasPendingStudentTutorial(user),
+    professorTutorialPending: hasPendingProfessorTutorial(user),
 
     verificationStatus: user.verification_status,
 
@@ -361,7 +363,8 @@ export async function signup(req, res) {
            otp_code,
            otp_expires,
            is_verified,
-           onboarding_completed
+           onboarding_completed,
+           professor_tutorial_pending
          )
          VALUES (
            ?,
@@ -382,6 +385,7 @@ export async function signup(req, res) {
              INTERVAL ? SECOND
            ),
            0,
+           1,
            1
          )`,
       [
@@ -688,7 +692,19 @@ export async function resendOtp(req, res) {
       });
     }
 
-    await sendOtpEmail(user.email, user.name, otp);
+    try {
+      await sendOtpEmail(user.email, user.name, otp);
+    } catch (emailError) {
+      try {
+        await db.execute(
+          "UPDATE users SET otp_code = NULL, otp_expires = NULL WHERE userId = ? AND otp_code = ? AND is_verified = 0",
+          [user.userId, otp],
+        );
+      } catch (cleanupError) {
+        console.error("Resend OTP cleanup error:", cleanupError);
+      }
+      throw emailError;
+    }
 
     const otpSecondsRemaining = await getOtpTiming(user.userId);
 
@@ -787,8 +803,8 @@ export async function forgotPassword(req, res) {
            SET
              password_reset_token = NULL,
              password_reset_expires = NULL
-           WHERE userId = ?`,
-          [user.userId],
+           WHERE userId = ? AND password_reset_token = ?`,
+          [user.userId, tokenHash],
         );
       } catch (cleanupError) {
         console.error("Password reset token cleanup error:", cleanupError);

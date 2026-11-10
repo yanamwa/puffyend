@@ -731,6 +731,33 @@ export async function getQuizAttempts(req, res) {
   const quizMode = req.query.quizMode || req.query.quiz_mode || "";
 
   try {
+    if (
+      source === "module" &&
+      quizMode === "adaptive_practice" &&
+      req.query.moduleId !== undefined
+    ) {
+      const courseId = Number(req.query.courseId);
+      const moduleId =
+        typeof req.query.moduleId === "string" ? req.query.moduleId.trim() : "";
+      if (
+        !Number.isSafeInteger(courseId) ||
+        courseId < 1 ||
+        !moduleId ||
+        moduleId.length > 100
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "A course and module are required.",
+        });
+      }
+      const [[row]] = await db.execute(
+        `SELECT COUNT(*) AS attempts FROM module_practice_attempts
+         WHERE user_id = ? AND course_id = ? AND module_id = ? AND result_json IS NOT NULL`,
+        [req.user.userId, courseId, moduleId],
+      );
+      return res.json({ success: true, attempts: Number(row.attempts) });
+    }
+
     const where = ["user_id = ?"];
     const params = [req.user.userId];
 

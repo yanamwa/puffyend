@@ -233,6 +233,33 @@ await test("duplicate stems and choices are rejected without rejecting shared an
   );
 });
 
+await test("short-answer generation repairs questions that require options", async () => {
+  let draftCount = 0;
+  const result = await generateQuizBatch(
+    { types: ["identification"], skills: ["LOTS"], chunks, shortAnswer: true },
+    async (request) => {
+      if (!request.schema.properties.questions)
+        return { verdicts: [{ question_index: 0, supported: true }] };
+      draftCount++;
+      assert.match(request.instruction, /standalone question/);
+      if (draftCount === 2) assert.match(request.data.correction, /Remove references to choices/);
+      return {
+        questions: [{
+          ...question,
+          type: "identification",
+          options: [],
+          correct_answer: "Photosynthesis",
+          question: draftCount === 1
+            ? "Which of the following processes uses sunlight to produce food?"
+            : "What process do plants use to produce food with sunlight?",
+        }],
+      };
+    },
+  );
+  assert.equal(draftCount, 2);
+  assert.equal(result[0].question, "What process do plants use to produce food with sunlight?");
+});
+
 await test("duplicate batches repair within the existing three-draft limit", async () => {
   let drafts = 0,
     reviews = 0;
@@ -274,7 +301,9 @@ await test("duplicate batches repair within the existing three-draft limit", asy
       },
     ),
     (error) =>
-      error.statusCode === 422 && /Duplicate quiz question/.test(error.message),
+      error.statusCode === 422 &&
+      error.code === "DUPLICATE_QUIZ_QUESTION" &&
+      /Duplicate quiz question/.test(error.message),
   );
   assert.equal(drafts, 3);
   let calls = 0;

@@ -15,6 +15,7 @@ import {
 import { createNotification } from "../utils/notification.js";
 import { logAuditFromRequest } from "../services/system/auditLogService.js";
 import { hasPendingStudentTutorial } from "../utils/studentTutorial.js";
+import { hasPendingProfessorTutorial } from "../utils/professorTutorial.js";
 import {
   hasProfessorAdminAccess,
   isApprovedProfessor,
@@ -313,6 +314,7 @@ function rowToSessionUser(user, role) {
     role: role || user.role,
     primaryRole: user.role,
     studentTutorialPending: hasPendingStudentTutorial(user),
+    professorTutorialPending: hasPendingProfessorTutorial(user),
   };
 }
 
@@ -470,6 +472,7 @@ export async function getUserById(req, res) {
 
 export async function createStudentAccount(req, res) {
   const email = cleanEmail(req.body.email);
+  const course = cleanText(req.body.course || req.body.program);
   const name = cleanText(req.body.name || req.body.displayName);
   const studentId = cleanText(req.body.studentId || req.body.student_id);
 
@@ -494,6 +497,13 @@ export async function createStudentAccount(req, res) {
       success: false,
       message:
         "Student name, email, Student ID, gender, year level, and section are required.",
+    });
+  }
+
+  if (course.length > 255) {
+    return res.status(400).json({
+      success: false,
+      message: "Course / Program must be 255 characters or fewer.",
     });
   }
 
@@ -591,6 +601,7 @@ export async function createStudentAccount(req, res) {
         student_tutorial_pending,
         year_level,
         section_name,
+        course,
         must_change_password,
         is_archived,
         is_temporary,
@@ -612,6 +623,7 @@ export async function createStudentAccount(req, res) {
         ?,
         ?,
         ?,
+        ?,
         0,
         ?,
         ?
@@ -626,6 +638,7 @@ export async function createStudentAccount(req, res) {
         gender,
         yearLevel,
         sectionName,
+        course || null,
         Number(mustChangePassword),
         temporaryAccount.isTemporary,
         temporaryAccount.temporaryExpiresAt,
@@ -674,8 +687,10 @@ export async function createStudentAccount(req, res) {
        SEND TEMPORARY PASSWORD EMAIL
     ================================================= */
 
+    let credentialsEmailed = false;
     try {
       await sendStudentTemporaryPasswordEmail(email, temporaryPassword);
+      credentialsEmailed = true;
     } catch (emailError) {
       console.error("Student temporary password email error:", emailError);
     }
@@ -705,6 +720,7 @@ export async function createStudentAccount(req, res) {
       success: true,
       message: "Student account created.",
       temporaryPassword,
+      credentialsEmailed,
       user: rowToUser(rows[0]),
     });
   } catch (error) {
@@ -923,6 +939,7 @@ export async function createProfessorAccount(req, res) {
         verification_status,
         is_verified,
         onboarding_completed,
+        professor_tutorial_pending,
         must_change_password,
         is_archived,
         is_temporary,
@@ -943,6 +960,7 @@ export async function createProfessorAccount(req, res) {
         ?,
 
         'approved',
+        1,
         1,
         1,
         ?,
@@ -1650,6 +1668,7 @@ export async function getCurrentUser(req, res) {
           section_name, course,
           onboarding_completed,
           student_tutorial_pending,
+          professor_tutorial_pending,
           is_verified,
           verification_id,
           student_id,
@@ -1688,6 +1707,7 @@ export async function getCurrentUser(req, res) {
           section_name, course,
           onboarding_completed,
           student_tutorial_pending,
+          professor_tutorial_pending,
           is_verified,
           verification_id,
           student_id,
@@ -1896,8 +1916,26 @@ export async function updateOnboardingSection(req, res) {
   }
 }
 
-export async function completeStudentTutorial(req, res) {
+export async function completeUserTutorial(req, res) {
   try {
+    if (req.user.role === "professor") {
+      const [result] = await db.execute(
+        `UPDATE users SET professor_tutorial_pending = 0
+         WHERE userId = ? AND role = 'professor'
+           AND verification_status = 'approved' AND is_archived = 0`,
+        [req.user.userId],
+      );
+      if (!result.affectedRows) {
+        return res.status(409).json({
+          success: false,
+          message: "Your account status changed. Refresh and try again.",
+        });
+      }
+      return res.json({
+        success: true,
+        user: { professorTutorialPending: false },
+      });
+    }
     await db.execute(
       `UPDATE users
        SET onboarding_completed = 1, student_tutorial_pending = 0
@@ -1907,7 +1945,7 @@ export async function completeStudentTutorial(req, res) {
     );
     return res.json({ success: true });
   } catch (error) {
-    console.error("Complete student tutorial error:", error);
+    console.error("Complete user tutorial error:", error);
     return res.status(500).json({
       success: false,
       message: "Could not save the tutorial. Please try again.",

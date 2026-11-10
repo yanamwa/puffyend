@@ -7,7 +7,7 @@ import jwt from "jsonwebtoken";
 import { db } from "../db.js";
 import { deleteWithSources } from "../services/rag/sourceLifecycleService.js";
 import authenticateUser from "../middleware/authMiddleware.js";
-import { assertCourseAccess } from "../services/rag/courseAccessService.js";
+import { assertCourseAccess, requestError } from "../services/rag/courseAccessService.js";
 
 async function authenticateDeletion(req, res) {
   if (req.user) return true;
@@ -2380,6 +2380,46 @@ export async function getCourseById(req, res) {
       message: "Failed to fetch course.",
     });
   }
+}
+
+export async function getEnrolledPracticeModule(user, courseId, moduleId) {
+  if (user?.role !== "student")
+    throw requestError("Only enrolled students can take Module Practice.", 403);
+
+  const idColumn = await getCourseIdColumn();
+  const [rows] = await db.execute(
+    `SELECT c.* FROM courses c
+     JOIN course_enrollments e ON e.course_id = c.${idColumn}
+     WHERE c.${idColumn} = ? AND e.user_id = ? AND e.status = 'approved'
+       AND COALESCE(c.archived, 0) = 0 AND COALESCE(e.archived, 0) = 0 LIMIT 1`,
+    [courseId, user.userId],
+  );
+  const row = rows[0];
+  if (!row)
+    throw requestError("You are not enrolled in an active course.", 403);
+
+  const hasFlatContent =
+    parseJsonList(row.lesson_pages).length || parseJsonList(row.quiz_items).length;
+  const learningModules = hasFlatContent
+    ? []
+    : (await getCourseLearningModules([courseId])).get(String(courseId)) || [];
+  const { contentModules } = rowToCourse(row, learningModules);
+  const matches = (id) => id != null && String(id) === moduleId;
+  const index = contentModules.findIndex((module) => matches(module.id));
+  const moduleIndex = index === -1
+    ? contentModules.findIndex((module) =>
+        [module.module_id, module.lesson_id].some(matches),
+      )
+    : index;
+  const module = contentModules[moduleIndex];
+  if (!module) throw requestError("Module not found.", 404);
+  if (
+    contentModules.some((item) => item.studentPublished !== undefined) &&
+    module.studentPublished !== true
+  )
+    throw requestError("This module has not been uploaded to students yet.", 403);
+
+  return { ...module, moduleIndex };
 }
 
 export async function joinCourseByCode(req, res) {

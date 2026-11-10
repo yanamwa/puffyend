@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { syllabusFilePath } from "../../src/services/catalog/syllabusStorage.js";
 import {
   generateCatalogModule,
   runCatalogLessons,
 } from "../../src/services/catalog/catalogLessonGeneration.js";
+
+const storageName = `${"a".repeat(36)}.pdf`;
+
 test("module lessons use reviewed title, remain marked as drafts and reject empty AI output", async () => {
   const module = { title: "Introduction to Programming", source_page: 4 };
   const result = await generateCatalogModule(
@@ -140,6 +144,7 @@ test("catalog worker never persists an exhausted duplicate quiz", async () => {
               [
                 {
                   version_id: 1,
+                  storage_name: storageName,
                   coverage_modules: JSON.stringify([{ title: "Variables" }]),
                 },
               ],
@@ -157,11 +162,17 @@ test("catalog worker never persists an exhausted duplicate quiz", async () => {
   };
   await runCatalogLessons(
     { getConnection: async () => connection },
-    async () => {
+    async ({ data }) => {
+      assert.deepEqual(data.syllabus_excerpts, []);
       calls++;
       const draft = moduleDraft();
       draft.quiz_items[1] = draft.quiz_items[0];
       return draft;
+    },
+    async () => {
+      throw Object.assign(new Error("No searchable text found."), {
+        statusCode: 422,
+      });
     },
   );
   assert.equal(calls, 3);
@@ -174,10 +185,13 @@ test("catalog worker never persists an exhausted duplicate quiz", async () => {
   assert.match(failed.args[0], /Duplicate quiz question/);
 });
 
-test("catalog worker saves the repaired full quiz with lesson metadata", async () => {
+test("catalog worker retrieves per-module PDF context once per version and keeps it during repair", async () => {
   const writes = [];
   let calls = 0,
-    commits = 0;
+    commits = 0,
+    reads = 0;
+  const variables = "Variables\nConstants, values and assignment expressions.";
+  const recursion = "Recursion\nBase cases and recursive calls.";
   const connection = {
     query: async (sql) =>
       sql.includes("GET_LOCK")
@@ -188,8 +202,10 @@ test("catalog worker saves the repaired full quiz with lesson metadata", async (
               [
                 {
                   version_id: 1,
+                  storage_name: storageName,
                   coverage_modules: JSON.stringify([
                     { title: "Variables", source_page: 4 },
+                    { title: "Recursion", source_page: 9 },
                   ]),
                 },
               ],
@@ -207,17 +223,45 @@ test("catalog worker saves the repaired full quiz with lesson metadata", async (
   };
   await runCatalogLessons(
     { getConnection: async () => connection },
-    async () => {
+    async ({ data }) => {
       calls++;
+      const expectedPage = data.module_title === "Variables" ? 4 : 9;
+      assert.deepEqual(
+        data.syllabus_excerpts.map(({ page }) => page),
+        [expectedPage],
+      );
+      assert.match(
+        data.syllabus_excerpts[0].text,
+        expectedPage === 4 ? /assignment expressions/ : /Base cases/,
+      );
       const draft = moduleDraft();
       if (calls === 1) draft.quiz_items[1] = draft.quiz_items[0];
       return draft;
     },
+    async (file) => {
+      reads++;
+      assert.deepEqual(file, {
+        originalname: storageName,
+        path: syllabusFilePath(storageName),
+      });
+      return {
+        text: `${variables}\n\n${recursion}`,
+        positions: [
+          { start: 0, end: variables.length, page: 4 },
+          {
+            start: variables.length + 2,
+            end: variables.length + 2 + recursion.length,
+            page: 9,
+          },
+        ],
+      };
+    },
   );
-  assert.equal(calls, 2);
-  assert.equal(commits, 1);
+  assert.equal(calls, 3);
+  assert.equal(commits, 2);
+  assert.equal(reads, 1);
   const saved = JSON.parse(
-    writes.find((write) => write.sql.includes("UPDATE syllabus_versions"))
+    writes.findLast((write) => write.sql.includes("UPDATE syllabus_versions"))
       .args[0],
   );
   assert.equal(saved[0].quiz_items.length, 5);
@@ -227,5 +271,6 @@ test("catalog worker saves the repaired full quiz with lesson metadata", async (
   );
   assert.equal(saved[0].source_page, 4);
   assert.equal(saved[0].generated_draft, true);
+  assert.equal(saved[1].quiz_items.length, 5);
   assert.ok(writes.some((write) => write.sql.includes("status='completed'")));
 });

@@ -98,7 +98,7 @@ async function authenticate(req, res, next, allowAccountSetup) {
 
     const primaryRole = normalizeRole(user.role);
     if (
-      primaryRole !== "super_admin" &&
+      !["super_admin", "professor"].includes(primaryRole) &&
       Number(user.must_change_password) === 1 &&
       !allowAccountSetup
     ) {

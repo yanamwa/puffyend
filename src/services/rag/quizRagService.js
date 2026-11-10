@@ -1,5 +1,8 @@
 import { validateAdaptiveQuestions } from "../quizzes/mainQuizAdaptive.js";
-import { validateQuizUniqueness } from "../quizzes/quizValidation.js";
+import {
+  DUPLICATE_QUIZ_QUESTION,
+  validateQuizUniqueness,
+} from "../quizzes/quizValidation.js";
 import { db } from "../../db.js";
 import { loadChunks } from "./vectorRepository.js";
 import { retrieveContexts } from "./retrievalService.js";
@@ -292,6 +295,8 @@ export async function generateQuizBatch(
     mainPrompt,
     assignedSlots = [],
     previousQuestions = [],
+    practiceFocus,
+    shortAnswer = false,
     onValidated,
   },
   generate = generateJson,
@@ -320,6 +325,7 @@ export async function generateQuizBatch(
     ];
   }
   let correction = "",
+    duplicateStem = false,
     previousDraft = null,
     previousReview = null;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -355,6 +361,20 @@ export async function generateQuizBatch(
                 `Return question, type, options, correct_answer, explanation, topic, cognitive_level, thinking_skill, evidence_ids in valid JSON.`,
                 `Keep fields under 500 characters and identification answers under 150.`,
                 `Repair rejected questions using reviewer reasons.`,
+                ...(shortAnswer
+                  ? [
+                      "Students type an answer with no options on screen. Write each question as a standalone question ending in a question mark, with enough context to answer it on its own.",
+                      "Ask for one specific term, short phrase, or fact. Avoid lists of possible answers, 'which of the following', references to choices, and True/False or Yes/No prompts.",
+                      "Use direct questions like 'What is the first step in [named process]?' or 'What term describes [specific concept]?' These templates are style guides, never evidence.",
+                    ]
+                  : []),
+                ...(practiceFocus
+                  ? [
+                      "Use practice_focus.target_count questions to check the concepts described by practice_focus.missed_concepts. Use the remaining questions to review other concepts where the supplied evidence covers them.",
+                      "If none of the missed concepts appear in the supplied evidence, cover other concepts supported by the supplied evidence.",
+                      "Use different wording and contexts from the missed questions. Missed concepts are learning targets and never evidence.",
+                    ]
+                  : []),
               ].join(" ")
             : [
                 "Generate exactly the requested question types in the supplied order using ONLY evidence.",
@@ -388,6 +408,7 @@ export async function generateQuizBatch(
                 thinking_skills: skills,
                 lesson_content: lessonContent,
                 quiz_distribution: distribution,
+                ...(practiceFocus ? { practice_focus: practiceFocus } : {}),
               }
             : {}),
           evidence: buildEvidence(chunks),
@@ -405,6 +426,16 @@ export async function generateQuizBatch(
         skills,
         previousQuestions,
       );
+      if (
+        shortAnswer &&
+        questions.some(({ question, correct_answer }) =>
+          !question.endsWith("?") ||
+          /\b(?:of (?:the following|these|those)|(?:options|choices|statements) (?:above|below)|(?:choose|select) (?:the |an? )?(?:(?:correct|best) )?(?:option|answer|statement)|(?:true or false|yes or no))\b/i.test(question) ||
+          /^(?:true|false|yes|no)[.!?]?$/i.test(correct_answer),
+        )
+      ) {
+        throw new Error("Q&A questions must stand alone and ask for a short typed answer. Remove references to choices or binary answers.");
+      }
       if (mainPrompt)
         validateAdaptiveQuestions(questions, assignedSlots, previousQuestions);
       const review = await generate({
@@ -413,6 +444,9 @@ export async function generateQuizBatch(
           "Independently audit every question against its exact source quotes.",
           "supported=true only if the question is answerable, the correct answer and ALL explanation claims follow from the quotes, and multiple choice has exactly one correct option (check every distractor for ambiguity).",
           "Identification must have a unique short answer and must not reveal it.",
+          ...(shortAnswer
+            ? ["Reject any question a student cannot answer without choices, and any question that only asks for a True/False or Yes/No response."]
+            : []),
           "For True/False, check the truth value from evidence.",
           "For practice questions also verify that the topic is supported and the cognitive level reflects the actual reasoning required, with LOTS=Remember/Understand/Apply and HOTS=Analyze/Evaluate/Create.",
           "Do not rely on prior knowledge.",
@@ -427,12 +461,15 @@ export async function generateQuizBatch(
     } catch (error) {
       if (error.statusCode || error.retryable) throw error;
       correction = error.message;
+      duplicateStem = error.code === DUPLICATE_QUIZ_QUESTION;
     }
   }
-  throw requestError(
+  const error = requestError(
     `Generated quiz did not pass validation after two repair attempts: ${correction}`,
     422,
   );
+  if (duplicateStem) error.code = DUPLICATE_QUIZ_QUESTION;
+  throw error;
 }
 
 export async function generateQuizWithRag({ user, body }) {
