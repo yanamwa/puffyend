@@ -674,8 +674,10 @@ export async function createStudentAccount(req, res) {
        SEND TEMPORARY PASSWORD EMAIL
     ================================================= */
 
+    let temporaryPasswordEmailSent = false;
     try {
       await sendStudentTemporaryPasswordEmail(email, temporaryPassword);
+      temporaryPasswordEmailSent = true;
     } catch (emailError) {
       console.error("Student temporary password email error:", emailError);
     }
@@ -705,6 +707,7 @@ export async function createStudentAccount(req, res) {
       success: true,
       message: "Student account created.",
       temporaryPassword,
+      temporaryPasswordEmailSent,
       user: rowToUser(rows[0]),
     });
   } catch (error) {
