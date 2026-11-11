@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { JWT_SECRET } from "../config/security.js";
 import { authenticateAccountSetup } from "./authMiddleware.js";
 import { isMaintenanceModeEnabled } from "../services/system/systemSettingsService.js";
 
@@ -26,7 +27,9 @@ export default async function enforceMaintenanceMode(req, res, next) {
   let role;
   try {
     if (header.startsWith("Bearer ")) {
-      role = jwt.verify(header.slice(7), process.env.JWT_SECRET || "puffybrain-secret").role;
+      // Always verify with the same configured key used to issue API tokens.
+      // A fallback here made maintenance checks disagree with authMiddleware.
+      role = jwt.verify(header.slice(7), JWT_SECRET, { algorithms: ["HS256"] }).role;
     }
   } catch {
     return sendMaintenanceResponse(res);
