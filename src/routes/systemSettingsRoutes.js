@@ -4,11 +4,15 @@ import authenticateUser from "../middleware/authMiddleware.js";
 import { requireRole } from "../middleware/roleMiddleware.js";
 
 import {
+  getPublicSystemStatus,
   getSystemSettings,
   updateSystemSettings,
 } from "../controllers/systemSettingsController.js";
 
 const router = express.Router();
+
+// Public, read-only status used by the app shell before a user signs in.
+router.get("/status", getPublicSystemStatus);
 
 /* =====================================================
    SYSTEM SETTINGS
