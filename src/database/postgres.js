@@ -8,16 +8,13 @@ export function postgresConfig(env = process.env) {
   if (!/^[a-z_][a-z0-9_]*$/.test(schema))
     throw new Error("DB_SCHEMA must be a lowercase PostgreSQL schema name.");
   const connectionString = env.DATABASE_URL || env.SUPABASE_DB_URL;
-  if (env.NODE_ENV === "production" && !connectionString)
+  if (!connectionString)
     throw new Error(
-      "Set DATABASE_URL to your PostgreSQL connection string (port 5432).",
+      "DATABASE_URL is missing. Set it to a PostgreSQL connection string (port 5432); DB_HOST/DB_USER/DB_PASSWORD/DB_NAME are not used by this backend.",
     );
   let url;
   try {
-    url = new URL(
-      connectionString ||
-        "postgresql://postgres:postgres@127.0.0.1:5432/postgres",
-    );
+    url = new URL(connectionString);
   } catch {
     throw new Error(
       "DATABASE_URL is not a valid PostgreSQL connection string.",
