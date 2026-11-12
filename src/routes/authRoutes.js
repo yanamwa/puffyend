@@ -4,6 +4,7 @@ import {
   signup,
   login,
   logout,
+  recordSessionActivity,
   resetPassword,
   verifyEmail,
   resendOtp,
@@ -38,6 +39,7 @@ router.post("/signup", handleSignupUpload, signup);
 router.post("/login", login);
 router.post("/switch-role", authenticateUser, switchProfessorRole);
 router.post("/logout", authenticateAccountSetup, logout);
+router.post("/activity", authenticateAccountSetup, recordSessionActivity);
 router.post("/verify-email", verifyEmail);
 router.post("/resend-otp", resendOtp);
 router.post("/forgot-password", forgotPassword);

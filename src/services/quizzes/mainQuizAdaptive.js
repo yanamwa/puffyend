@@ -14,6 +14,31 @@ export const normalizeAnswer = (value) =>
     .trim()
     .replace(/\s+/g, " ")
     .toLowerCase();
+
+export function answersMatchQuestion(answer, question) {
+  const normalizedAnswer = normalizeAnswer(answer);
+  if (!normalizedAnswer) return false;
+  const candidates = [question?.correct_answer];
+  if (question?.type === "identification") {
+    for (const field of [
+      "accepted_answers",
+      "acceptedAnswers",
+      "acceptable_answers",
+      "acceptableAnswers",
+      "answer_aliases",
+      "answerAliases",
+      "alternatives",
+    ]) {
+      const value = question[field];
+      if (Array.isArray(value)) candidates.push(...value);
+      else if (typeof value === "string")
+        candidates.push(...value.split(/\r?\n/));
+    }
+  }
+  return candidates.some(
+    (candidate) => normalizeAnswer(candidate) === normalizedAnswer,
+  );
+}
 export const skillForLevel = (level) =>
   LEVELS.indexOf(level) < 3 ? "LOTS" : "HOTS";
 export function validateMainSettings(body) {
@@ -280,9 +305,7 @@ export function gradeMainQuiz(questions, answers, passingPercentage) {
   const responses = questions.map((question, index) => ({
     ...question,
     selected_answer: answers[index],
-    isCorrect:
-      normalizeAnswer(answers[index]) ===
-      normalizeAnswer(question.correct_answer),
+    isCorrect: answersMatchQuestion(answers[index], question),
   }));
   const score = responses.filter((answer) => answer.isCorrect).length,
     total = questions.length,

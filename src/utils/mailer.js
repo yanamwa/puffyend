@@ -174,8 +174,10 @@ If you did not request a password reset, you can ignore this email.`,
 export async function sendStudentTemporaryPasswordEmail(
   email,
   temporaryPassword,
+  otp,
 ) {
   const passwordHtml = escapeHtml(temporaryPassword);
+  const otpHtml = escapeHtml(otp);
 
   await sendEmail({
     to: email,
@@ -198,6 +200,17 @@ export async function sendStudentTemporaryPasswordEmail(
               ${passwordHtml}
             </div>
           </div>
+          <h2 style="margin:0 0 10px;color:#111827;font-size:16px;line-height:1.4;font-weight:700;">
+            Email Verification Code
+          </h2>
+          <p style="margin:0;color:#111827;font-size:14px;line-height:1.6;">
+            Enter this 4-digit code the first time you sign in. It expires in 5 minutes.
+          </p>
+          <div style="text-align:center;margin:18px 0 26px;">
+            <div style="display:inline-block;background:#eef4ff;color:#1f2937;border:1px solid #d5e2f5;border-radius:6px;padding:12px 24px;font-size:20px;font-weight:800;letter-spacing:5px;line-height:1.2;">
+              ${otpHtml}
+            </div>
+          </div>
           <div style="height:1px;background:#e5e7eb;margin:22px 0 18px;"></div>
           <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
             This email was sent because a temporary password was generated for your account. If you did not expect this, please contact your administrator.
@@ -212,6 +225,12 @@ Temporary Password
 Here's your temporary password for your Puffybrain account. Make sure to change your password as soon as possible to avoid security problems.
 
 ${temporaryPassword}
+
+Email Verification Code
+
+Use this 4-digit code the first time you sign in. It expires in 5 minutes.
+
+${otp}
 
 This email was sent because a temporary password was generated for your account. If you did not expect this, please contact your administrator.`,
   });

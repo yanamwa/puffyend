@@ -231,7 +231,9 @@ export async function getProfessorAssessmentSummary(req, res, next) {
         await Promise.all([
           db.execute(
             `SELECT ce.course_id AS courseId, ce.user_id AS userId,
-                  COALESCE(NULLIF(u.display_name, ''), u.name) AS name
+                  COALESCE(NULLIF(u.display_name, ''), u.name) AS name,
+                  u.year_level AS yearLevel,
+                  u.section_name AS section
            FROM course_enrollments ce JOIN users u ON u.userId = ce.user_id
            WHERE ce.course_id IN (${placeholders}) AND ce.status = 'approved'
              AND COALESCE(ce.archived, 0) = 0 AND COALESCE(u.is_archived, 0) = 0
@@ -300,6 +302,8 @@ export async function getProfessorAssessmentSummary(req, res, next) {
               userId: enrollment.userId,
               courseId: enrollment.courseId,
               name: enrollment.name,
+              yearLevel: enrollment.yearLevel,
+              section: enrollment.section,
               course: course.title,
               courseCode: course.code,
               scoredAttempts: score?.count || 0,

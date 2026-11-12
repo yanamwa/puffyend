@@ -112,7 +112,7 @@ async function getOtpTiming(userId) {
 
   const seconds = Number(rows[0]?.otp_seconds_remaining);
 
-  return Number.isFinite(seconds) ? seconds : OTP_TTL_SECONDS;
+  return Number.isFinite(seconds) ? seconds : 0;
 }
 
 function getUploadedProofUrl(file) {
@@ -497,7 +497,7 @@ export async function verifyEmail(req, res) {
            ) AS otp_seconds_remaining
          FROM users
          WHERE email = ?
-           AND role = 'professor'
+           AND role IN ('professor', 'student')
          LIMIT 1`,
       [email],
     );
@@ -515,8 +515,11 @@ export async function verifyEmail(req, res) {
       return res.json({
         success: true,
         message: "Email already verified.",
+        role: user.role,
         requiresApproval:
-          user.verification_status === "pending" && (await isProfessorApprovalRequired()),
+          user.role === "professor" &&
+          user.verification_status === "pending" &&
+          (await isProfessorApprovalRequired()),
         verificationStatus: user.verification_status,
       });
     }
@@ -544,7 +547,7 @@ export async function verifyEmail(req, res) {
          otp_code = NULL,
          otp_expires = NULL,
          verification_status = CASE
-           WHEN verification_status = 'pending' AND ? = 0 THEN 'approved'
+           WHEN role = 'professor' AND verification_status = 'pending' AND ? = 0 THEN 'approved'
            ELSE verification_status
          END
        WHERE userId = ? AND is_verified = 0 AND otp_code = ? AND otp_expires > NOW()`,
@@ -561,7 +564,8 @@ export async function verifyEmail(req, res) {
       });
     }
 
-    const requiresApproval = current.verification_status === "pending";
+    const requiresApproval =
+      user.role === "professor" && current.verification_status === "pending";
     if (
       verified.affectedRows &&
       requiresApproval &&
@@ -606,6 +610,7 @@ export async function verifyEmail(req, res) {
     return res.json({
       success: true,
       message: "Email verified successfully.",
+      role: user.role,
       requiresApproval,
       verificationStatus: current.verification_status,
     });
@@ -638,7 +643,7 @@ export async function resendOtp(req, res) {
       `SELECT *
          FROM users
          WHERE email = ?
-           AND role = 'professor'
+           AND role IN ('professor', 'student')
          LIMIT 1`,
       [email],
     );
@@ -1096,6 +1101,8 @@ export async function login(req, res) {
         code: "EMAIL_NOT_VERIFIED",
         message: "Please verify your email first.",
         email: user.email,
+        role: normalizeRoleValue(user.role),
+        otpSecondsRemaining: await getOtpTiming(user.userId),
       });
     }
 
@@ -1179,6 +1186,13 @@ export async function login(req, res) {
         Math.min(tokenMaxAgeSeconds, temporaryRemainingSeconds),
     );
 
+    await db.execute(
+      `UPDATE users
+       SET session_last_active = NOW(), last_active = NOW()
+       WHERE userId = ?`,
+      [user.userId],
+    );
+
     /* ===============================================
        AUDIT LOG - SUCCESSFUL LOGIN
     =============================================== */
@@ -1225,6 +1239,23 @@ export async function login(req, res) {
     return res.status(500).json({
       success: false,
       message: "Login failed.",
+    });
+  }
+}
+
+export async function recordSessionActivity(req, res) {
+  try {
+    await db.execute(
+      `UPDATE users SET session_last_active = NOW() WHERE userId = ?`,
+      [req.user.userId],
+    );
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("Session activity update failed:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Could not update session activity.",
     });
   }
 }

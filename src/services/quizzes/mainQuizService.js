@@ -11,6 +11,7 @@ import {
   validateAdaptiveQuestions,
   gradeMainQuiz,
   shuffleMainQuizQuestions,
+  normalizeAnswer,
 } from "./mainQuizAdaptive.js";
 const parse = (value) =>
   typeof value === "string" ? JSON.parse(value) : value;
@@ -158,6 +159,13 @@ const publicQuiz = (row) => {
         source_chunks,
         grounding,
         source_question_index,
+        accepted_answers,
+        acceptedAnswers,
+        acceptable_answers,
+        acceptableAnswers,
+        answer_aliases,
+        answerAliases,
+        alternatives,
         ...question
       }) => question,
     ),
@@ -710,6 +718,32 @@ export function validateManualQuestions(questions) {
     )
       throw requestError(
         "Complete every manual question and correct answer before taking Main Quiz.",
+        400,
+      );
+    const acceptedAnswers =
+      question.accepted_answers ?? question.acceptedAnswers ?? [];
+    if (
+      !Array.isArray(acceptedAnswers) ||
+      (question.type !== "identification" && acceptedAnswers.length > 0) ||
+      acceptedAnswers.length > 20 ||
+      acceptedAnswers.some(
+        (answer) =>
+          typeof answer !== "string" ||
+          !answer.trim() ||
+          answer.trim().length > 150,
+      )
+    )
+      throw requestError(
+        "Identification alternatives must contain up to 20 answers of 150 characters or fewer.",
+        400,
+      );
+    const normalizedAnswers = [
+      question.correct_answer,
+      ...acceptedAnswers,
+    ].map((answer) => normalizeAnswer(answer));
+    if (new Set(normalizedAnswers).size !== normalizedAnswers.length)
+      throw requestError(
+        "Identification alternatives must be distinct from each other and the correct answer.",
         400,
       );
     if (

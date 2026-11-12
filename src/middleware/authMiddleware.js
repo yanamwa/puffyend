@@ -52,7 +52,8 @@ async function authenticate(req, res, next, allowAccountSetup) {
       [rows] = await db.execute(
         `SELECT userId, email, role, verification_status, is_archived,
          is_temporary, temporary_expires_at, must_change_password,
-         onboarding_completed, student_tutorial_pending, is_verified, professor_admin_access
+         onboarding_completed, student_tutorial_pending, is_verified, professor_admin_access,
+         (session_last_active <= DATE_SUB(NOW(), INTERVAL 20 MINUTE)) AS session_idle_expired
          FROM users
          WHERE userId = ?
          LIMIT 1`,
@@ -62,7 +63,8 @@ async function authenticate(req, res, next, allowAccountSetup) {
       [rows] = await db.execute(
         `SELECT userId, email, role, verification_status, is_archived,
          is_temporary, temporary_expires_at, must_change_password,
-         onboarding_completed, student_tutorial_pending, is_verified, professor_admin_access
+         onboarding_completed, student_tutorial_pending, is_verified, professor_admin_access,
+         (session_last_active <= DATE_SUB(NOW(), INTERVAL 20 MINUTE)) AS session_idle_expired
          FROM users
          WHERE email = ?
          LIMIT 1`,
@@ -76,6 +78,14 @@ async function authenticate(req, res, next, allowAccountSetup) {
       return res.status(401).json({
         success: false,
         message: "User account was not found.",
+      });
+    }
+
+    if (Number(user.session_idle_expired) === 1) {
+      return res.status(401).json({
+        success: false,
+        code: "SESSION_IDLE_TIMEOUT",
+        message: "Your session expired after 20 minutes of inactivity. Please sign in again.",
       });
     }
 
@@ -163,7 +173,8 @@ async function authenticate(req, res, next, allowAccountSetup) {
 
     await db.execute(
       `UPDATE users
-        SET last_active = NOW()
+        SET last_active = NOW(),
+            session_last_active = COALESCE(session_last_active, NOW())
         WHERE userId = ?`,
       [user.userId],
     );
