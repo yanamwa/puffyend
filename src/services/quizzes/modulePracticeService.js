@@ -5,6 +5,7 @@ import { requestError } from "../rag/courseAccessService.js";
 import { parallelMap } from "../rag/parallelMap.js";
 import { generateQuizBatch } from "../rag/quizRagService.js";
 import {
+  answersMatchQuestion,
   normalizeAnswer,
   shuffleMainQuizQuestions,
 } from "./mainQuizAdaptive.js";
@@ -35,11 +36,7 @@ const mixedBatchTypes = [
 const starting = new Map();
 
 function normalizeRecapAnswer(value) {
-  return normalizeAnswer(value)
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/^[a-z][.)]\s+/i, "")
-    .replace(/[.!?]+$/, "");
+  return normalizeAnswer(value);
 }
 
 function recapPerformance(questions, submitted) {
@@ -88,16 +85,24 @@ function recapPerformance(questions, submitted) {
       throw recapRequired();
     const rawKey = item.correct_answer || item.correctAnswer || item.answer;
     const letter = /^\s*([a-z])[.)]?\s*$/i.exec(String(rawKey ?? ""));
+    const labeledAnswer = /^\s*[a-z][.)]\s+(.+)$/i.exec(
+      String(rawKey ?? ""),
+    );
     const key = letter
       ? (options[letter[1].toUpperCase().charCodeAt(0) - 65] ?? rawKey)
-      : rawKey;
+      : labeledAnswer
+        ? labeledAnswer[1]
+        : rawKey;
     const correctAnswer = normalizeRecapAnswer(key);
     if (!correctAnswer) return [];
     return [
       {
         question: item.question,
         topic: item.topic || item.category || item.subject || "",
-        isCorrect: submittedAnswer === correctAnswer,
+        isCorrect: answersMatchQuestion(submittedAnswer, {
+          ...item,
+          correct_answer: key,
+        }),
       },
     ];
   });
@@ -253,6 +258,13 @@ function publicAttempt(row, mode) {
         options,
         topic,
         correct_answer,
+        accepted_answers,
+        acceptedAnswers,
+        acceptable_answers,
+        acceptableAnswers,
+        answer_aliases,
+        answerAliases,
+        alternatives,
         explanation,
       }) => ({
         id,
@@ -261,7 +273,21 @@ function publicAttempt(row, mode) {
         options,
         topic,
         // The practice players show answer feedback and use keys for flips and pairs.
-        ...(mode ? { correct_answer, explanation } : {}),
+        ...(mode
+          ? {
+              correct_answer,
+              accepted_answers:
+                accepted_answers ??
+                acceptedAnswers ??
+                acceptable_answers ??
+                acceptableAnswers ??
+                answer_aliases ??
+                answerAliases ??
+                alternatives ??
+                [],
+              explanation,
+            }
+          : {}),
       }),
     ),
     total: QUESTION_COUNT,
@@ -401,13 +427,6 @@ function gradeAttempt(attemptId, questions, submitted, mode) {
 
   const answers = questions.map((question) => {
     const userAnswer = byQuestion.get(question.id);
-    const normalize =
-      question.type === "identification" ||
-      mode === "qna" ||
-      mode === "mixed" ||
-      mode === "matching"
-        ? normalizeRecapAnswer
-        : normalizeAnswer;
     if (
       userAnswer === undefined ||
       (userAnswer &&
@@ -433,7 +452,7 @@ function gradeAttempt(attemptId, questions, submitted, mode) {
         mode === "flashcard"
           ? userAnswer === "easy" || userAnswer === "good"
           : Boolean(userAnswer) &&
-            normalize(userAnswer) === normalize(question.correct_answer),
+            answersMatchQuestion(userAnswer, question),
     };
   });
   const score = answers.filter((answer) => answer.isCorrect).length;

@@ -25,6 +25,7 @@ const YEAR_LEVELS = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
 const APPROVAL_STATUSES = ["pending", "approved", "declined"];
 const DEFAULT_TEMPORARY_ACCOUNT_DAYS = 30;
 const MAX_TEMPORARY_ACCOUNT_DAYS = 365;
+const STUDENT_EMAIL_OTP_TTL_SECONDS = 5 * 60;
 const YEAR_ALIASES = new Map([
   ["1", "1st Year"],
   ["1st", "1st Year"],
@@ -585,6 +586,7 @@ const sectionName = normalizeSectionName(
     ================================================= */
 
     const temporaryPassword = generateTemporaryPassword();
+    const emailOtp = String(crypto.randomInt(1000, 10000));
 
     const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
 
@@ -611,34 +613,36 @@ const sectionName = normalizeSectionName(
         year_level,
         section_name,
         course,
+        otp_code,
+        otp_expires,
         must_change_password,
         is_archived,
         is_temporary,
         temporary_expires_at
       )
-
-VALUES (
-  ?,
-  ?,
-  'student',
-  ?,
-  ?,
-  ?,
-  ?,
-  ?,
-  'approved',
-  1,
-  0,
-  TRUE,
-  ?,
-  ?,
-  ?,
-  ?,
-  0,
-  ?,
-  ?
-)
-`,
+      VALUES (
+        ?,
+        ?,
+        'student',
+        ?,
+        ?,
+        ?,
+        ?,
+        ?,
+        'approved',
+        0,
+        0,
+        1,
+        ?,
+        ?,
+        ?,
+        ?,
+        DATE_ADD(NOW(), INTERVAL ? SECOND),
+        ?,
+        0,
+        ?,
+        ?
+      )`,
       [
         email,
         hashedPassword,
@@ -650,6 +654,8 @@ VALUES (
         yearLevel,
         sectionName,
         course || null,
+        emailOtp,
+        STUDENT_EMAIL_OTP_TTL_SECONDS,
         Number(mustChangePassword),
         temporaryAccount.isTemporary,
         temporaryAccount.temporaryExpiresAt,
@@ -700,10 +706,18 @@ VALUES (
 
     let credentialsEmailed = false;
     try {
-      await sendStudentTemporaryPasswordEmail(email, temporaryPassword);
+      await sendStudentTemporaryPasswordEmail(email, temporaryPassword, emailOtp);
       credentialsEmailed = true;
     } catch (emailError) {
       console.error("Student temporary password email error:", emailError);
+      try {
+        await db.execute(
+          "UPDATE users SET otp_code = NULL, otp_expires = NULL WHERE userId = ? AND is_verified = 0",
+          [result.insertId],
+        );
+      } catch (cleanupError) {
+        console.error("Student verification code cleanup error:", cleanupError);
+      }
     }
 
     /* =================================================
@@ -729,7 +743,8 @@ VALUES (
 
     return res.status(201).json({
       success: true,
-      message: "Student account created.",
+      message: "Student account created. The student must verify their email before signing in and starting the tutorial.",
+      emailVerificationRequired: true,
       temporaryPassword,
       credentialsEmailed,
       user: rowToUser(rows[0]),
