@@ -735,7 +735,7 @@ export async function markNotificationAsRead(req, res) {
     }
 
     /*
-     * BROADCAST / ANNOUNCEMENT
+     * ANNOUNCEMENT
      */
     else {
       if (!targetMatchesRole(notification.target, role)) {
@@ -745,7 +745,7 @@ export async function markNotificationAsRead(req, res) {
         });
       }
 
-      const [result] = await db.execute(
+const [result] = await db.execute(
   `
     INSERT INTO notification_reads (
       notification_id,
@@ -753,8 +753,9 @@ export async function markNotificationAsRead(req, res) {
       read_at
     )
     VALUES (?, ?, NOW())
-    ON DUPLICATE KEY UPDATE
-      read_at = VALUES(read_at)
+    ON CONFLICT (notification_id, user_id)
+    DO UPDATE SET
+      read_at = EXCLUDED.read_at
   `,
   [notificationId, userId]
 );
@@ -1102,11 +1103,6 @@ export async function createNotification(req, res) {
       success: true,
       message: "Notification posted.",
       notification,
-
-      /*
-       * Keep this for compatibility
-       * with your existing React utility.
-       */
       notifications: [notification],
     });
   } catch (error) {
@@ -1150,13 +1146,6 @@ export async function deleteNotification(req, res) {
       });
     }
 
-    /*
-     * Get announcement BEFORE deleting it.
-     *
-     * We need this for:
-     * 1. Permission checking
-     * 2. Audit logging
-     */
     const [rows] = await db.execute(
       `
         SELECT
@@ -1190,26 +1179,12 @@ export async function deleteNotification(req, res) {
 
     const creatorRole = normalizeRole(notification.created_by_role);
 
-    /*
-     * SECURITY RULE:
-     *
-     * Admin cannot delete announcements
-     * created by a Super Admin.
-     */
     if (currentRole === "admin" && creatorRole === "super_admin") {
       return res.status(403).json({
         success: false,
         message: "Admins cannot delete announcements created by a Super Admin.",
       });
     }
-
-    /*
-     * Delete announcement.
-     *
-     * notification_reads records should
-     * disappear automatically through
-     * ON DELETE CASCADE.
-     */
     const [result] = await db.execute(
       `
         DELETE FROM notifications
@@ -1228,30 +1203,6 @@ export async function deleteNotification(req, res) {
     }
 
     const currentUserName = getCreatorDisplayName(currentUser, req.user);
-
-    /*
-     * AUDIT LOG
-     */
-   // await logAuditFromRequest(req, {
-     // category: "Notification Management",
-
-     // action: "Deleted Announcement",
-
-      //target: notification.title || `Announcement #${notificationId}`,
-
-    //  status: "Success",
-
-      //details:
-        //`Deleted announcement "${notification.title || `#${notificationId}`}" ` +
-        //`targeted to "${normalizeTarget(notification.target)}".`,
-
-     // userId: currentUser.userId || null,
-
-      //userName: currentUserName,
-
-      //userRole: currentRole,
-    //});
-
     return res.json({
       success: true,
       message: "Notification deleted.",

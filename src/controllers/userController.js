@@ -478,13 +478,22 @@ export async function createStudentAccount(req, res) {
 
   const gender = normalizeGender(req.body.gender);
 
-  const yearLevel = normalizeYearLevel(
-    req.body.yearLevel || req.body.year_level,
-  );
 
-  const sectionName = normalizeSectionName(
-    req.body.sectionName || req.body.section_name || req.body.section,
-  );
+const yearLevel = normalizeYearLevel(
+  req.body.yearLevel || req.body.year_level,
+);
+
+const sectionInput = cleanText(
+  req.body.sectionName ||
+  req.body.section_name ||
+  req.body.section
+).toUpperCase();
+
+const sectionName = normalizeSectionName(
+  /^[A-F]$/.test(sectionInput)
+    ? `${getYearNumber(yearLevel)}${sectionInput}`
+    : sectionInput
+);
 
   const temporaryAccount = getTemporaryAccountSettings(req.body);
 
@@ -607,27 +616,29 @@ export async function createStudentAccount(req, res) {
         is_temporary,
         temporary_expires_at
       )
-      VALUES (
-        ?,
-        ?,
-        'student',
-        ?,
-        ?,
-        ?,
-        ?,
-        ?,
-        'approved',
-        1,
-        0,
-        1,
-        ?,
-        ?,
-        ?,
-        ?,
-        0,
-        ?,
-        ?
-      )`,
+
+VALUES (
+  ?,
+  ?,
+  'student',
+  ?,
+  ?,
+  ?,
+  ?,
+  ?,
+  'approved',
+  1,
+  0,
+  TRUE,
+  ?,
+  ?,
+  ?,
+  ?,
+  0,
+  ?,
+  ?
+)
+`,
       [
         email,
         hashedPassword,

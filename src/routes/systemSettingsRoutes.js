@@ -10,20 +10,7 @@ import {
 } from "../controllers/systemSettingsController.js";
 
 const router = express.Router();
-
-// Public, read-only status used by the app shell before a user signs in.
 router.get("/status", getPublicSystemStatus);
-
-/* =====================================================
-   SYSTEM SETTINGS
-   SUPER ADMIN ONLY
-===================================================== */
-
-/*
- * Get current system settings
- *
- * GET /api/system-settings
- */
 router.get(
   "/",
   authenticateUser,
@@ -31,11 +18,6 @@ router.get(
   getSystemSettings,
 );
 
-/*
- * Update system settings
- *
- * PUT /api/system-settings
- */
 router.put(
   "/",
   authenticateUser,
