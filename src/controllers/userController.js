@@ -203,6 +203,13 @@ function getAccountStatus(user) {
     return "Pending";
   }
 
+  if (
+    Number(user.must_change_password) === 1 ||
+    (user.role === "student" && Number(user.is_verified) !== 1)
+  ) {
+    return "Pending";
+  }
+
   return "Active";
 }
 
