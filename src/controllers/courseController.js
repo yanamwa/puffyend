@@ -68,6 +68,7 @@ function getCourseSelect(idColumn, summaryOnly = false) {
          c.quizzes,
          c.join_link,
          c.archived,
+         c.archived_by_role,
          c.professor_name,
          c.professor_email,
          c.professor_department,
@@ -618,6 +619,9 @@ function rowToCourse(row, learningModules = []) {
   const pageCount = lessonPages.length;
   const quizCount = quizItems.length || Number(row.quizzes || 0);
   const moduleCount = contentModules.length || Number(row.modules || 0);
+  const archivedByRole = normalizeRole(
+    row.archived_by_role || (row.catalog_archived_at ? "admin" : ""),
+  );
 
   return {
     id: courseId,
@@ -666,6 +670,8 @@ function rowToCourse(row, learningModules = []) {
     joinLink: row.join_link || "",
     join_link: row.join_link || "",
     archived: row.archived === 1 || row.archived === true,
+    archivedByRole: archivedByRole || null,
+    archived_by_role: archivedByRole || null,
     professorId: row.professor_id || null,
     professorDisplayName:
       row.professor_name ||
@@ -1152,9 +1158,11 @@ export async function getCourses(req, res) {
          u.name AS database_professor_name,
          u.email AS database_professor_email,
          u.professor_department AS database_professor_department,
-         u.profile_image AS database_professor_profile_image
+         u.profile_image AS database_professor_profile_image,
+         cc.archived_at AS catalog_archived_at
        FROM courses c
        LEFT JOIN users u ON u.userId = c.professor_id
+       LEFT JOIN course_catalog cc ON cc.catalog_id = c.catalog_id
        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
        ORDER BY c.updated_at DESC, c.${idColumn} DESC`,
       params,
@@ -3074,10 +3082,35 @@ export async function archiveCourse(req, res) {
     if (role === "professor") {
       if (!archived) {
         const [[catalogState]] = await db.execute(
-          `SELECT cc.archived_at FROM courses c JOIN course_catalog cc ON cc.catalog_id=c.catalog_id WHERE c.${idColumn}=?`,
+          `SELECT c.archived_by_role,cc.archived_at
+           FROM courses c
+           LEFT JOIN course_catalog cc ON cc.catalog_id=c.catalog_id
+           WHERE c.${idColumn}=?`,
           [id],
         );
-        if (catalogState?.archived_at) return res.status(409).json({success: false, message: "This course was archived by the admin. The admin must restore its catalog course before you can restore this class."});
+        const archiveRole = normalizeRole(catalogState?.archived_by_role);
+        if (
+          ["admin", "super_admin", "superadmin"].includes(archiveRole) ||
+          catalogState?.archived_at
+        ) {
+          const archivedBy = archiveRole === "super_admin" || archiveRole === "superadmin"
+            ? "the Super Admin"
+            : "an administrator";
+          return res.status(409).json({
+            success: false,
+            message: `This course was archived by ${archivedBy}. Only an administrator can restore it.`,
+          });
+        }
+        where.push("archived = 1");
+        where.push("(archived_by_role IS NULL OR archived_by_role = 'professor')");
+        where.push(
+          "NOT EXISTS (SELECT 1 FROM course_catalog cc WHERE cc.catalog_id = courses.catalog_id AND cc.archived_at IS NOT NULL)",
+        );
+      } else {
+        where.push("archived = 0");
+        where.push(
+          "NOT EXISTS (SELECT 1 FROM course_catalog cc WHERE cc.catalog_id = courses.catalog_id AND cc.archived_at IS NOT NULL)",
+        );
       }
       const owner = getProfessorOwnerCondition("", currentUser);
 
@@ -3087,9 +3120,9 @@ export async function archiveCourse(req, res) {
 
     const [result] = await db.execute(
       `UPDATE courses
-       SET archived = ?
+       SET archived = ?, archived_by_role = ?
        WHERE ${where.join(" AND ")}`,
-      [archived ? 1 : 0, ...params],
+      [archived ? 1 : 0, archived ? (role === "superadmin" ? "super_admin" : role) : null, ...params],
     );
 
     if (result.affectedRows === 0) {

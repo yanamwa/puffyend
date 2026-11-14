@@ -119,15 +119,23 @@ export function calculateAdaptiveTos(
         percent: (rows.filter(correct).length / rows.length) * 100,
       };
     });
-  const observedTopics = group("topic");
-  const topicNames = [
-    ...new Set([
-      ...(settings.topics || []),
-      ...observedTopics.map((topic) => topic.label),
-    ]),
-  ];
-  if (!topicNames.length)
-    topicNames.push(settings.lessonTitle || "Lesson concepts");
+  const lessonTitleKey = String(settings.lessonTitle || "")
+    .trim()
+    .toLocaleLowerCase();
+  const configuredTopics = (settings.topics || []).filter(
+    (topic) =>
+      typeof topic === "string" &&
+      topic.trim() &&
+      topic.trim().toLocaleLowerCase() !== lessonTitleKey,
+  );
+  const observedTopics = group("topic").filter(
+    (topic) => topic.label.toLocaleLowerCase() !== lessonTitleKey,
+  );
+  const topicNames = [...new Set([
+    ...configuredTopics.map((topic) => topic.trim()),
+    ...observedTopics.map((topic) => topic.label),
+  ])];
+  if (!topicNames.length) topicNames.push("General Concepts");
   const topics = topicNames.map(
     (label) =>
       observedTopics.find((topic) => topic.label === label) || {

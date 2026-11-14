@@ -87,6 +87,30 @@ export async function sendQuizResultEmail(email, subject, report, result) {
   });
 }
 
+export async function sendContactMessageEmail({ name, email, message }) {
+  const recipient =
+    String(process.env.CONTACT_EMAIL || "puffybrain.contactus@gmail.com").trim();
+  const safeName = String(name || "").replace(/[\r\n]+/g, " ").trim();
+  const safeEmail = String(email || "").trim();
+  const safeMessage = String(message || "");
+
+  await sendEmail({
+    to: recipient,
+    replyTo: safeEmail,
+    subject: `PuffyBrain contact message from ${safeName || "a visitor"}`,
+    text: `New message from the PuffyBrain contact form.\n\nName: ${safeName}\nEmail: ${safeEmail}\n\nMessage:\n${safeMessage}`,
+    html: `<div style="font-family:Arial,sans-serif;color:#263e5b;max-width:600px;margin:auto;border:1px solid #cbdced;border-radius:12px;overflow:hidden;">
+      <h2 style="margin:0;padding:22px;background:#7fa9d6;color:#fff;">New Contact Message</h2>
+      <div style="padding:24px;line-height:1.6;">
+        <p><strong>Name:</strong> ${escapeHtml(safeName)}</p>
+        <p><strong>Email:</strong> ${escapeHtml(safeEmail)}</p>
+        <p><strong>Message:</strong></p>
+        <p style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(safeMessage)}</p>
+      </div>
+    </div>`,
+  });
+}
+
 export async function sendOtpEmail(email, name, otp) {
   await sendEmail({
     to: email,
@@ -100,6 +124,43 @@ export async function sendOtpEmail(email, name, otp) {
       <p>The PuffyBrain Team</p>
     `,
     text: `Your PuffyBrain verification code is ${otp}. It expires in 5 minutes.`,
+  });
+}
+
+export async function sendCatalogCourseArchivedEmail({
+  email,
+  professorName,
+  courses = [],
+  archiveLabel = "Admin",
+}) {
+  const nameHtml = escapeHtml(professorName || "Professor");
+  const archivedCourses = Array.isArray(courses) && courses.length
+    ? courses
+    : [{ code: "Course", title: "your course" }];
+  const archiveLabelHtml = escapeHtml(archiveLabel);
+  const courseListText = archivedCourses
+    .map(({ code, title }) => `${code || "Course"} — ${title || "course"}`)
+    .join("\n");
+  const courseListHtml = archivedCourses
+    .map(({ code, title }) => `<li><strong>${escapeHtml(code || "Course")}</strong> — ${escapeHtml(title || "course")}</li>`)
+    .join("");
+  const text = `Hi ${professorName || "Professor"},\n\nThe following class${archivedCourses.length === 1 ? " was" : "es were"} archived by ${archiveLabel}:\n${courseListText}\n\n${archivedCourses.length === 1 ? "It is" : "They are"} listed under Archived in Course Management. Only an administrator can restore a class archived through the catalog. Please contact your administrator if you need it restored.\n\nPuffyBrain Team`;
+
+  await sendEmail({
+    to: email,
+    subject: `PuffyBrain — Catalog course${archivedCourses.length === 1 ? "" : "s"} archived by ${archiveLabel}`,
+    text,
+    html: `<div style="font-family:Arial,sans-serif;color:#263e5b;max-width:600px;margin:auto;border:1px solid #cbdced;border-radius:12px;overflow:hidden;">
+      <h2 style="margin:0;padding:22px;background:#7fa9d6;color:#fff;">Course archived by ${archiveLabelHtml}</h2>
+      <div style="padding:24px;line-height:1.6;">
+        <p>Hi ${nameHtml},</p>
+        <p>The following class${archivedCourses.length === 1 ? " was" : "es were"} archived by ${archiveLabelHtml}:</p>
+        <ul>${courseListHtml}</ul>
+        <p>${archivedCourses.length === 1 ? "It is" : "They are"} listed under Archived in Course Management.</p>
+        <p>Only an administrator can restore a class archived through the catalog. Contact your administrator if you need the class restored.</p>
+        <p>PuffyBrain Team</p>
+      </div>
+    </div>`,
   });
 }
 
