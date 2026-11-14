@@ -27,6 +27,7 @@ import systemAnalyticsRoutes from "./routes/systemAnalyticsRoutes.js";
 import backupRoutes from "./routes/backupRoutes.js";
 import systemSettingsRoutes from "./routes/systemSettingsRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
+import contactRoutes from "./routes/contactRoutes.js";
 
 import { migrateApplication } from "./migrations/applicationMigration.js";
 import { startLessonWorker } from "./services/rag/lessonJobService.js";
@@ -174,6 +175,7 @@ export async function startApplication(app, availability) {
 ========================================= */
 
   app.use("/api/reports", reportRoutes);
+  app.use("/api/contact", contactRoutes);
 
   /* =========================================
    404
