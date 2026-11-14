@@ -21,6 +21,7 @@ import systemSettingsRoutes from "./routes/systemSettingsRoutes.js";
 import { getPublicSystemStatus } from "./controllers/systemSettingsController.js";
 import enforceMaintenanceMode from "./middleware/maintenanceMode.js";
 import reportRoutes from "./routes/reportRoutes.js";
+import contactRoutes from "./routes/contactRoutes.js";
 
 import { initDb } from "./db.js";
 import { startLessonWorker } from "./services/rag/lessonJobService.js";
@@ -194,6 +195,7 @@ app.get("/api/debug/uploads", (req, res) => {
 */
 app.get("/api/system-settings/status", getPublicSystemStatus);
 app.use("/api", enforceMaintenanceMode);
+app.use("/api/contact", contactRoutes);
 
 app.use("/api/notifications", notificationRoutes);
 

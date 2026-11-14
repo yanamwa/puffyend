@@ -183,6 +183,11 @@ async function initCourseTables() {
   );
   await ensureTableColumn(
     "courses",
+    "archived_by_role",
+    "archived_by_role VARCHAR(50) NULL",
+  );
+  await ensureTableColumn(
+    "courses",
     "professor_name",
     "professor_name VARCHAR(255) NULL",
   );

@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { db } from "../db.js";
+import { sendCatalogCourseArchivedEmail } from "../utils/mailer.js";
 import authenticateUser from "../middleware/authMiddleware.js";
 import { requireRole } from "../middleware/roleMiddleware.js";
 import { extractSyllabus } from "../services/catalog/syllabusExtraction.js";
@@ -46,6 +47,13 @@ const fail = (message, statusCode = 400) => {
   throw Object.assign(new Error(message), { statusCode });
 };
 const actor = (req) => req.user.userId;
+const actorRoleOf = (req) => {
+  const role = String(req.user?.role || "admin")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return role === "superadmin" ? "super_admin" : role;
+};
 const programs = (value) =>
   Array.isArray(value) ? value : JSON.parse(value || "[]");
 const present = (row) => {
@@ -567,6 +575,8 @@ router.patch(
   "/:id",
   admin,
   run(async (req, res) => {
+    let archivedClassCount = 0;
+    let professorEmailNotifications = [];
     await transaction(async (connection) => {
       const [[course]] = await connection.execute(
         "SELECT * FROM course_catalog WHERE catalog_id=? FOR UPDATE",
@@ -587,7 +597,14 @@ router.patch(
           [course.catalog_id],
         );
         if (action === "archive") {
-          await archiveCatalogClasses(connection, course.catalog_id, actor(req));
+          const archiveResult = await archiveCatalogClasses(
+            connection,
+            course.catalog_id,
+            actor(req),
+            actorRoleOf(req),
+          );
+          archivedClassCount = archiveResult.archivedCount;
+          professorEmailNotifications = archiveResult.emailNotifications;
         }
         await audit(
           connection,
@@ -662,7 +679,38 @@ router.patch(
         changes,
       );
     });
-    res.json({ success: true });
+
+    let emailNotificationsSent = 0;
+    let emailNotificationsFailed = 0;
+    if (req.body.action === "archive" && professorEmailNotifications.length) {
+      const outcomes = await Promise.allSettled(
+        professorEmailNotifications.map((notice) =>
+          sendCatalogCourseArchivedEmail(notice),
+        ),
+      );
+      outcomes.forEach((outcome, index) => {
+        if (outcome.status === "fulfilled") {
+          emailNotificationsSent += 1;
+        } else {
+          emailNotificationsFailed += 1;
+          console.error(
+            `Catalog archive email failed for ${professorEmailNotifications[index].email}:`,
+            outcome.reason,
+          );
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      ...(req.body.action === "archive"
+        ? {
+            archivedClassCount,
+            emailNotificationsSent,
+            emailNotificationsFailed,
+          }
+        : {}),
+    });
   }),
 );
 router.use((error, _req, res, _next) => {

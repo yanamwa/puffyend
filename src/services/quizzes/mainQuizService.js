@@ -75,7 +75,7 @@ export async function saveMainConfig(user, body) {
     throw requestError("A saved module_id is required.", 400);
   await assertCourseAccess(user, courseId);
   const [courses] = await db.execute(
-    "SELECT lesson_pages AS lesson_contents, quiz_items AS quiz_contents FROM courses WHERE course_id=?",
+    "SELECT lesson_pages AS lesson_contents, quiz_items AS quiz_contents, content_modules FROM courses WHERE course_id=?",
     [courseId],
   );
   const content = [
@@ -117,25 +117,35 @@ export async function saveMainConfig(user, body) {
   const moduleIndex = Number(module.moduleIndex ?? module.module_index);
   if (!Number.isInteger(moduleIndex))
     throw requestError("Saved module index is missing.", 409);
-  const topics = [
-    ...new Set(
-      content
-        .filter(
-          (item) =>
-            String(item.moduleId ?? item.module_id) === moduleId &&
-            typeof item.topic === "string" &&
-            item.topic.trim(),
-        )
-        .map((item) => item.topic.trim()),
-    ),
-  ];
+  const lessonTitle = String(
+    module.moduleTitle || module.module_title || body.lesson_title || "",
+  ).trim();
+  const storedModule = parse(courses[0]?.content_modules || "[]").find(
+    (item) => String(item.id ?? item.module_id ?? item.lesson_id) === moduleId,
+  );
+  const moduleTitleKey = lessonTitle.toLocaleLowerCase();
+  const topicKeys = new Set();
+  const topics = content
+    .filter((item) => String(item.moduleId ?? item.module_id) === moduleId)
+    .flatMap((item) => [
+      item.topic,
+      ...(Array.isArray(item.topics) ? item.topics : []),
+    ])
+    .concat(Array.isArray(storedModule?.topics) ? storedModule.topics : [])
+    .map((topic) => String(topic || "").trim())
+    .filter((topic) => {
+      const key = topic.toLocaleLowerCase();
+      if (!topic || key === moduleTitleKey || topicKeys.has(key)) return false;
+      topicKeys.add(key);
+      return true;
+    });
   const config = {
     ...settings,
     topics,
     moduleIndex,
     documentIds,
     sourceMode: documentIds.length ? "documents" : "saved_lessons",
-    lessonTitle: module.moduleTitle || module.module_title || body.lesson_title,
+    lessonTitle,
     learningObjectives:
       module.moduleLearningObjectives ||
       module.module_learning_objectives ||
@@ -226,7 +236,7 @@ export async function startMainQuiz(user, body) {
     };
     const questions = manualQuestions.map((question) => ({
       ...question,
-      topic: question.topic || "Unclassified",
+      topic: question.topic || "General Concepts",
     }));
     const blueprint = {
       mode: "manual",
@@ -537,11 +547,7 @@ export async function saveMainQuizPreview(user, body) {
       : "Understand";
     return {
       ...question,
-      topic: String(
-        question.topic ||
-          parse(rows[0].config_json).lessonTitle ||
-          "Lesson concepts",
-      ).trim(),
+      topic: String(question.topic || "General Concepts").trim(),
       cognitive_level: level,
       thinking_skill: levels.indexOf(level) < 3 ? "LOTS" : "HOTS",
     };
