@@ -632,12 +632,12 @@ const sectionName = normalizeSectionName(
         'approved',
         0,
         0,
-        1,
+        TRUE,
         ?,
         ?,
         ?,
         ?,
-        DATE_ADD(NOW(), INTERVAL ? SECOND),
+        (NOW() + CAST(? AS INTEGER) * INTERVAL '1 second'),
         ?,
         0,
         ?,
@@ -786,9 +786,9 @@ export async function grantProfessorAdminAccess(req, res) {
 
     const [result] = await db.execute(
       `UPDATE users
-       SET professor_admin_access = 1
+       SET professor_admin_access = TRUE
        WHERE userId = ? AND role = 'professor' AND verification_status = 'approved'
-         AND is_verified = 1 AND is_archived = 0 AND professor_admin_access = 0
+         AND is_verified = 1 AND is_archived = 0 AND professor_admin_access = FALSE
          AND (is_temporary <> 1 OR temporary_expires_at IS NULL OR temporary_expires_at > NOW())`,
       [professorId],
     );
@@ -1946,7 +1946,7 @@ export async function completeUserTutorial(req, res) {
   try {
     if (req.user.role === "professor") {
       const [result] = await db.execute(
-        `UPDATE users SET professor_tutorial_pending = 0
+        `UPDATE users SET professor_tutorial_pending = FALSE
          WHERE userId = ? AND role = 'professor'
            AND verification_status = 'approved' AND is_archived = 0`,
         [req.user.userId],
@@ -1964,9 +1964,9 @@ export async function completeUserTutorial(req, res) {
     }
     await db.execute(
       `UPDATE users
-       SET onboarding_completed = 1, student_tutorial_pending = 0
+       SET onboarding_completed = 1, student_tutorial_pending = FALSE
        WHERE userId = ? AND onboarding_completed = 0
-         AND (student_tutorial_pending = 1 OR must_change_password = 1)`,
+         AND (student_tutorial_pending = TRUE OR must_change_password = 1)`,
       [req.user.userId],
     );
     return res.json({ success: true });

@@ -926,7 +926,7 @@ export async function resetPassword(req, res) {
          password_reset_expires = NULL,
          student_tutorial_pending = CASE
            WHEN LOWER(TRIM(role)) = 'student' AND onboarding_completed = 0 AND must_change_password = 1
-           THEN 1 ELSE student_tutorial_pending
+           THEN TRUE ELSE student_tutorial_pending
          END,
          must_change_password = 0
        WHERE userId = ? AND password = ? AND password_reset_token = ?

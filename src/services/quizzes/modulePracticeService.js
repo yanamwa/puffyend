@@ -376,7 +376,15 @@ export async function startModulePractice(
     }
     const [insert] = await db.execute(
       `INSERT INTO module_practice_attempts (user_id, course_id, module_id, question_format, previous_attempt_id, questions_json)
-       VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE attempt_id = LAST_INSERT_ID(attempt_id)`,
+       VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (
+         user_id,
+         course_id,
+         module_id,
+         question_format,
+         previous_attempt_id
+       )
+       DO UPDATE SET
+         attempt_id = module_practice_attempts.attempt_id`,
       [
         ...formatScope,
         previousInFormat?.attempt_id ?? 0,

@@ -619,7 +619,7 @@ export async function initDb({ migrate = false } = {}) {
       password_reset_expires DATETIME NULL,
       is_verified TINYINT(1) NOT NULL DEFAULT 0,
       last_active DATETIME NULL,
-      session_last_active DATETIME NULL,
+      session_last_active TIMESTAMP NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -647,7 +647,7 @@ export async function initDb({ migrate = false } = {}) {
   await ensureColumn("course", "course VARCHAR(255) NULL");
   await ensureColumn(
     "session_last_active",
-    "session_last_active DATETIME NULL",
+    "session_last_active TIMESTAMP NULL",
   );
   await ensureColumn(
     "onboarding_completed",
