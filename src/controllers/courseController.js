@@ -21,6 +21,7 @@ import {
   sendEnrollmentAcceptedEmail,
   sendEnrollmentDeclinedEmail,
   sendEnrollmentRequestEmail,
+  sendProfessorClassArchivedEmail,
   sendStudentUnenrolledEmail,
 } from "../utils/mailer.js";
 import { getSystemSettingsConfig } from "../services/system/systemSettingsService.js";
@@ -3077,6 +3078,18 @@ export async function archiveCourse(req, res) {
 
     const where = [`${idColumn} = ?`];
     const params = [id];
+    const notifyProfessor =
+      archived && role !== "professor" && req.body?.archiveReason !== undefined;
+    const reason = typeof req.body?.archiveReason === "string"
+      ? req.body.archiveReason.trim()
+      : "";
+    if (notifyProfessor && (!reason || reason.length > 1000)) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter an archive reason of 1 to 1,000 characters.",
+      });
+    }
+    if (notifyProfessor) where.push("COALESCE(archived, 0) = 0");
 
     // Professors can archive ONLY their own courses.
     if (role === "professor") {
@@ -3126,9 +3139,11 @@ export async function archiveCourse(req, res) {
     );
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({
+      return res.status(notifyProfessor ? 409 : 404).json({
         success: false,
-        message:
+        message: notifyProfessor
+          ? "The class is already archived or no longer exists."
+          :
           role === "professor"
             ? "Course not found or you do not have access to it."
             : "Course not found.",
@@ -3159,6 +3174,26 @@ export async function archiveCourse(req, res) {
       rows[0],
       modulesByCourse.get(String(courseId)) || [],
     );
+    const title = course.title || course.courseName || `Course ${id}`;
+    let emailSent;
+    if (notifyProfessor) {
+      emailSent = false;
+      const professor = rows[0];
+      const email = professor.database_professor_email || professor.professor_email;
+      if (email) {
+        try {
+          await sendProfessorClassArchivedEmail({
+            email,
+            name: professor.database_professor_display_name || professor.database_professor_name || professor.professor_name,
+            title,
+            reason,
+          });
+          emailSent = true;
+        } catch (error) {
+          console.error("Class archive email error:", error);
+        }
+      }
+    }
 
     /* =====================================================
         AUDIT LOG - ARCHIVE / RESTORE COURSE
@@ -3174,16 +3209,22 @@ export async function archiveCourse(req, res) {
       status: "Success",
 
       details: archived
-        ? `Archived course "${course.title || course.courseName || id}".`
+        ? `Archived course "${title}".` +
+          (notifyProfessor ? ` Reason: ${reason}; Email accepted: ${emailSent}` : "")
         : `Restored course "${course.title || course.courseName || id}".`,
     });
 
     return res.json({
       success: true,
-      message: archived
+      message: notifyProfessor
+        ? emailSent
+          ? "Class archived. The professor was notified by email."
+          : "Class archived. The notification email could not be sent."
+        : archived
         ? "Course archived successfully."
         : "Course restored successfully.",
       course,
+      emailSent,
     });
   } catch (error) {
     console.error("Archive course error:", error);
