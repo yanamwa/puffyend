@@ -105,6 +105,45 @@ async function getOtpTiming(userId) {
   return Number.isFinite(seconds) ? seconds : 0;
 }
 
+async function sendVerificationCodeIfExpired(user) {
+  const otp = createOtp();
+  const [result] = await db.execute(
+    `UPDATE users
+     SET otp_code = ?, otp_expires = (NOW() + ? * INTERVAL '1 second')
+     WHERE userId = ? AND is_verified = 0
+       AND (otp_expires IS NULL OR otp_expires <= NOW())`,
+    [otp, OTP_TTL_SECONDS, user.userId],
+  );
+  if (!result.affectedRows) return false;
+
+  try {
+    await sendOtpEmail(user.email, user.name, otp);
+  } catch (error) {
+    try {
+      await db.execute(
+        "UPDATE users SET otp_code = NULL, otp_expires = NULL WHERE userId = ? AND otp_code = ? AND is_verified = 0",
+        [user.userId, otp],
+      );
+    } catch (cleanupError) {
+      console.error("Verification code cleanup error:", cleanupError);
+    }
+    throw error;
+  }
+  return true;
+}
+
+function canResendStudentVerification(token, user) {
+  try {
+    const claims = jwt.verify(token, JWT_SECRET, {
+      algorithms: ["HS256"],
+      audience: "student-email-verification",
+    });
+    return claims.sub === String(user.userId);
+  } catch {
+    return false;
+  }
+}
+
 function getUploadedProofUrl(file) {
   if (!file?.filename) {
     return "";
@@ -647,6 +686,16 @@ export async function resendOtp(req, res) {
       });
     }
 
+    if (user.role === "student" &&
+        (!canResendStudentVerification(req.body?.verificationToken, user) ||
+          Number(user.is_archived) === 1 || isTemporaryAccountExpired(user))) {
+      return res.status(403).json({
+        success: false,
+        message: "Sign in again to request a verification code.",
+        code: "STUDENT_VERIFICATION_SESSION_EXPIRED",
+      });
+    }
+
     const remainingSeconds = await getOtpTiming(user.userId);
     if (remainingSeconds > 0) {
       return res.status(429).json({
@@ -656,39 +705,12 @@ export async function resendOtp(req, res) {
       });
     }
 
-    const otp = createOtp();
-
-    const [updateResult] = await db.execute(
-      `UPDATE users
-       SET
-         otp_code = ?,
-         otp_expires =
-           (NOW() + ? * INTERVAL '1 second')
-       WHERE userId = ?
-         AND (otp_expires IS NULL OR otp_expires <= NOW())`,
-      [otp, OTP_TTL_SECONDS, user.userId],
-    );
-
-    if (updateResult.affectedRows === 0) {
+    if (!(await sendVerificationCodeIfExpired(user))) {
       return res.status(429).json({
         success: false,
         message: "A verification code has already been requested. Please wait for it to expire.",
         otpSecondsRemaining: await getOtpTiming(user.userId),
       });
-    }
-
-    try {
-      await sendOtpEmail(user.email, user.name, otp);
-    } catch (emailError) {
-      try {
-        await db.execute(
-          "UPDATE users SET otp_code = NULL, otp_expires = NULL WHERE userId = ? AND otp_code = ? AND is_verified = 0",
-          [user.userId, otp],
-        );
-      } catch (cleanupError) {
-        console.error("Resend OTP cleanup error:", cleanupError);
-      }
-      throw emailError;
     }
 
     const otpSecondsRemaining = await getOtpTiming(user.userId);
@@ -1075,17 +1097,6 @@ export async function login(req, res) {
       });
     }
 
-    if (user.is_verified !== 1) {
-      return res.status(403).json({
-        success: false,
-        code: "EMAIL_NOT_VERIFIED",
-        message: "Please verify your email first.",
-        email: user.email,
-        role: normalizeRoleValue(user.role),
-        otpSecondsRemaining: await getOtpTiming(user.userId),
-      });
-    }
-
     if (Number(user.is_archived) === 1) {
       return res.status(403).json({
         success: false,
@@ -1104,6 +1115,34 @@ export async function login(req, res) {
     }
 
     const role = normalizeRoleValue(user.role);
+
+    if (Number(user.is_verified) !== 1) {
+      let verificationToken;
+      let verificationDeliveryFailed = false;
+      if (role === "student") {
+        try {
+          await sendVerificationCodeIfExpired(user);
+        } catch (error) {
+          console.error("Student sign-in verification error:", error);
+          verificationDeliveryFailed = true;
+        }
+        verificationToken = jwt.sign({}, JWT_SECRET, {
+          audience: "student-email-verification",
+          subject: String(user.userId),
+          expiresIn: "15m",
+        });
+      }
+      return res.status(403).json({
+        success: false,
+        code: "EMAIL_NOT_VERIFIED",
+        message: "Please verify your email first.",
+        email: user.email,
+        role,
+        otpSecondsRemaining: await getOtpTiming(user.userId),
+        verificationToken,
+        verificationDeliveryFailed,
+      });
+    }
 
     let verificationStatus = normalizeVerificationStatusValue(
       user.verification_status,

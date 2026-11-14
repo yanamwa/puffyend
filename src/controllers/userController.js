@@ -4,6 +4,7 @@ import crypto from "crypto";
 import fs from "node:fs/promises";
 import authenticateUser from "../middleware/authMiddleware.js";
 import {
+  sendAccountArchivedEmail,
   sendProfessorAdminAccessEmail,
   sendProfessorRegistrationDecisionEmail,
   sendStudentTemporaryPasswordEmail,
@@ -25,7 +26,6 @@ const YEAR_LEVELS = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
 const APPROVAL_STATUSES = ["pending", "approved", "declined"];
 const DEFAULT_TEMPORARY_ACCOUNT_DAYS = 30;
 const MAX_TEMPORARY_ACCOUNT_DAYS = 365;
-const STUDENT_EMAIL_OTP_TTL_SECONDS = 5 * 60;
 const YEAR_ALIASES = new Map([
   ["1", "1st Year"],
   ["1st", "1st Year"],
@@ -472,6 +472,7 @@ export async function getUserById(req, res) {
 }
 
 export async function createStudentAccount(req, res) {
+  const bulkImport = req.body.bulkImport === true;
   const email = cleanEmail(req.body.email);
   const course = cleanText(req.body.course || req.body.program);
   const name = cleanText(req.body.name || req.body.displayName);
@@ -517,6 +518,13 @@ const sectionName = normalizeSectionName(
     });
   }
 
+  if (bulkImport && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid email address.",
+    });
+  }
+
   const rawGender = cleanText(req.body.gender);
 
   if (
@@ -551,7 +559,9 @@ const sectionName = normalizeSectionName(
     ================================================= */
 
     const [existingEmail] = await db.execute(
-      "SELECT userId FROM users WHERE email = ? LIMIT 1",
+      bulkImport
+        ? "SELECT userId FROM users WHERE LOWER(email) = ? LIMIT 1"
+        : "SELECT userId FROM users WHERE email = ? LIMIT 1",
       [email],
     );
 
@@ -569,9 +579,9 @@ const sectionName = normalizeSectionName(
     const [existingStudentId] = await db.execute(
       `SELECT userId
        FROM users
-       WHERE student_id = ?
+       WHERE ${bulkImport ? "LOWER(student_id)" : "student_id"} = ?
        LIMIT 1`,
-      [studentId],
+      [bulkImport ? studentId.toLowerCase() : studentId],
     );
 
     if (existingStudentId.length > 0) {
@@ -586,7 +596,6 @@ const sectionName = normalizeSectionName(
     ================================================= */
 
     const temporaryPassword = generateTemporaryPassword();
-    const emailOtp = String(crypto.randomInt(1000, 10000));
 
     const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
 
@@ -613,8 +622,6 @@ const sectionName = normalizeSectionName(
         year_level,
         section_name,
         course,
-        otp_code,
-        otp_expires,
         must_change_password,
         is_archived,
         is_temporary,
@@ -637,8 +644,6 @@ const sectionName = normalizeSectionName(
         ?,
         ?,
         ?,
-        DATE_ADD(NOW(), INTERVAL ? SECOND),
-        ?,
         0,
         ?,
         ?
@@ -654,8 +659,6 @@ const sectionName = normalizeSectionName(
         yearLevel,
         sectionName,
         course || null,
-        emailOtp,
-        STUDENT_EMAIL_OTP_TTL_SECONDS,
         Number(mustChangePassword),
         temporaryAccount.isTemporary,
         temporaryAccount.temporaryExpiresAt,
@@ -706,18 +709,10 @@ const sectionName = normalizeSectionName(
 
     let credentialsEmailed = false;
     try {
-      await sendStudentTemporaryPasswordEmail(email, temporaryPassword, emailOtp);
+      await sendStudentTemporaryPasswordEmail(email, temporaryPassword);
       credentialsEmailed = true;
     } catch (emailError) {
       console.error("Student temporary password email error:", emailError);
-      try {
-        await db.execute(
-          "UPDATE users SET otp_code = NULL, otp_expires = NULL WHERE userId = ? AND is_verified = 0",
-          [result.insertId],
-        );
-      } catch (cleanupError) {
-        console.error("Student verification code cleanup error:", cleanupError);
-      }
     }
 
     /* =================================================
@@ -743,13 +738,19 @@ const sectionName = normalizeSectionName(
 
     return res.status(201).json({
       success: true,
-      message: "Student account created. The student must verify their email before signing in and starting the tutorial.",
+      message: "Student account created. The verification code is sent when the student first signs in.",
       emailVerificationRequired: true,
       temporaryPassword,
       credentialsEmailed,
       user: rowToUser(rows[0]),
     });
   } catch (error) {
+    if (bulkImport && ["23505", "ER_DUP_ENTRY"].includes(error.code)) {
+      return res.status(409).json({
+        success: false,
+        message: "Email or student ID is already registered.",
+      });
+    }
     console.error("Create student account error:", error);
 
     return res.status(500).json({
@@ -1231,6 +1232,13 @@ export async function updateProfessorRegistration(req, res) {
 export async function updateAccountArchive(req, res) {
   const { id } = req.params;
   const archive = req.body.archive === true || req.body.archive === "true";
+  const reason = typeof req.body.reason === "string" ? req.body.reason.trim() : "";
+  if (archive && (!reason || reason.length > 1000)) {
+    return res.status(400).json({
+      success: false,
+      message: "Enter an archive reason of 1 to 1,000 characters.",
+    });
+  }
 
   try {
     const [existing] = await db.execute(
@@ -1262,11 +1270,11 @@ export async function updateAccountArchive(req, res) {
       });
     }
 
-    await db.execute(
+    const [update] = await db.execute(
       `UPDATE users
        SET is_archived = ?, archived_at = ?
-       WHERE userId = ?`,
-      [archive ? 1 : 0, archive ? new Date() : null, id],
+       WHERE userId = ? AND COALESCE(is_archived, 0) <> ?`,
+      [archive ? 1 : 0, archive ? new Date() : null, id, archive ? 1 : 0],
     );
 
     const [rows] = await db.execute(
@@ -1290,6 +1298,29 @@ export async function updateAccountArchive(req, res) {
     const targetName =
       user.name || user.display_name || user.email || `User #${id}`;
 
+    if (!update.affectedRows) {
+      return res.json({
+        success: true,
+        message: archive ? "Account is already archived." : "Account is already active.",
+        user: rowToUser(rows[0]),
+      });
+    }
+
+    let emailSent;
+    if (archive) {
+      emailSent = false;
+      try {
+        await sendAccountArchivedEmail({
+          email: user.email,
+          name: user.display_name || user.name,
+          reason,
+        });
+        emailSent = true;
+      } catch (error) {
+        console.error("Account archive email error:", error);
+      }
+    }
+
     await logAuditFromRequest(req, {
       category: "User Management",
 
@@ -1302,12 +1333,18 @@ export async function updateAccountArchive(req, res) {
       details:
         `User ID: ${id}; ` +
         `Role: ${user.role}; ` +
-        `Email: ${user.email || "N/A"}`,
+        `Email: ${user.email || "N/A"}` +
+        (archive ? `; Reason: ${reason}; Email accepted: ${emailSent}` : ""),
     });
 
     return res.json({
       success: true,
-      message: archive ? "Account archived." : "Account restored.",
+      message: archive
+        ? emailSent
+          ? "Account archived. The notification email was sent."
+          : "Account archived. The notification email could not be sent."
+        : "Account restored.",
+      emailSent,
       user: rowToUser(rows[0]),
     });
   } catch (error) {
