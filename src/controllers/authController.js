@@ -220,6 +220,8 @@ function authUserPayload(user, role = user.role) {
     onboarding_completed: Number(user.onboarding_completed) === 1 ? 1 : 0,
     studentTutorialPending: hasPendingStudentTutorial(user),
     professorTutorialPending: hasPendingProfessorTutorial(user),
+    adminTutorialPending:
+      role === "admin" && Number(user.admin_tutorial_pending) === 1,
 
     verificationStatus: user.verification_status,
 
@@ -291,6 +293,21 @@ export async function signup(req, res) {
     return res.status(400).json({
       success: false,
       message: "Missing required fields.",
+    });
+  }
+
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (
+    typeof email !== "string" ||
+    !emailPattern.test(cleanEmail) ||
+    cleanEmail.endsWith("@gmail.co")
+  ) {
+    await removeUploadedProof(req.file);
+
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_EMAIL",
+      message: "Invalid email address.",
     });
   }
 

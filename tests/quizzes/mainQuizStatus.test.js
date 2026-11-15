@@ -6,6 +6,7 @@ const originalExecute = db.execute;
 let configured = false;
 let manualQuestions = [];
 let taken = false;
+let verified = false;
 db.execute = async (sql) => {
   if (sql.includes("JOIN main_quiz_results"))
     return [taken ? [{ quiz_id: 1 }] : []];
@@ -26,6 +27,8 @@ db.execute = async (sql) => {
     ];
   if (sql.includes("FROM main_quiz_configs"))
     return [configured ? [{ course_id: 1 }] : []];
+  if (sql.includes("JOIN main_quiz_configs")) return [[]];
+  if (sql.includes("FROM main_quiz_verifications")) return [verified ? [{}] : []];
   throw new Error(`Unexpected query: ${sql}`);
 };
 
@@ -37,10 +40,17 @@ try {
     return true;
   });
   configured = true;
-  assert.deepEqual(await mainQuizStatus(user, 1, "module-1"), { taken: false });
+  assert.deepEqual(await mainQuizStatus(user, 1, "module-1", "session"), {
+    taken: false,
+    verificationRequired: true,
+  });
   configured = false;
   manualQuestions = [{ question: "A professor-authored question" }];
-  assert.deepEqual(await mainQuizStatus(user, 1, "module-1"), { taken: false });
+  verified = true;
+  assert.deepEqual(await mainQuizStatus(user, 1, "module-1", "session"), {
+    taken: false,
+    verificationRequired: false,
+  });
   taken = true;
   assert.deepEqual(await mainQuizStatus(user, 1, "module-1"), { taken: true });
 } finally {

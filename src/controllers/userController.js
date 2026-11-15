@@ -317,12 +317,15 @@ function rowToUser(user) {
 }
 
 function rowToSessionUser(user, role) {
+  const sessionRole = role || user.role;
   return {
     ...rowToUser(user),
-    role: role || user.role,
+    role: sessionRole,
     primaryRole: user.role,
     studentTutorialPending: hasPendingStudentTutorial(user),
     professorTutorialPending: hasPendingProfessorTutorial(user),
+    adminTutorialPending:
+      sessionRole === "admin" && Number(user.admin_tutorial_pending) === 1,
   };
 }
 
@@ -794,7 +797,7 @@ export async function grantProfessorAdminAccess(req, res) {
 
     const [result] = await db.execute(
       `UPDATE users
-       SET professor_admin_access = 1
+       SET professor_admin_access = 1, admin_tutorial_pending = 1
        WHERE userId = ? AND role = 'professor' AND verification_status = 'approved'
          AND is_verified = 1 AND is_archived = 0 AND professor_admin_access = 0
          AND (is_temporary <> 1 OR temporary_expires_at IS NULL OR temporary_expires_at > NOW())`,
@@ -1739,6 +1742,7 @@ export async function getCurrentUser(req, res) {
           onboarding_completed,
           student_tutorial_pending,
           professor_tutorial_pending,
+          admin_tutorial_pending,
           is_verified,
           verification_id,
           student_id,
@@ -1778,6 +1782,7 @@ export async function getCurrentUser(req, res) {
           onboarding_completed,
           student_tutorial_pending,
           professor_tutorial_pending,
+          admin_tutorial_pending,
           is_verified,
           verification_id,
           student_id,
@@ -1988,6 +1993,28 @@ export async function updateOnboardingSection(req, res) {
 
 export async function completeUserTutorial(req, res) {
   try {
+    if (req.user.role === "admin") {
+      const [result] = await db.execute(
+        `UPDATE users SET admin_tutorial_pending = 0
+         WHERE userId = ? AND is_archived = 0
+           AND (is_temporary <> 1 OR temporary_expires_at IS NULL OR temporary_expires_at > NOW())
+           AND (role = 'admin' OR (
+             role = 'professor' AND professor_admin_access = 1
+               AND verification_status = 'approved' AND is_verified = 1
+           ))`,
+        [req.user.userId],
+      );
+      if (!result.affectedRows) {
+        return res.status(409).json({
+          success: false,
+          message: "Your account status changed. Refresh and try again.",
+        });
+      }
+      return res.json({
+        success: true,
+        user: { adminTutorialPending: false },
+      });
+    }
     if (req.user.role === "professor") {
       const [result] = await db.execute(
         `UPDATE users SET professor_tutorial_pending = 0
