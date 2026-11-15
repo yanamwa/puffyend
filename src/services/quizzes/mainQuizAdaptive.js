@@ -15,9 +15,14 @@ export const normalizeAnswer = (value) =>
     .replace(/\s+/g, " ")
     .toLowerCase();
 
+// Identification answers should not be marked wrong just because a learner
+// uses capitalization, ending punctuation, or an optional leading "the".
+const normalizeIdentificationAnswer = (value) =>
+  normalizeAnswer(value)
+    .replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, "")
+    .replace(/^the\s+/u, "");
+
 export function answersMatchQuestion(answer, question) {
-  const normalizedAnswer = normalizeAnswer(answer);
-  if (!normalizedAnswer) return false;
   const candidates = [question?.correct_answer];
   if (question?.type === "identification") {
     for (const field of [
@@ -35,8 +40,14 @@ export function answersMatchQuestion(answer, question) {
         candidates.push(...value.split(/\r?\n/));
     }
   }
+  const normalize =
+    question?.type === "identification"
+      ? normalizeIdentificationAnswer
+      : normalizeAnswer;
+  const normalizedAnswer = normalize(answer);
+  if (!normalizedAnswer) return false;
   return candidates.some(
-    (candidate) => normalizeAnswer(candidate) === normalizedAnswer,
+    (candidate) => normalize(candidate) === normalizedAnswer,
   );
 }
 export const skillForLevel = (level) =>
@@ -131,10 +142,12 @@ export function calculateAdaptiveTos(
   const observedTopics = group("topic").filter(
     (topic) => topic.label.toLocaleLowerCase() !== lessonTitleKey,
   );
-  const topicNames = [...new Set([
-    ...configuredTopics.map((topic) => topic.trim()),
-    ...observedTopics.map((topic) => topic.label),
-  ])];
+  const topicNames = [
+    ...new Set([
+      ...configuredTopics.map((topic) => topic.trim()),
+      ...observedTopics.map((topic) => topic.label),
+    ]),
+  ];
   if (!topicNames.length) topicNames.push("General Concepts");
   const topics = topicNames.map(
     (label) =>

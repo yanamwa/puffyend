@@ -1,6 +1,5 @@
-import fs from "node:fs/promises";
 import { PDFParse } from "pdf-parse";
-import { parseSyllabus } from "./catalogRules.js";
+import { catalogDetails, parseSyllabus } from "./catalogRules.js";
 
 // Keep PDF text positions: flattening the page mixes ILOs, topics and assessments.
 export function positionedLines(items) {
@@ -136,28 +135,57 @@ export function coverageHeadings(pages) {
     })
     .slice(0, 150);
 }
-export async function extractSyllabus(filePath) {
-  const parser = new PDFParse({ data: await fs.readFile(filePath) });
+async function readPositionedPage(document, num) {
+  const page = await document.getPage(num);
+  const { items } = await page.getTextContent();
+  const { width, height } = page.getViewport({ scale: 1 });
+  page.cleanup();
+  return { num, width, height, items };
+}
+
+export async function extractSyllabus(data, { includeCoverage = true } = {}) {
+  const parser = new PDFParse({ data });
   try {
-    const result = await parser.getText();
-    if (!result.pages.some((page) => page.text.trim()))
-      throw new Error("No searchable text.");
-    // PDFParse uses the installed PDF.js document internally; preserve its text geometry.
-    const document = await parser.load(),
-      pages = [];
-    for (let num = 1; num <= document.numPages; num++) {
-      const page = await document.getPage(num),
-        { items } = await page.getTextContent();
-      pages.push({
-        num,
-        width: page.getViewport({ scale: 1 }).width,
-        height: page.getViewport({ scale: 1 }).height,
-        items,
-      });
-      page.cleanup();
+    const unreadable =
+      "Could not read the first page. Upload a CvSU syllabus PDF with selectable text.";
+    let document, firstPage, cover;
+    try {
+      const result = await parser.getText({ first: 1 });
+      firstPage = result.pages[0]?.text.trim();
+      document = await parser.load();
+      cover = await readPositionedPage(document, 1);
+    } catch {
+      throw Object.assign(new Error(unreadable), { statusCode: 422 });
     }
+    if (!firstPage) throw Object.assign(new Error(unreadable), { statusCode: 422 });
+
+    // Some PDF exports draw the page header after the body in the text stream.
+    const coverText = positionedLines(cover.items).map(({ text }) => text).join("\n");
+    const header = coverText.split(/\b(?:course|subject)\s+code\b/i, 1)[0];
+    if (
+      !/\bcavite\s+state\s+university\b/i.test(header) ||
+      !/\bsyllabus\b/i.test(header)
+    ) {
+      throw Object.assign(
+        new Error("Upload a Cavite State University (CvSU) syllabus with the university name and syllabus heading on the first page."),
+        { statusCode: 422 },
+      );
+    }
+    const details = parseSyllabus(firstPage);
+    if (!details.code || !details.title) {
+      throw Object.assign(
+        new Error("Could not detect the course code and title. Upload a CvSU syllabus PDF with both fields on the first page."),
+        { statusCode: 422 },
+      );
+    }
+    catalogDetails(details);
+    if (!includeCoverage) return details;
+
+    const pages = [cover];
+    for (let num = 2; num <= document.numPages; num++)
+      pages.push(await readPositionedPage(document, num));
     return {
-      ...parseSyllabus(result.pages.map((p) => p.text).join("\n")),
+      ...details,
       coverage_modules: coverageHeadings(pages),
     };
   } finally {

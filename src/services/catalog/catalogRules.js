@@ -82,14 +82,32 @@ export function parseSyllabus(text) {
   };
   const code =
     field("code").match(/^[A-Z][A-Z0-9._/-]*(?:\s+[A-Z0-9._/-]+)*/i)?.[0] || "";
-  const year =
-    text.match(
-      /\b(?:academic\s+year|school\s+year|a\.?\s*y\.?|s\.?\s*y\.?)\s*[:：,–-]?\s*(\d{4}\s*[-–/]\s*\d{4})/i,
-    )?.[1] || "";
-  const semester =
-    text.match(
-      /\b((?:\d+\s*(?:st|nd|rd|th)|first|second|third|summer)\s+semester)\b/i,
-    )?.[1] || field("semester").split(/\n/)[0];
+  const year = text.match(
+    /\b(?:academic\s+year|school\s+year|a\.?\s*y\.?|s\.?\s*y\.?)\s*[:：,–—-]?\s*(\d{4})\s*[-–—/]\s*(\d{4})/i,
+  );
+  const termNames = "first|1st|1|second|2nd|2|third|3rd|3|summer|mid[ -]?year";
+  const termLabel = "(?:sem(?:ester)?|term)\\b\\.?";
+  const termValue = "(" + termNames + ")\\b";
+  const beforeDescription = text.split(
+    /\b(?:course|subject)\s+description\b/i,
+    1,
+  )[0];
+  const ordinalTerm = termValue + "\\s+" + termLabel;
+  const term = (
+    beforeDescription.match(new RegExp("\\b" + ordinalTerm, "i"))?.[1] ||
+    beforeDescription.match(new RegExp("\\b" + termLabel + "\\s+" + termValue, "i"))?.[1] ||
+    text.match(new RegExp("^\\s*" + ordinalTerm, "im"))?.[1] ||
+    text.match(new RegExp("^\\s*" + termLabel + "\\s+" + termValue, "im"))?.[1] ||
+    text.match(new RegExp("\\b" + termLabel + "\\s*[:：–—-]\\s*" + termValue, "i"))?.[1] ||
+    ""
+  ).toLowerCase();
+  const semester = [
+    [/^(?:first|1st|1)$/, "First Semester"],
+    [/^(?:second|2nd|2)$/, "Second Semester"],
+    [/^(?:third|3rd|3)$/, "Third Semester"],
+    [/^summer$/, "Summer Semester"],
+    [/^mid[ -]?year$/, "Midyear"],
+  ].find(([pattern]) => pattern.test(term))?.[1] || "";
   return {
     code: code.slice(0, 50),
     title: field("title").slice(0, 255),
@@ -103,8 +121,8 @@ export function parseSyllabus(text) {
           : /\bBS\s+Computer\s+Science\b/i
         ).test(text),
     ),
-    academic_year: year.replace(/\s/g, ""),
-    semester: semester.slice(0, 30),
+    academic_year: year ? year[1] + "-" + year[2] : "",
+    semester,
   };
 }
 
