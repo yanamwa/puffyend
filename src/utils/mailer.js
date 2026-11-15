@@ -85,7 +85,7 @@ export async function sendProfessorAdminAccessEmail({ email, name }) {
     text: [
       `Hi ${name},`,
       "You’ve been granted administrator access in PuffyBrain.",
-      "Sign in with your existing professor credentials. Open your profile menu and choose Switch to Admin to go to the Admin Dashboard.",
+      "Sign in with your existing professor credentials. Open your profile menu and choose Switch to Admin to begin the Admin tutorial. If you are asked to change your password, complete that step first.",
       "Use Switch to Professor to return to your professor dashboard.",
     ].join("\n\n"),
   });
