@@ -143,6 +143,15 @@ async function readPositionedPage(document, num) {
   return { num, width, height, items };
 }
 
+export const INVALID_SYLLABUS = "INVALID_SYLLABUS";
+
+function invalidSyllabus(message) {
+  return Object.assign(new Error(message), {
+    statusCode: 422,
+    code: INVALID_SYLLABUS,
+  });
+}
+
 export async function extractSyllabus(data, { includeCoverage = true } = {}) {
   const parser = new PDFParse({ data });
   try {
@@ -155,9 +164,9 @@ export async function extractSyllabus(data, { includeCoverage = true } = {}) {
       document = await parser.load();
       cover = await readPositionedPage(document, 1);
     } catch {
-      throw Object.assign(new Error(unreadable), { statusCode: 422 });
+      throw invalidSyllabus(unreadable);
     }
-    if (!firstPage) throw Object.assign(new Error(unreadable), { statusCode: 422 });
+    if (!firstPage) throw invalidSyllabus(unreadable);
 
     // Some PDF exports draw the page header after the body in the text stream.
     const coverText = positionedLines(cover.items).map(({ text }) => text).join("\n");
@@ -166,16 +175,14 @@ export async function extractSyllabus(data, { includeCoverage = true } = {}) {
       !/\bcavite\s+state\s+university\b/i.test(header) ||
       !/\bsyllabus\b/i.test(header)
     ) {
-      throw Object.assign(
-        new Error("Upload a Cavite State University (CvSU) syllabus with the university name and syllabus heading on the first page."),
-        { statusCode: 422 },
+      throw invalidSyllabus(
+        "Only Cavite State University (CvSU) syllabi are accepted. The first page must show the university name and syllabus heading.",
       );
     }
     const details = parseSyllabus(firstPage);
     if (!details.code || !details.title) {
-      throw Object.assign(
-        new Error("Could not detect the course code and title. Upload a CvSU syllabus PDF with both fields on the first page."),
-        { statusCode: 422 },
+      throw invalidSyllabus(
+        "Could not detect the course code and title. Upload a CvSU syllabus PDF with both fields on the first page.",
       );
     }
     catalogDetails(details);

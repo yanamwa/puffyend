@@ -59,14 +59,24 @@ test("only readable PDFs with a CvSU syllabus header and course fields are accep
     semester: result.semester,
   });
   for (const text of [
-    "Another University\nCOURSE SYLLABUS\n" + fields,
     "COURSE SYLLABUS\n" + fields + "\nReferences: Cavite State University",
     "Cavite State University\nCOURSE OUTLINE\n" + fields,
     "Cavite State University COURSE SYLLABUS",
     "",
   ]) {
-    await assert.rejects(extractSyllabus(makePdf(text)), { statusCode: 422 });
+    await assert.rejects(extractSyllabus(makePdf(text)), {
+      statusCode: 422,
+      code: "INVALID_SYLLABUS",
+    });
   }
+  const otherUniversity = makePdf(
+    "Pangasinan State University\nCOURSE SYLLABUS\n" + fields,
+  );
+  await assert.rejects(extractSyllabus(otherUniversity), {
+    statusCode: 422,
+    code: "INVALID_SYLLABUS",
+    message: /Only Cavite State University/,
+  });
 });
 
 function syllabusIndex(pages) {
