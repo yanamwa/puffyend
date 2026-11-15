@@ -427,9 +427,9 @@ export async function signup(req, res) {
            'pending',
            ?,
            (NOW() + (?::double precision * INTERVAL '1 second')),
-           0,
-           1,
-           1
+           FALSE,
+           TRUE,
+           TRUE
          )`,
       [
         cleanEmail,
