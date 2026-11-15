@@ -296,11 +296,10 @@ export async function signup(req, res) {
     });
   }
 
-  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const emailPattern = /^[^\s@]+@[^\s@]+$/;
   if (
     typeof email !== "string" ||
-    !emailPattern.test(cleanEmail) ||
-    cleanEmail.endsWith("@gmail.co")
+    !emailPattern.test(cleanEmail)
   ) {
     await removeUploadedProof(req.file);
 
@@ -508,7 +507,7 @@ export async function signup(req, res) {
 
     return res.status(500).json({
       success: false,
-      message: "Signup failed.",
+      message: "Please try again later.",
     });
   }
 }
