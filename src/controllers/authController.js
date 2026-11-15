@@ -426,8 +426,8 @@ export async function signup(req, res) {
            'pending',
            ?,
            (NOW() + (?::double precision * INTERVAL '1 second')),
-           FALSE,
-           TRUE,
+           0,
+           1,
            TRUE
          )`,
       [
