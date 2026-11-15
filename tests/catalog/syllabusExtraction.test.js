@@ -4,7 +4,11 @@ import {
   parseSyllabus,
   validateCoverageModules,
 } from "../../src/services/catalog/catalogRules.js";
-import { coverageHeadings } from "../../src/services/catalog/syllabusExtraction.js";
+import {
+  coverageHeadings,
+  extractSyllabus,
+} from "../../src/services/catalog/syllabusExtraction.js";
+import { makePdf } from "../helpers/fixtureBuilders.js";
 import {
   buildSyllabusIndex,
   retrieveSyllabusExcerpts,
@@ -21,8 +25,48 @@ test("table labels without colons, split labels, wrapped descriptions and semest
     units: "3",
     programs: ["BSIT"],
     academic_year: "2024-2025",
-    semester: "2nd Semester",
+    semester: "Second Semester",
   });
+});
+
+test("period extraction handles abbreviations and leaves unspecified fields empty", () => {
+  const result = parseSyllabus("COURSE SYLLABUS\n1st Sem., A.Y. 2026–2027\nCourse Code: ITEC 111");
+  assert.equal(result.semester, "First Semester");
+  assert.equal(result.academic_year, "2026-2027");
+
+  const missing = parseSyllabus(
+    "COURSE SYLLABUS\nCourse Code: ITEC 111\nCourse Description: In semester 2, students practice skills from the first semester.",
+  );
+  assert.equal(missing.semester, "");
+  assert.equal(missing.academic_year, "");
+});
+
+test("only readable PDFs with a CvSU syllabus header and course fields are accepted", async () => {
+  const fields = "Course Code: ITEC 111\nCourse Title: Integrated Programming\nCredit Units: 3";
+  const syllabus = "Cavite State University\nCOURSE SYLLABUS\n2nd Sem. AY 2026-2027\n" + fields;
+  const result = await extractSyllabus(makePdf(syllabus));
+  assert.equal(result.code, "ITEC 111");
+  assert.equal(result.title, "Integrated Programming");
+  assert.equal(result.units, "3");
+  assert.equal(result.semester, "Second Semester");
+  assert.deepEqual(await extractSyllabus(makePdf(syllabus), { includeCoverage: false }), {
+    code: result.code,
+    title: result.title,
+    description: result.description,
+    units: result.units,
+    programs: result.programs,
+    academic_year: "2026-2027",
+    semester: result.semester,
+  });
+  for (const text of [
+    "Another University\nCOURSE SYLLABUS\n" + fields,
+    "COURSE SYLLABUS\n" + fields + "\nReferences: Cavite State University",
+    "Cavite State University\nCOURSE OUTLINE\n" + fields,
+    "Cavite State University COURSE SYLLABUS",
+    "",
+  ]) {
+    await assert.rejects(extractSyllabus(makePdf(text)), { statusCode: 422 });
+  }
 });
 
 function syllabusIndex(pages) {

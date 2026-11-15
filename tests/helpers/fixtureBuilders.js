@@ -1,7 +1,9 @@
 // Small, real format fixtures without adding document-generation dependencies.
 export function makePdf(text) {
-  const escaped = text.replace(/[\\()]/g, "\\$&");
-  const stream = `BT /F1 11 Tf 40 750 Td (${escaped}) Tj ET`;
+  const lines = text
+    .split("\n")
+    .map((line) => "(" + line.replace(/[\\()]/g, "\\$&") + ") Tj");
+  const stream = "BT /F1 11 Tf 40 750 Td " + lines.join("\n0 -18 Td ") + " ET";
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",

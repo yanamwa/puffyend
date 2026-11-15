@@ -15,11 +15,10 @@ import {
   syllabusDirectory as directory,
   syllabusFilePath as filePath,
 } from "../services/catalog/syllabusStorage.js";
-import { validateCoverageModules } from "../services/catalog/catalogRules.js";
 import {
   catalogDetails,
   normalizeCatalogCode,
-  parseSyllabus,
+  validateCoverageModules,
 } from "../services/catalog/catalogRules.js";
 import { getRequestIp } from "../services/system/auditLogService.js";
 
@@ -121,28 +120,11 @@ export async function cleanupSyllabusUploads() {
   }
 }
 
-async function analyzeFile(storageName) {
-  let suggestions = { ...parseSyllabus(""), coverage_modules: [] },
-    extractionMessage = "";
-  try {
-    suggestions = await extractSyllabus(filePath(storageName));
-    const missing = [
-      !suggestions.code && "course code",
-      !suggestions.title && "course title",
-      !suggestions.coverage_modules.length && "Course Coverage headings",
-    ].filter(Boolean);
-    if (missing.length)
-      extractionMessage =
-        "Could not detect " +
-        missing.join(", ") +
-        ". Review and complete these fields manually. No OCR was performed.";
-    else
-      extractionMessage =
-        "Course details and Course Coverage headings were detected. Review them before saving.";
-  } catch {
-    extractionMessage =
-      "Automatic extraction was unsuccessful. This PDF may be scanned or unreadable. Complete the fields manually. No OCR was performed.";
-  }
+async function analyzeFile(data) {
+  const suggestions = await extractSyllabus(data);
+  const extractionMessage = suggestions.coverage_modules.length
+    ? ""
+    : "Course Coverage headings were not detected. You can add them from the PDF before saving.";
   return { suggestions, extractionMessage };
 }
 router.post(
@@ -155,13 +137,11 @@ router.post(
       [req.params.id, actor(req)],
     );
     if (!row) fail("Upload expired or not found.", 404);
-    const data = await analyzeFile(row.storage_name);
-    const [matches] = data.suggestions.code
-      ? await db.execute(
-          "SELECT * FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL",
-          [normalizeCatalogCode(data.suggestions.code)],
-        )
-      : [[]];
+    const data = await analyzeFile(await fs.readFile(filePath(row.storage_name)));
+    const [matches] = await db.execute(
+      "SELECT * FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL",
+      [normalizeCatalogCode(data.suggestions.code)],
+    );
     res.json({ success: true, ...data, matches: matches.map(present) });
   }),
 );
@@ -341,6 +321,11 @@ router.post(
   run(async (req, res) => {
     if (!req.file || req.file.buffer.subarray(0, 5).toString() !== "%PDF-")
       fail("Choose a valid PDF file (maximum 15 MB).");
+    const { suggestions, extractionMessage } = await analyzeFile(req.file.buffer);
+    const [matches] = await db.execute(
+      "SELECT * FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL",
+      [normalizeCatalogCode(suggestions.code)],
+    );
     await cleanupSyllabusUploads();
     const storageName = crypto.randomBytes(18).toString("hex") + ".pdf",
       uploadId = crypto.randomUUID();
@@ -357,13 +342,6 @@ router.post(
       await fs.unlink(filePath(storageName));
       throw error;
     }
-    const { suggestions, extractionMessage } = await analyzeFile(storageName);
-    const [matches] = suggestions.code
-      ? await db.execute(
-          "SELECT * FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL",
-          [normalizeCatalogCode(suggestions.code)],
-        )
-      : [[]];
     res.status(201).json({
       success: true,
       uploadId,
@@ -491,10 +469,22 @@ router.post(
   admin,
   run(async (req, res) => {
     const result = await transaction(async (connection) => {
+      if (!req.body.uploadId) fail("Upload a syllabus PDF before saving.");
+      const [[file]] = await connection.execute(
+        "SELECT * FROM syllabus_uploads WHERE upload_id=? AND uploader_id=? AND expires_at>NOW() FOR UPDATE",
+        [req.body.uploadId, actor(req)],
+      );
+      if (!file) fail("Upload expired or already saved. Upload the PDF again.");
+      const syllabus = await extractSyllabus(
+        await fs.readFile(filePath(file.storage_name)),
+        { includeCoverage: false },
+      );
+      const academicYear = syllabus.academic_year || null;
+      const semester = syllabus.semester || null;
       let course,
         creating = !req.body.catalogId;
       if (creating) {
-        const details = catalogDetails(req.body);
+        const details = catalogDetails(syllabus);
         const [matches] = await connection.execute(
           "SELECT * FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL",
           [details.normalizedCode],
@@ -538,6 +528,9 @@ router.post(
           [req.body.catalogId],
         );
         if (!course) fail("Course not found.", 404);
+        if (course.normalized_code !== normalizeCatalogCode(syllabus.code)) {
+          fail(`The PDF is for ${syllabus.code}. Upload a syllabus for ${course.code}.`);
+        }
         if (course.archived_at) {
           if (req.body.restoreArchived !== true)
             fail("Restore this course before uploading a syllabus.");
@@ -552,12 +545,6 @@ router.post(
           await audit(connection, req, "Restored catalog course", course.catalog_id, { archived_at: { before: course.archived_at, after: null } });
         }
       }
-      if (!req.body.uploadId) fail("Upload a syllabus PDF before saving.");
-      const [[file]] = await connection.execute(
-        "SELECT * FROM syllabus_uploads WHERE upload_id=? AND uploader_id=? AND expires_at>NOW() FOR UPDATE",
-        [req.body.uploadId, actor(req)],
-      );
-      if (!file) fail("Upload expired or already saved. Upload the PDF again.");
       if (
         (req.body.activate === true || course.status === "active") &&
         req.body.reviewed !== true
@@ -565,9 +552,6 @@ router.post(
         fail(
           "Confirm that you reviewed the extracted information before activation.",
         );
-      for (const key of ["academic_year", "semester"])
-        if (String(req.body[key] || "").length > 30)
-          fail("Syllabus period fields must be at most 30 characters.");
       const coverageModules = validateCoverageModules(
         req.body.coverage_modules,
       );
@@ -575,8 +559,8 @@ router.post(
         "INSERT INTO syllabus_versions (catalog_id,academic_year,semester,filename,storage_name,file_size,uploaded_by,coverage_modules) VALUES (?,?,?,?,?,?,?,?)",
         [
           course.catalog_id,
-          req.body.academic_year || null,
-          req.body.semester || null,
+          academicYear,
+          semester,
           file.filename,
           file.storage_name,
           file.file_size,
@@ -596,8 +580,8 @@ router.post(
         {
           versionId: version.insertId,
           coverage_modules: coverageModules,
-          academic_year: req.body.academic_year || null,
-          semester: req.body.semester || null,
+          academic_year: academicYear,
+          semester,
           filename: file.filename,
         },
       );
