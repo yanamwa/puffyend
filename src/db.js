@@ -619,7 +619,7 @@ export async function initDb({ migrate = false } = {}) {
       professor_position VARCHAR(255) NULL,
       professor_specialization VARCHAR(255) NULL,
       professor_employment_proof TEXT NULL,
-      professor_admin_access SMALLINT NOT NULL DEFAULT 0,
+      professor_admin_access BOOLEAN NOT NULL DEFAULT FALSE,
       verification_status VARCHAR(50) NOT NULL DEFAULT 'pending',
       is_archived SMALLINT NOT NULL DEFAULT 0,
       archived_at TIMESTAMP NULL,
@@ -703,7 +703,7 @@ export async function initDb({ migrate = false } = {}) {
   );
   await ensureColumn(
     "professor_admin_access",
-    "professor_admin_access SMALLINT NOT NULL DEFAULT 0",
+    "professor_admin_access BOOLEAN NOT NULL DEFAULT FALSE",
   );
   await ensureColumn(
     "verification_status",
