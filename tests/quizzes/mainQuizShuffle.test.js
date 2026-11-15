@@ -6,6 +6,7 @@ import { createMainQuizPrompt } from "../../src/services/quizzes/mainQuizPrompt.
 import {
   gradeMainQuiz,
   mainQuizBlueprint,
+  normalizeAnswer,
   shuffleMainQuizQuestions,
   validateAdaptiveQuestions,
 } from "../../src/services/quizzes/mainQuizAdaptive.js";
@@ -68,6 +69,7 @@ const serviceCode = [
     "export function validateManualQuestions",
     "export function savedLessonChunks",
   ),
+  slice("function alreadyTakenError", "export async function mainQuizStatus"),
 ].join("\n");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const assignmentKey = (courseId, moduleId, userId, revision) =>
@@ -115,6 +117,15 @@ function fixture(mode) {
         ],
       ];
     if (sql.includes("FROM main_quiz_configs")) return [[stored]];
+    if (sql.includes("JOIN main_quiz_results")) {
+      return [[...records.values()].filter((row) =>
+        row.course_id === parameters[0] &&
+        row.module_id === parameters[1] &&
+        row.user_id === parameters[2] &&
+        row.submissions > 0,
+      )];
+    }
+    if (sql.includes("FROM users") && sql.includes("FOR UPDATE")) return [[{}]];
     if (sql.includes("FROM personalized_main_quizzes")) {
       const row = sql.includes("WHERE quiz_id=?")
         ? [...records.values()].find(
@@ -153,9 +164,9 @@ function fixture(mode) {
             ]
           : [],
       ];
-    if (sql.startsWith("INSERT IGNORE INTO main_quiz_configs"))
+    if (sql.startsWith("INSERT INTO main_quiz_configs"))
       return [{ affectedRows: 0 }];
-    if (sql.startsWith("INSERT IGNORE INTO personalized_main_quizzes")) {
+    if (sql.startsWith("INSERT INTO personalized_main_quizzes")) {
       const [
         courseId,
         moduleId,
@@ -202,6 +213,7 @@ function fixture(mode) {
     parse: (value) => (typeof value === "string" ? JSON.parse(value) : value),
     requestError: (message, statusCode) =>
       Object.assign(new Error(message), { statusCode }),
+    hasMainQuizVerification: async () => true,
     db: {
       execute,
       getConnection: async () => ({
@@ -214,6 +226,7 @@ function fixture(mode) {
     },
     gradeMainQuiz,
     mainQuizBlueprint,
+    normalizeAnswer,
     createMainQuizPrompt,
     validateAdaptiveQuestions,
     shuffleMainQuizQuestions: (items) => {

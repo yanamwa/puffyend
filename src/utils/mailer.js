@@ -140,6 +140,17 @@ export async function sendOtpEmail(email, name, otp) {
   });
 }
 
+export async function sendMainQuizOtpEmail(email, otp) {
+  await sendEmail({
+    to: { address: email },
+    subject: "PuffyBrain Main Quiz verification code",
+    text: [
+      `Your Main Quiz verification code is ${otp}.`,
+      "Enter it in PuffyBrain to open the Main Quiz tutorial. The code expires in 5 minutes.",
+    ].join("\n\n"),
+  });
+}
+
 export async function sendProfessorClassArchivedEmail({ email, name, title, reason }) {
   await sendEmail({
     to: { address: email },

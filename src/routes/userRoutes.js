@@ -91,7 +91,7 @@ router.get("/users/me", authenticateAccountSetup, getCurrentUser);
 router.post(
   "/users/me/complete-tutorial",
   authenticateAccountSetup,
-  requireRole("student", "professor"),
+  requireRole("student", "professor", "admin"),
   completeUserTutorial,
 );
 

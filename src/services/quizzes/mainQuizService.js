@@ -9,6 +9,12 @@ import { retrieveContexts } from "../rag/retrievalService.js";
 import { generateQuizBatch } from "../rag/quizRagService.js";
 import { createMainQuizPrompt } from "./mainQuizPrompt.js";
 import {
+  confirmMainQuizCode,
+  hasMainQuizVerification,
+  initMainQuizVerificationTable,
+  sendMainQuizCode,
+} from "./mainQuizVerification.js";
+import {
   validateMainSettings,
   mainQuizBlueprint,
   validateAdaptiveQuestions,
@@ -28,17 +34,18 @@ export async function initMainQuizTables() {
   await db.execute(
     `CREATE TABLE IF NOT EXISTS main_quiz_results (result_id SERIAL PRIMARY KEY, quiz_id INT NOT NULL, user_id INT NOT NULL, attempts_id INT NOT NULL, result_json TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`,
   );
+  await initMainQuizVerificationTable();
 }
-async function studentAccess(user, courseId, moduleId) {
+async function studentAccess(user, courseId, moduleId, database = db) {
   if (user.role !== "student")
     throw requestError("Only enrolled students can take Main Quiz.", 403);
-  const [enrollments] = await db.execute(
+  const [enrollments] = await database.execute(
     "SELECT user_id FROM course_enrollments WHERE course_id=? AND user_id=? AND status='approved'",
     [courseId, user.userId],
   );
   if (!enrollments.length)
     throw requestError("You are not enrolled in this course.", 403);
-  const [courses] = await db.execute(
+  const [courses] = await database.execute(
     "SELECT lesson_pages AS lesson_contents, quiz_items AS quiz_contents, content_modules FROM courses WHERE course_id=?",
     [courseId],
   );
@@ -70,6 +77,16 @@ async function studentAccess(user, courseId, moduleId) {
     throw requestError("Main Quiz is currently locked.", 403);
   return module;
 }
+
+function quizScope(user, courseId, moduleId) {
+  const course = Number(courseId);
+  const module = String(moduleId || "");
+  if (!Number.isSafeInteger(course) || course < 1 || !module || module.length > 100) {
+    throw requestError("Choose a valid course and module.", 400);
+  }
+  return [course, module, user.userId];
+}
+
 export async function saveMainConfig(user, body) {
   let settings;
   try {
@@ -203,13 +220,36 @@ const publicQuiz = (row) => {
   };
 };
 const inFlight = new Map();
-export async function startMainQuiz(user, body) {
-  const courseId = Number(body.course_id),
-    moduleId = String(body.module_id || "");
+export async function startMainQuiz(user, body, sessionHash) {
+  const scope = quizScope(user, body.course_id, body.module_id);
+  const [courseId, moduleId] = scope;
   const module = await studentAccess(user, courseId, moduleId);
+  if (await hasSubmittedMainQuiz(scope)) throw alreadyTakenError();
+
   const manualQuestions = module.mainQuizSettings?.manualQuestions || [];
-  if (manualQuestions.length) {
-    validateManualQuestions(manualQuestions);
+  let [[stored]] = await db.execute(
+    "SELECT * FROM main_quiz_configs WHERE course_id=? AND module_id=?",
+    [courseId, moduleId],
+  );
+  if (stored) {
+    const [saved] = await db.execute(
+      "SELECT * FROM personalized_main_quizzes WHERE course_id=? AND module_id=? AND user_id=? AND revision=?",
+      [...scope, stored.revision],
+    );
+    if (saved.length) {
+      if (saved[0].submissions >= 1) throw alreadyTakenError();
+      return publicQuiz(saved[0]);
+    }
+  } else if (!manualQuestions.length) {
+    throw requestError("Your professor has not configured this Main Quiz yet.", 409);
+  }
+
+  if (!(await hasMainQuizVerification(scope, sessionHash))) {
+    throw requestError("Verify your email with a code before starting the Main Quiz.", 403);
+  }
+
+  if (manualQuestions.length) validateManualQuestions(manualQuestions);
+  if (!stored) {
     const manualConfig = {
       questionCount: manualQuestions.length,
       passingPercentage: 70,
@@ -221,30 +261,12 @@ export async function startMainQuiz(user, body) {
       "INSERT INTO main_quiz_configs(course_id,module_id,config_json) VALUES(?,?,?) ON CONFLICT DO NOTHING",
       [courseId, moduleId, JSON.stringify(manualConfig)],
     );
-  }
-  const [configs] = await db.execute(
-    "SELECT * FROM main_quiz_configs WHERE course_id=? AND module_id=?",
-    [courseId, moduleId],
-  );
-  const stored = configs[0];
-  if (!stored)
-    throw requestError(
-      "Your professor has not configured this Main Quiz yet.",
-      409,
+    [[stored]] = await db.execute(
+      "SELECT * FROM main_quiz_configs WHERE course_id=? AND module_id=?",
+      [courseId, moduleId],
     );
-  const config = parse(stored.config_json);
-  const [saved] = await db.execute(
-    "SELECT * FROM personalized_main_quizzes WHERE course_id=? AND module_id=? AND user_id=? AND revision=?",
-    [courseId, moduleId, user.userId, stored.revision],
-  );
-  if (saved.length) {
-    if (saved[0].submissions >= 1)
-      throw requestError(
-        "This Main Quiz has already been submitted and recorded.",
-        409,
-      );
-    return publicQuiz(saved[0]);
   }
+  const config = parse(stored.config_json);
   if (manualQuestions.length) {
     const snapshot = {
       ...config,
@@ -624,7 +646,7 @@ export async function submitMainQuiz(user, body) {
     );
     const row = rows[0];
     if (!row) throw requestError("Main Quiz not found.", 404);
-    await studentAccess(user, row.course_id, row.module_id);
+    await studentAccess(user, row.course_id, row.module_id, connection);
     const [configs] = await connection.execute(
       "SELECT revision FROM main_quiz_configs WHERE course_id=? AND module_id=?",
       [row.course_id, row.module_id],
@@ -635,11 +657,12 @@ export async function submitMainQuiz(user, body) {
         409,
       );
     const config = parse(row.config_json);
-    if (row.submissions >= 1)
-      throw requestError(
-        "This Main Quiz has already been submitted and recorded.",
-        409,
-      );
+    // Serialize submissions for the student even if two quiz revisions exist.
+    await connection.execute("SELECT userId FROM users WHERE userId=? FOR UPDATE", [user.userId]);
+    if (
+      row.submissions >= 1 ||
+      (await hasSubmittedMainQuiz([row.course_id, row.module_id, user.userId], connection))
+    ) throw alreadyTakenError();
     let result;
     try {
       result = gradeMainQuiz(
@@ -846,20 +869,31 @@ export function savedLessonChunks(pages, moduleId) {
     });
 }
 
-export async function mainQuizStatus(user, courseId, moduleId) {
+function alreadyTakenError() {
+  return requestError("This Main Quiz has already been submitted and recorded.", 409);
+}
+
+async function hasSubmittedMainQuiz(scope, database = db) {
+  const [results] = await database.execute(
+    `SELECT q.quiz_id FROM personalized_main_quizzes q
+       JOIN main_quiz_results r ON r.quiz_id=q.quiz_id
+     WHERE q.course_id=? AND q.module_id=? AND q.user_id=? LIMIT 1`,
+    scope,
+  );
+  return results.length > 0;
+}
+
+export async function mainQuizStatus(user, courseId, moduleId, sessionHash) {
   if (user.role !== "student")
     throw requestError("Only students can access Main Quiz.", 403);
-  const [results] = await db.execute(
-    "SELECT q.quiz_id FROM personalized_main_quizzes q JOIN main_quiz_results r ON r.quiz_id=q.quiz_id WHERE q.course_id=? AND q.module_id=? AND q.user_id=? LIMIT 1",
-    [Number(courseId), String(moduleId), user.userId],
-  );
-  if (results.length) return { taken: true };
-  const module = await studentAccess(user, Number(courseId), String(moduleId));
+  const scope = quizScope(user, courseId, moduleId);
+  if (await hasSubmittedMainQuiz(scope)) return { taken: true };
+  const module = await studentAccess(user, scope[0], scope[1]);
   const manualQuestions = module.mainQuizSettings?.manualQuestions;
   if (!Array.isArray(manualQuestions) || !manualQuestions.length) {
     const [configs] = await db.execute(
       "SELECT course_id FROM main_quiz_configs WHERE course_id=? AND module_id=? LIMIT 1",
-      [Number(courseId), String(moduleId)],
+      scope.slice(0, 2),
     );
     if (!configs.length)
       throw requestError(
@@ -867,5 +901,30 @@ export async function mainQuizStatus(user, courseId, moduleId) {
         409,
       );
   }
-  return { taken: false };
+  const [drafts] = await db.execute(
+    `SELECT q.quiz_id FROM personalized_main_quizzes q
+       JOIN main_quiz_configs c ON c.course_id=q.course_id AND c.module_id=q.module_id AND c.revision=q.revision
+     WHERE q.course_id=? AND q.module_id=? AND q.user_id=? AND q.submissions=0 LIMIT 1`,
+    scope,
+  );
+  return {
+    taken: false,
+    verificationRequired: !drafts.length && !(await hasMainQuizVerification(scope, sessionHash)),
+  };
+}
+
+export async function requestMainQuizCode(user, body, sessionHash) {
+  const scope = quizScope(user, body.course_id, body.module_id);
+  const status = await mainQuizStatus(user, scope[0], scope[1], sessionHash);
+  if (status.taken) throw alreadyTakenError();
+  if (!status.verificationRequired) return { verified: true };
+  return sendMainQuizCode(scope, sessionHash, user.email);
+}
+
+export async function verifyMainQuizCode(user, body, sessionHash) {
+  const scope = quizScope(user, body.course_id, body.module_id);
+  const status = await mainQuizStatus(user, scope[0], scope[1], sessionHash);
+  if (status.taken) throw alreadyTakenError();
+  if (!status.verificationRequired) return { verified: true };
+  return confirmMainQuizCode(scope, sessionHash, body.code);
 }

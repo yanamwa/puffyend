@@ -426,35 +426,41 @@ async function initMonitoringTables() {
   )`);
 
   await db.execute(`CREATE TABLE IF NOT EXISTS module_practice_attempts (
-    attempt_id INT AUTO_INCREMENT PRIMARY KEY,
+    attempt_id SERIAL PRIMARY KEY,
     user_id INT NOT NULL,
     course_id INT NOT NULL,
-    module_id VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
-    question_format ENUM('mixed', 'qna') NOT NULL DEFAULT 'mixed',
+    module_id VARCHAR(100) COLLATE "C" NOT NULL,
+    question_format VARCHAR(5) NOT NULL DEFAULT 'mixed' CHECK (question_format IN ('mixed', 'qna')),
     previous_attempt_id INT NOT NULL,
-    questions_json LONGTEXT NOT NULL,
-    result_json LONGTEXT NULL,
-    completed_at TIMESTAMP(6) NULL DEFAULT NULL,
-    UNIQUE KEY module_practice_sequence_by_format (user_id, course_id, module_id, question_format, previous_attempt_id)
+    questions_json TEXT NOT NULL,
+    result_json TEXT NULL,
+    completed_at TIMESTAMP(6) NULL DEFAULT NULL
   )`);
   await ensureTableColumn(
     "module_practice_attempts",
     "question_format",
-    "question_format ENUM('mixed', 'qna') NOT NULL DEFAULT 'mixed'",
+    "question_format VARCHAR(5) NOT NULL DEFAULT 'mixed' CHECK (question_format IN ('mixed', 'qna'))",
   );
   await ensureTableColumn(
     "module_practice_attempts",
     "completed_at",
     "completed_at TIMESTAMP(6) NULL DEFAULT NULL",
   );
-  const [legacyPracticeIndex] = await db.execute(
-    "SHOW INDEX FROM module_practice_attempts WHERE Key_name = 'module_practice_sequence'",
-  );
+  await db.execute(`
+    CREATE UNIQUE INDEX IF NOT EXISTS module_practice_sequence_by_format
+    ON module_practice_attempts (user_id, course_id, module_id, question_format, previous_attempt_id)
+  `);
+  await db.execute(`
+    ALTER TABLE module_practice_attempts DROP CONSTRAINT IF EXISTS module_practice_sequence
+  `);
+  const [legacyPracticeIndex] = await db.execute(`
+    SELECT quote_ident(schemaname) AS schema_name FROM pg_indexes
+    WHERE schemaname = CURRENT_SCHEMA() AND tablename = 'module_practice_attempts'
+      AND indexname = 'module_practice_sequence'
+  `);
   if (legacyPracticeIndex.length) {
     await db.execute(`
-      ALTER TABLE module_practice_attempts
-        DROP INDEX module_practice_sequence,
-        ADD UNIQUE KEY module_practice_sequence_by_format (user_id, course_id, module_id, question_format, previous_attempt_id)
+      DROP INDEX ${legacyPracticeIndex[0].schema_name}.module_practice_sequence
     `);
   }
 
@@ -601,9 +607,10 @@ export async function initDb({ migrate = false } = {}) {
       year_level VARCHAR(50) NULL,
       section_name VARCHAR(20) NULL,
       course VARCHAR(255) NULL,
-      onboarding_completed TINYINT(1) NOT NULL DEFAULT 0,
-      student_tutorial_pending TINYINT(1) NOT NULL DEFAULT 0,
-      professor_tutorial_pending TINYINT(1) NOT NULL DEFAULT 0,
+      onboarding_completed SMALLINT NOT NULL DEFAULT 0,
+      student_tutorial_pending SMALLINT NOT NULL DEFAULT 0,
+      professor_tutorial_pending SMALLINT NOT NULL DEFAULT 0,
+      admin_tutorial_pending BOOLEAN NOT NULL DEFAULT FALSE,
       verification_id VARCHAR(100) NULL,
       student_id VARCHAR(100) NULL,
       professor_id VARCHAR(100) NULL,
@@ -622,9 +629,9 @@ export async function initDb({ migrate = false } = {}) {
       otp_code VARCHAR(10) NULL,
       otp_expires TIMESTAMP NULL,
       password_reset_token VARCHAR(64) NULL,
-      password_reset_expires DATETIME NULL,
-      is_verified TINYINT(1) NOT NULL DEFAULT 0,
-      last_active DATETIME NULL,
+      password_reset_expires TIMESTAMP NULL,
+      is_verified SMALLINT NOT NULL DEFAULT 0,
+      last_active TIMESTAMP NULL,
       session_last_active TIMESTAMP NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
@@ -665,7 +672,11 @@ export async function initDb({ migrate = false } = {}) {
   );
   await ensureColumn(
     "professor_tutorial_pending",
-    "professor_tutorial_pending TINYINT(1) NOT NULL DEFAULT 0",
+    "professor_tutorial_pending SMALLINT NOT NULL DEFAULT 0",
+  );
+  await ensureColumn(
+    "admin_tutorial_pending",
+    "admin_tutorial_pending BOOLEAN NOT NULL DEFAULT FALSE",
   );
   await ensureColumn("verification_id", "verification_id VARCHAR(100) NULL");
   await ensureColumn("student_id", "student_id VARCHAR(100) NULL");
