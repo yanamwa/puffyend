@@ -247,7 +247,7 @@ async function initQuizModeTables() {
       mode_name VARCHAR(255) NOT NULL,
       title VARCHAR(255) NULL,
       description TEXT NULL,
-      image VARCHAR(500) NULL,
+      image TEXT NULL,
       route VARCHAR(500) NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -262,7 +262,13 @@ async function initQuizModeTables() {
   );
   await ensureTableColumn("quiz_modes", "title", "title VARCHAR(255) NULL");
   await ensureTableColumn("quiz_modes", "description", "description TEXT NULL");
-  await ensureTableColumn("quiz_modes", "image", "image VARCHAR(500) NULL");
+  await ensureTableColumn("quiz_modes", "image", "image TEXT NULL");
+  const [imageColumns] = await db.execute(
+    "SELECT data_type FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'quiz_modes' AND column_name = 'image'",
+  );
+  if (imageColumns[0]?.data_type !== "text") {
+    await db.execute("ALTER TABLE quiz_modes ALTER COLUMN image TYPE TEXT");
+  }
   await ensureTableColumn("quiz_modes", "route", "route VARCHAR(500) NOT NULL");
 
   const defaultQuizModes = [

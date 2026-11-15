@@ -62,8 +62,17 @@ function payloadToFields(body = {}) {
 }
 
 function validateMode(fields) {
-  if (!fields.title || !fields.description || !fields.route) {
-    return "Mode title, description, and route are required.";
+  if (!fields.title || !fields.description) {
+    return "Mode title and description are required.";
+  }
+
+  if (fields.image.startsWith("data:")) {
+    const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(fields.image);
+    if (!match || Buffer.from(match[2], "base64").length > 512 * 1024) {
+      return "Choose a PNG, JPEG, or WebP image up to 512 KB.";
+    }
+  } else if (fields.image.length > 500) {
+    return "The image path is too long.";
   }
 
   return "";
@@ -208,15 +217,13 @@ export async function updateMode(req, res) {
          mode_name = ?,
          title = ?,
          description = ?,
-         image = ?,
-         route = ?
+         image = ?
        WHERE quiz_id = ?`,
       [
         fields.modeName || fields.title,
         fields.title,
         fields.description,
         fields.image,
-        fields.route,
         id,
       ],
     );

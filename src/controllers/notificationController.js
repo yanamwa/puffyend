@@ -397,16 +397,6 @@ export async function getNotifications(req, res) {
 
     const userId = Number(currentUser.userId);
     const role = normalizeRole(currentUser.role);
-
-    /*
-     * A notification is visible when:
-     *
-     * 1. It was sent directly to this user
-     * OR
-     * 2. It is a broadcast announcement whose target
-     *    matches this user's role.
-     */
-
     const [rows] = await db.execute(
       `
       SELECT
@@ -468,13 +458,6 @@ export async function getNotifications(req, res) {
     );
 
     const notifications = rows.map((row) => {
-      /*
-       * Direct notification:
-       * use notifications.is_read
-       *
-       * Broadcast notification:
-       * use notification_reads
-       */
       const isBroadcast = row.recipient_user_id === null;
 
       const isRead = isBroadcast
