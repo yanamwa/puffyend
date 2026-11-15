@@ -103,7 +103,7 @@ function validateSettings(settings, submitted) {
     }
   }
   const allowedSemesters = ["1st Semester", "2nd Semester", "Summer"];
-  if (!allowedSemesters.includes(settings.semester)) {
+  if (Object.hasOwn(submitted, "semester") && !allowedSemesters.includes(settings.semester)) {
     return "Invalid semester.";
   }
 
