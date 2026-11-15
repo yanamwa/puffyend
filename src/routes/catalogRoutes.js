@@ -274,7 +274,32 @@ export async function catalogClasses(req, res) {
     values,
   );
   const [records] = await db.query(
-    `SELECT c.course_id,c.catalog_id,c.catalog_code,c.title,c.code,c.class_name,c.program,c.year_level,c.section_name,c.academic_year,c.semester,c.status,c.archived,c.created_at,COALESCE(u.display_name,u.name,c.professor_name,c.professor_email) AS professor,(SELECT COUNT(*) FROM course_enrollments e WHERE e.course_id=c.course_id AND e.status='approved' AND e.archived=0) AS student_count FROM courses c LEFT JOIN users u ON u.userId=c.professor_id ${where} ORDER BY c.course_id DESC LIMIT ? OFFSET ?`,
+    `SELECT c.course_id,c.catalog_id,c.catalog_code,c.title,c.code,c.class_name,c.program,c.year_level,c.section_name,c.academic_year,c.semester,c.status,c.archived,c.created_at,COALESCE(u.display_name,u.name,c.professor_name,c.professor_email) AS professor,(SELECT COUNT(*) FROM course_enrollments e WHERE e.course_id=c.course_id AND e.status='approved' AND e.archived=0) AS student_count,
+COALESCE((
+  SELECT jsonb_agg(
+    jsonb_build_object(
+      'program', s.program,
+      'year_level', s.year_level,
+      'section_name', s.section_name,
+      'student_count', s.student_count
+    )
+    ORDER BY s.program, s.year_level, s.section_name
+  )
+  FROM (
+    SELECT
+      su.course AS program,
+      su.year_level,
+      su.section_name,
+      COUNT(*) AS student_count
+    FROM course_enrollments e
+    LEFT JOIN users su ON su.userId=e.user_id
+    WHERE e.course_id=c.course_id
+      AND e.status='approved'
+      AND e.archived=0
+    GROUP BY su.course, su.year_level, su.section_name
+  ) s
+), '[]'::jsonb) AS enrollment_sections
+FROM courses c LEFT JOIN users u ON u.userId=c.professor_id ${where} ORDER BY c.course_id DESC LIMIT ? OFFSET ?`,
     [...values, size, (page - 1) * size],
   );
   res.json({ success: true, records, total: Number(count.total), page });

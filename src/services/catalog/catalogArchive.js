@@ -19,7 +19,7 @@ export async function archiveCatalogClasses(
             COALESCE(NULLIF(u.display_name,''),NULLIF(u.name,''),c.professor_name) AS professor_display_name
      FROM courses c JOIN course_catalog cc ON cc.catalog_id=c.catalog_id
      LEFT JOIN users u ON u.userId=c.professor_id OR (c.professor_id IS NULL AND u.email=c.professor_email)
-     WHERE c.catalog_id=? AND c.archived=0 FOR UPDATE`,
+     WHERE c.catalog_id=? AND c.archived=0 FOR UPDATE OF c`,
     [catalogId],
   );
   const emailNotifications = new Map();
@@ -68,9 +68,9 @@ export async function reconcileArchivedCatalogClasses(db) {
     for (const catalog of catalogs) await archiveCatalogClasses(connection, catalog.catalog_id);
     await connection.execute(
       `UPDATE courses c
-       JOIN course_catalog cc ON cc.catalog_id=c.catalog_id
-       SET c.archived_by_role='admin'
-       WHERE cc.archived_at IS NOT NULL AND c.archived=1 AND c.archived_by_role IS NULL`,
+       SET archived_by_role='admin'
+       FROM course_catalog cc
+       WHERE cc.catalog_id=c.catalog_id AND cc.archived_at IS NOT NULL AND c.archived=1 AND c.archived_by_role IS NULL`,
     );
     await connection.commit();
   } catch (error) {

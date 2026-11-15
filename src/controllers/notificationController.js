@@ -440,10 +440,7 @@ export async function getNotifications(req, res) {
         OR (
             n.recipient_user_id IS NULL
 
-            AND (
-              n.created_by_user_id IS NULL
-              OR n.created_by_user_id <> ?
-            )
+            
 
             AND (
               n.target = 'all'
@@ -467,7 +464,7 @@ export async function getNotifications(req, res) {
 
       LIMIT 100
       `,
-      [userId, userId, userId, role, role, role],
+      [userId, userId, role, role, role],
     );
 
     const notifications = rows.map((row) => {

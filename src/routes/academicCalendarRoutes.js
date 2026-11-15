@@ -188,7 +188,7 @@ export function createAcademicCalendarRouter(
       details.title,
       details.academic_year,
       JSON.stringify(details.events),
-      details.published,
+      Number([true, "true", 1, "1"].includes(details.published)),
       req.user.userId,
     ];
     const connection = database.getConnection

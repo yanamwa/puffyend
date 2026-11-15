@@ -48,15 +48,48 @@ export function isExcludedCoverageTitle(title) {
     )
   );
 }
+
+function findHeaderSpan(items, pattern) {
+  for (const line of positionedLines(items)) {
+    const row = items
+      .filter(i => i.str?.trim() &&
+        Math.abs(i.transform[5] - line.y) < 2)
+      .sort((a, b) => a.transform[4] - b.transform[4]);
+
+    for (let start = 0; start < row.length; start++) {
+      let text = "";
+      const first = row[start];
+      let right = first.transform[4];
+
+      for (let j = start; j < Math.min(row.length, start + 12); j++) {
+        const item = row[j];
+        const x = item.transform[4];
+
+        if (j > start && x - right > 4) break;
+
+        text += item.str;
+        right = Math.max(right, x + item.width);
+
+        if (pattern.test(text.replace(/\s+/g, ""))) {
+          return {
+            ...first,
+            str: text,
+            width: right - first.transform[4],
+          };
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 export function coverageHeadings(pages) {
   const result = [];
   let bounds = null,
     inCoverage = false,
     current = null;
   for (const page of pages) {
-    const header = page.items.find((i) =>
-      /^topic(?:s)?$/i.test(i.str?.trim() || ""),
-    );
+    const header = findHeaderSpan(page.items, /^topics?$/i);
     const coverage = positionedLines(page.items).find((l) =>
       /^COURSE COVERAGE$/i.test(l.text),
     );
@@ -89,6 +122,7 @@ export function coverageHeadings(pages) {
         i.transform[4] >= bounds.left * page.width &&
         i.transform[4] < bounds.right * page.width &&
         (!header || i.transform[5] < header.transform[5] - 28) &&
+        (!coverage || i.transform[5] < coverage.y - 2) &&
         (!stop || i.transform[5] > stop.y),
     );
     const lines = positionedLines(items);
