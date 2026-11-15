@@ -1,4 +1,9 @@
 import "./environment.js";
+import { startCatalogLessonWorker } from "./services/catalog/catalogLessonGeneration.js";
+import academicCalendarRoutes from "./routes/academicCalendarRoutes.js";
+import { migrateAcademicCalendar } from "./migrations/academicCalendarMigration.js";
+import express from "express";
+import cors from "cors";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -333,23 +338,4 @@ async function startServer() {
     console.error(error);
   }
 }
-if (process.env.NODE_ENV !== "production") {
-  for (const host of ["localhost", "127.0.0.1"])
-    for (const port of ["", ":3000", ":3001", ":3002", ":3003", ":5173"])
-      origins.push(`http://${host}${port}`);
-}
-app.use(apiCors(origins));
-mountApiAvailability(app, availability);
-
-const server = app.listen(process.env.PORT || 5000, "0.0.0.0", () => {
-  console.log(
-    `PuffyBrain HTTP server listening on port ${server.address().port}`,
-  );
-  void import("./application.js")
-    .then(({ startApplication }) => startApplication(app, availability))
-    .catch((error) => failStartup(availability, error));
-});
-server.on("error", (error) => {
-  console.error("HTTP SERVER FAILED TO LISTEN:", error.code || "listen error");
-  process.exit(1);
-});
+startServer();

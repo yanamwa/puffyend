@@ -274,7 +274,57 @@ export async function catalogClasses(req, res) {
     values,
   );
   const [records] = await db.query(
-    `SELECT c.course_id,c.catalog_id,c.catalog_code,c.title,c.code,c.class_name,c.program,c.year_level,c.section_name,c.academic_year,c.semester,c.status,c.archived,c.created_at,COALESCE(u.display_name,u.name,c.professor_name,c.professor_email) AS professor,(SELECT COUNT(*) FROM course_enrollments e WHERE e.course_id=c.course_id AND e.status='approved' AND e.archived=0) AS student_count FROM courses c LEFT JOIN users u ON u.userId=c.professor_id ${where} ORDER BY c.course_id DESC LIMIT ? OFFSET ?`,
+    `SELECT c.course_id,c.catalog_id,c.catalog_code,c.title,c.code,c.class_name,c.program,c.year_level,c.section_name,c.academic_year,c.semester,c.status,c.archived,c.created_at,COALESCE(u.display_name,u.name,c.professor_name,c.professor_email) AS professor,(SELECT COUNT(*) FROM course_enrollments e WHERE e.course_id=c.course_id AND e.status='approved' AND e.archived=0) AS student_count,
+      ARRAY(
+        SELECT DISTINCT
+          CASE
+            WHEN profile.section ~ '^[1-4][A-F]$' THEN profile.section
+            WHEN profile.section ~ '^[A-F]$' AND profile.year_number IS NOT NULL
+              THEN profile.year_number || profile.section
+            ELSE profile.section
+          END AS section
+        FROM course_enrollments enrollment
+        JOIN users student ON student.userId = enrollment.user_id
+        CROSS JOIN LATERAL (
+          SELECT
+            REGEXP_REPLACE(UPPER(TRIM(student.section_name)), '[[:space:]-]+', '', 'g') AS section,
+            SUBSTRING(TRIM(student.year_level) FROM '^[1-4]') AS year_number
+        ) profile
+        WHERE enrollment.course_id = c.course_id
+          AND enrollment.status = 'approved'
+          AND enrollment.archived = 0
+          AND profile.section ~ '^([1-4])?[A-F]$'
+        ORDER BY section
+) AS enrolled_sections,
+
+COALESCE((
+  SELECT jsonb_agg(
+    jsonb_build_object(
+      'program', s.program,
+      'year_level', s.year_level,
+      'section_name', s.section_name,
+      'student_count', s.student_count
+    )
+    ORDER BY s.program, s.year_level, s.section_name
+  )
+  FROM (
+    SELECT
+      su.course AS program,
+      su.year_level AS year_level,
+      su.section_name AS section_name,
+      COUNT(*) AS student_count
+    FROM course_enrollments e
+    LEFT JOIN users su ON su.userId = e.user_id
+    WHERE e.course_id = c.course_id
+      AND e.status = 'approved'
+      AND e.archived = 0
+    GROUP BY
+      su.course,
+      su.year_level,
+      su.section_name
+  ) s
+), '[]'::jsonb) AS enrollment_sections
+      FROM courses c LEFT JOIN users u ON u.userId=c.professor_id ${where} ORDER BY c.course_id DESC LIMIT ? OFFSET ?`,
     [...values, size, (page - 1) * size],
   );
   res.json({ success: true, records, total: Number(count.total), page });

@@ -1,6 +1,9 @@
 import { db } from "../../db.js";
 import { embedTexts, embeddingConfig } from "../rag/embeddingService.js";
-import { assertCourseAccess, requestError } from "../rag/courseAccessService.js";
+import {
+  assertCourseAccess,
+  requestError,
+} from "../rag/courseAccessService.js";
 import { loadChunks } from "../rag/vectorRepository.js";
 import { retrieveContexts } from "../rag/retrievalService.js";
 import { generateQuizBatch } from "../rag/quizRagService.js";
@@ -40,10 +43,15 @@ async function studentAccess(user, courseId, moduleId) {
     [courseId],
   );
   const publicationModules = parse(courses[0]?.content_modules || "[]");
-  if (publicationModules.some(m => m.studentPublished !== undefined)) {
-    const publishedModule = publicationModules.find(m => String(m.id ?? m.module_id) === String(moduleId));
+  if (publicationModules.some((m) => m.studentPublished !== undefined)) {
+    const publishedModule = publicationModules.find(
+      (m) => String(m.id ?? m.module_id) === String(moduleId),
+    );
     if (publishedModule?.studentPublished !== true)
-      throw requestError("This module has not been uploaded to students yet.", 403);
+      throw requestError(
+        "This module has not been uploaded to students yet.",
+        403,
+      );
   }
   const content = [
     ...parse(courses[0]?.lesson_contents || "[]"),
@@ -139,6 +147,16 @@ export async function saveMainConfig(user, body) {
       topicKeys.add(key);
       return true;
     });
+  const [existingRows] = await db.execute(
+    "SELECT config_json FROM main_quiz_configs WHERE course_id=? AND module_id=?",
+    [courseId, moduleId],
+  );
+  const existingConfig = existingRows[0]
+    ? parse(existingRows[0].config_json)
+    : {};
+  const baselineQuestions = Array.isArray(existingConfig.baselineQuestions)
+    ? existingConfig.baselineQuestions
+    : [];
   const config = {
     ...settings,
     topics,
@@ -151,6 +169,8 @@ export async function saveMainConfig(user, body) {
       module.module_learning_objectives ||
       body.learning_objectives ||
       "",
+    // A new generation is an addition to the existing review questions.
+    baselineQuestions,
   };
   await db.execute(
     "INSERT INTO main_quiz_configs(course_id,module_id,config_json) VALUES(?,?,?) ON CONFLICT (course_id, module_id) DO UPDATE SET config_json=EXCLUDED.config_json,revision=main_quiz_configs.revision+1",
@@ -390,6 +410,14 @@ async function generatePersonalized(
         .filter(Boolean),
     ),
   ];
+  const previousBaselineQuestions = preview
+    ? (config.baselineQuestions || [])
+        .map((question) => question?.question)
+        .filter(Boolean)
+    : [];
+  const previousQuestions = [
+    ...new Set([...previousPracticeQuestions, ...previousBaselineQuestions]),
+  ];
   const contexts = new Map();
   for (const topic of blueprint.tosDistribution)
     contexts.set(
@@ -415,7 +443,7 @@ async function generatePersonalized(
       ...config,
       ...blueprint,
       lessonContent,
-      previousPracticeQuestions,
+      previousPracticeQuestions: previousQuestions,
     });
     const batch = await generateQuizBatch({
       types: slots.map((slot) => slot.type),
@@ -426,17 +454,13 @@ async function generatePersonalized(
       mainPrompt: prompt,
       assignedSlots: slots,
       previousQuestions: [
-        ...previousPracticeQuestions,
+        ...previousQuestions,
         ...questions.map((question) => question.question),
       ],
     });
     questions.push(...batch);
   }
-  validateAdaptiveQuestions(
-    questions,
-    blueprint.slots,
-    previousPracticeQuestions,
-  );
+  validateAdaptiveQuestions(questions, blueprint.slots, previousQuestions);
   if (preview) return questions;
   // Another process may have saved this revision while generation ran; preserve that saved quiz.
   await db.execute(
@@ -471,7 +495,16 @@ export async function generateMainQuizPreview(user, body) {
   if (!stored)
     throw requestError("Configure Main Quiz before generating questions.", 409);
   const config = parse(stored.config_json);
-  const baselineQuestions = await generatePersonalized(
+  const existingBaselineQuestions = Array.isArray(config.baselineQuestions)
+    ? config.baselineQuestions
+    : [];
+  if (existingBaselineQuestions.length + config.questionCount > 100) {
+    throw requestError(
+      `This quiz already has ${existingBaselineQuestions.length} questions. Remove questions or generate ${100 - existingBaselineQuestions.length} or fewer additional questions.`,
+      400,
+    );
+  }
+  const generatedQuestions = await generatePersonalized(
     user,
     courseId,
     moduleId,
@@ -479,6 +512,10 @@ export async function generateMainQuizPreview(user, body) {
     config,
     true,
   );
+  const baselineQuestions = [
+    ...existingBaselineQuestions,
+    ...generatedQuestions,
+  ];
   const nextConfig = { ...config, baselineQuestions };
   const [updated] = await db.execute(
     "UPDATE main_quiz_configs SET config_json=? WHERE course_id=? AND module_id=? AND revision=?",
@@ -743,10 +780,9 @@ export function validateManualQuestions(questions) {
         "Identification alternatives must contain up to 20 answers of 150 characters or fewer.",
         400,
       );
-    const normalizedAnswers = [
-      question.correct_answer,
-      ...acceptedAnswers,
-    ].map((answer) => normalizeAnswer(answer));
+    const normalizedAnswers = [question.correct_answer, ...acceptedAnswers].map(
+      (answer) => normalizeAnswer(answer),
+    );
     if (new Set(normalizedAnswers).size !== normalizedAnswers.length)
       throw requestError(
         "Identification alternatives must be distinct from each other and the correct answer.",
