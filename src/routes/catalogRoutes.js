@@ -10,7 +10,10 @@ import { db } from "../db.js";
 import { sendCatalogCourseArchivedEmail } from "../utils/mailer.js";
 import authenticateUser from "../middleware/authMiddleware.js";
 import { requireRole } from "../middleware/roleMiddleware.js";
-import { extractSyllabus } from "../services/catalog/syllabusExtraction.js";
+import {
+  extractSyllabus,
+  INVALID_SYLLABUS,
+} from "../services/catalog/syllabusExtraction.js";
 import {
   syllabusDirectory as directory,
   syllabusFilePath as filePath,
@@ -125,7 +128,7 @@ async function analyzeFile(data) {
   const extractionMessage = suggestions.coverage_modules.length
     ? ""
     : "Course Coverage headings were not detected. You can add them from the PDF before saving.";
-  return { suggestions, extractionMessage };
+  return { cvsuSyllabusValidated: true, suggestions, extractionMessage };
 }
 router.post(
   "/uploads/:id/extract",
@@ -321,10 +324,10 @@ router.post(
   run(async (req, res) => {
     if (!req.file || req.file.buffer.subarray(0, 5).toString() !== "%PDF-")
       fail("Choose a valid PDF file (maximum 15 MB).");
-    const { suggestions, extractionMessage } = await analyzeFile(req.file.buffer);
+    const data = await analyzeFile(req.file.buffer);
     const [matches] = await db.execute(
       "SELECT * FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL",
-      [normalizeCatalogCode(suggestions.code)],
+      [normalizeCatalogCode(data.suggestions.code)],
     );
     await cleanupSyllabusUploads();
     const storageName = crypto.randomBytes(18).toString("hex") + ".pdf",
@@ -346,8 +349,7 @@ router.post(
       success: true,
       uploadId,
       filename,
-      suggestions,
-      extractionMessage,
+      ...data,
       matches: matches.map(present),
     });
   }),
@@ -756,6 +758,7 @@ router.use((error, _req, res, _next) => {
     });
   res.status(error.statusCode || 500).json({
     success: false,
+    code: error.code === INVALID_SYLLABUS ? error.code : undefined,
     message: error.statusCode
       ? error.message
       : "Course catalog request failed.",
