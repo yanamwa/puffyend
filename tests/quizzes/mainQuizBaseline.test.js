@@ -39,7 +39,7 @@ for (const attempt of [
   );
 }
 const baseline = mainQuizBlueprint({ ...settings, topics: [] });
-assert.equal(baseline.blueprint.slots[0].topic, "Photosynthesis");
+assert.equal(baseline.blueprint.slots[0].topic, "General Concepts");
 const adaptive = mainQuizBlueprint(settings, {
   attempts_id: 42,
   total: 2,

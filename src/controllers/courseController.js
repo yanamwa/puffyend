@@ -576,7 +576,9 @@ async function getCourseIdColumn() {
        AND TABLE_NAME = 'courses'
        AND COLUMN_NAME IN ('course_id', 'id')`,
   );
-  const columnNames = new Set(columns.map((column) => column.COLUMN_NAME));
+  const columnNames = new Set(
+  columns.map((column) => column.COLUMN_NAME ?? column.column_name)
+);
 
   courseIdColumn = columnNames.has("course_id") ? "course_id" : "id";
   return courseIdColumn;

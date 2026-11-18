@@ -136,9 +136,9 @@ test("catalog worker never persists an exhausted duplicate quiz", async () => {
     calls = 0;
   const connection = {
     query: async (sql) =>
-      sql.includes("GET_LOCK")
+      sql.includes("pg_try_advisory_lock")
         ? [[{ acquired: 1 }]]
-        : sql.includes("RELEASE_LOCK")
+        : sql.includes("pg_advisory_unlock")
           ? [[{ released: 1 }]]
           : [
               [
@@ -194,9 +194,9 @@ test("catalog worker retrieves per-module PDF context once per version and keeps
   const recursion = "Recursion\nBase cases and recursive calls.";
   const connection = {
     query: async (sql) =>
-      sql.includes("GET_LOCK")
+      sql.includes("pg_try_advisory_lock")
         ? [[{ acquired: 1 }]]
-        : sql.includes("RELEASE_LOCK")
+        : sql.includes("pg_advisory_unlock")
           ? [[{ released: 1 }]]
           : [
               [

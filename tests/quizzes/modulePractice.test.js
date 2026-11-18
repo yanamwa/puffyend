@@ -217,7 +217,7 @@ test("students resume their own attempt, submit once, then retry with the latest
   const detailRecords = [];
   let submissionOrder = 0;
   async function execute(sql, values) {
-    if (sql.includes("INFORMATION_SCHEMA"))
+    if (sql.toLowerCase().includes("information_schema.columns"))
       return [[{ COLUMN_NAME: "course_id" }]];
     if (sql.includes("JOIN course_enrollments"))
       return [values[1] === student.userId ? [course] : []];
