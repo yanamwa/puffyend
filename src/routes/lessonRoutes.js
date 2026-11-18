@@ -1,4 +1,7 @@
-import { studentMainQuizHistory } from "../services/quizzes/studentQuizHistory.js";
+import {
+  studentMainQuizHistory,
+  studentPracticeHistory,
+} from "../services/quizzes/studentQuizHistory.js";
 import { startModulePractice, submitModulePractice } from "../services/quizzes/modulePracticeService.js";
 import {
   saveMainQuizPreview,
@@ -10,10 +13,7 @@ import {
   submitMainQuiz,
   mainQuizAnalysis,
   mainQuizStatus,
-  requestMainQuizCode,
-  verifyMainQuizCode,
 } from "../services/quizzes/mainQuizService.js";
-import { mainQuizSessionHash } from "../services/quizzes/mainQuizVerification.js";
 import express from "express";
 
 import upload from "../middleware/upload.js";
@@ -47,6 +47,11 @@ const practiceHandler = (key, handler) => async (req, res) => {
 };
 router.post("/practice/start", authenticateUser, practiceHandler("attempt", startModulePractice));
 router.post("/practice/submit", authenticateUser, practiceHandler("result", submitModulePractice));
+router.get(
+  "/practice/history",
+  authenticateUser,
+  practiceHandler("records", studentPracticeHistory),
+);
 
 const mainHandler = (handler) => async (req, res) => {
   try {
@@ -54,7 +59,6 @@ const mainHandler = (handler) => async (req, res) => {
   } catch (error) {
     res.status(error.statusCode || 500).json({
       success: false,
-      ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
       message: error.statusCode
         ? error.message
         : "Main Quiz request failed. Please try again.",
@@ -71,7 +75,6 @@ router.get(
       req.user,
       req.params.courseId,
       req.params.moduleId,
-      mainQuizSessionHash(req.headers.authorization),
     ),
   })),
 );
@@ -119,24 +122,10 @@ router.put(
   })),
 );
 router.post(
-  "/main-quiz/verification/send",
-  authenticateUser,
-  mainHandler((req) =>
-    requestMainQuizCode(req.user, req.body, mainQuizSessionHash(req.headers.authorization)),
-  ),
-);
-router.post(
-  "/main-quiz/verification/confirm",
-  authenticateUser,
-  mainHandler((req) =>
-    verifyMainQuizCode(req.user, req.body, mainQuizSessionHash(req.headers.authorization)),
-  ),
-);
-router.post(
   "/main-quiz/start",
   authenticateUser,
   mainHandler(async (req) => ({
-    quiz: await startMainQuiz(req.user, req.body, mainQuizSessionHash(req.headers.authorization)),
+    quiz: await startMainQuiz(req.user, req.body),
   })),
 );
 router.post(

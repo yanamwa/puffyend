@@ -213,7 +213,6 @@ function fixture(mode) {
     parse: (value) => (typeof value === "string" ? JSON.parse(value) : value),
     requestError: (message, statusCode) =>
       Object.assign(new Error(message), { statusCode }),
-    hasMainQuizVerification: async () => true,
     db: {
       execute,
       getConnection: async () => ({

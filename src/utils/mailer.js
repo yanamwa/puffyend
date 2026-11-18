@@ -140,17 +140,6 @@ export async function sendOtpEmail(email, name, otp) {
   });
 }
 
-export async function sendMainQuizOtpEmail(email, otp) {
-  await sendEmail({
-    to: { address: email },
-    subject: "PuffyBrain Main Quiz verification code",
-    text: [
-      `Your Main Quiz verification code is ${otp}.`,
-      "Enter it in PuffyBrain to open the Main Quiz tutorial. The code expires in 5 minutes.",
-    ].join("\n\n"),
-  });
-}
-
 export async function sendProfessorClassArchivedEmail({ email, name, title, reason }) {
   await sendEmail({
     to: { address: email },
@@ -161,6 +150,26 @@ export async function sendProfessorClassArchivedEmail({ email, name, title, reas
       `Reason\n${reason}`,
       "Contact your administrator if you have questions about your class.",
     ].join("\n\n"),
+  });
+}
+
+export async function sendCatalogCourseStatusEmail({
+  email,
+  name,
+  code,
+  title,
+  syllabusFilename,
+  status,
+}) {
+  const course = `${code} - ${title}`;
+  const greeting = name ? `Hi ${name},` : "Hello,";
+  const message = `The catalog course ${course} is now ${status}.`;
+  const syllabus = `Syllabus you uploaded: ${syllabusFilename}`;
+  await sendEmail({
+    to: { address: email },
+    subject: `PuffyBrain course status: ${code} is now ${status}`,
+    text: `${greeting}\n\n${message}\n${syllabus}`,
+    html: `<p>${escapeHtml(greeting)}</p><p>${escapeHtml(message)}</p><p>${escapeHtml(syllabus)}</p>`,
   });
 }
 

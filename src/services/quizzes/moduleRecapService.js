@@ -8,21 +8,29 @@ export async function generateModuleRecap({ user, body }) {
   if (!Array.isArray(body.document_ids || [])) {
     throw requestError("document_ids must be an array.", 400);
   }
+  const content = String(body.lesson_content || "").slice(0, 30000).trim();
   if (body.document_ids?.length) {
-    const result = await generateQuizWithRag({
-      user,
-      body: {
-        ...body,
-        assessment_type: "practice",
-        question_count: QUESTION_COUNT,
-        identification_count: 0,
-        multiple_choice_count: QUESTION_COUNT,
-        true_false_count: 0,
-        lots_count: QUESTION_COUNT,
-        hots_count: 0,
-      },
-    });
-    return { ...result, assessmentType: "recap" };
+    try {
+      const result = await generateQuizWithRag({
+        user,
+        body: {
+          ...body,
+          assessment_type: "practice",
+          question_count: QUESTION_COUNT,
+          identification_count: 0,
+          multiple_choice_count: QUESTION_COUNT,
+          true_false_count: 0,
+          lots_count: QUESTION_COUNT,
+          hots_count: 0,
+        },
+      });
+      return { ...result, assessmentType: "recap" };
+    } catch (error) {
+      // If the index is unavailable or its questions fail grounding, use the module's lesson text.
+      if (content.length < 12 || ![409, 422].includes(error.statusCode)) {
+        throw error;
+      }
+    }
   }
 
   const courseId = Number(body.course_id);
@@ -31,7 +39,6 @@ export async function generateModuleRecap({ user, body }) {
   const moduleId = lessonId || "recap";
   const title = String(body.lesson_title || "Module").slice(0, 100);
   const objectives = String(body.learning_objectives || "").slice(0, 1500);
-  const content = String(body.lesson_content || "").slice(0, 30000).trim();
   const chunks = savedLessonChunks([{ moduleId, title, content }], moduleId);
   if (!chunks.length) {
     throw requestError("Add lesson content before generating Quick Recap.", 409);

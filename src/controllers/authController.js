@@ -1,4 +1,8 @@
-import { security } from "../config/security.js";
+import {
+  JWT_SECRET,
+  security,
+  SESSION_TIMEOUT_MINUTES,
+} from "../config/security.js";
 import bcrypt from "bcrypt";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -21,8 +25,6 @@ import { logAuditFromRequest } from "../services/system/auditLogService.js";
 /* =====================================================
    CONFIGURATION
 ===================================================== */
-
-import { JWT_SECRET } from "../config/security.js";
 
 const OTP_TTL_SECONDS = 5 * 60;
 
@@ -1199,7 +1201,7 @@ export async function login(req, res) {
       });
     }
 
-    const tokenMaxAgeSeconds = 7 * 24 * 60 * 60;
+    const tokenMaxAgeSeconds = SESSION_TIMEOUT_MINUTES * 60;
 
     const temporaryExpiresAt =
       Number(user.is_temporary) === 1 && user.temporary_expires_at

@@ -362,7 +362,7 @@ await test("duplicate answer choices are repaired before grounding review", asyn
   assert.equal(result[0].correct_answer, "Sunlight");
 });
 
-function mockQuizSources(context, generate) {
+function mockQuizSources(context, generate, { sourceStatus = "ready" } = {}) {
   context.mock.method(db, "execute", async (sql) => {
     if (sql.includes("FROM courses")) return [[{ course_id: 1 }]];
     if (sql.includes("FROM lesson_source_documents"))
@@ -371,7 +371,7 @@ function mockQuizSources(context, generate) {
           {
             document_id: 1,
             filename: "lesson.txt",
-            processing_status: "ready",
+            processing_status: sourceStatus,
           },
         ],
       ];
@@ -428,6 +428,68 @@ function quizResponse() {
     },
   };
 }
+
+await test("Quick Recap uses lesson slides when its source index is unavailable", async (context) => {
+  const lessonContent =
+    "Leaves absorb sunlight. Roots take in water. Stems move water through plants. Chlorophyll makes leaves green. Photosynthesis releases oxygen.";
+  const questions = [
+    ["What do leaves absorb?", "Sunlight"],
+    ["Which part takes in water?", "Roots"],
+    ["Which structure moves water through the plant?", "Stems"],
+    ["What gives leaves their green color?", "Chlorophyll"],
+    ["Which gas does photosynthesis release?", "Oxygen"],
+  ];
+  mockQuizSources(
+    context,
+    ({ schema, data }) => {
+      if (!schema.properties.questions) {
+        return {
+          verdicts: data.questions.map((_, question_index) => ({
+            question_index,
+            supported: true,
+            reason: "Supported",
+          })),
+        };
+      }
+      assert.match(data.evidence[0].quote, /Leaves absorb sunlight/);
+      return {
+        questions: questions.map(([stem, answer]) => ({
+          ...question,
+          type: "multiple_choice",
+          question: stem,
+          options: [answer, "Glucose", "Nitrogen", "Carbon dioxide"],
+          correct_answer: answer,
+          evidence_ids: [data.evidence[0].evidence_id],
+        })),
+      };
+    },
+    { sourceStatus: "pending" },
+  );
+  const body = {
+    assessment_type: "recap",
+    course_id: 1,
+    document_ids: [1],
+    lesson_title: "Plants",
+    lesson_content: lessonContent,
+  };
+
+  const response = quizResponse();
+  await generateLessonQuiz(
+    { user: { userId: 1, role: "admin" }, body },
+    response,
+  );
+  assert.equal(response.statusCode, 200, response.body.message);
+  assert.equal(response.body.assessment_type, "recap");
+  assert.equal(response.body.quiz.questions.length, 5);
+  assert.deepEqual(response.body.document_ids, []);
+
+  const deniedResponse = quizResponse();
+  await generateLessonQuiz(
+    { user: { userId: 2, role: "student" }, body },
+    deniedResponse,
+  );
+  assert.equal(deniedResponse.statusCode, 403);
+});
 
 for (const exhaust of [false, true]) {
   await test(`concurrent quiz API batches ${exhaust ? "reject exhausted collisions" : "repair collisions before returning the full quiz"}`, async (context) => {
