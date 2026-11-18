@@ -715,7 +715,7 @@ router.patch(
           `INSERT INTO catalog_lesson_jobs (version_id)
            SELECT version_id FROM syllabus_versions
            WHERE catalog_id=? AND coverage_modules IS NOT NULL
-             AND coverage_modules <> '[]'::jsonb
+            AND coverage_modules <> '[]'
            ON CONFLICT (version_id) DO UPDATE
              SET status='queued',error_message=NULL,updated_at=NOW()
              WHERE catalog_lesson_jobs.status='failed'`,
