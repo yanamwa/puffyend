@@ -69,7 +69,7 @@ test("the professor tutorial persists per account without blocking the dashboard
       return [[{ ...user }]];
     }
     if (sql.includes("SET last_active")) return [{ affectedRows: 1 }];
-    assert.match(sql, /SET professor_tutorial_pending = 0/);
+    assert.match(sql, /SET professor_tutorial_pending = (?:FALSE|0)/);
     assert.match(sql, /verification_status = 'approved'/);
     user.professor_tutorial_pending = 0;
     return [{ affectedRows: 1 }];
@@ -101,7 +101,7 @@ test("approved professors can complete the tour before changing their password w
   context.mock.method(db, "execute", async (sql) => {
     if (sql.includes("SELECT")) return [[user]];
     if (sql.includes("SET last_active")) return [{ affectedRows: 1 }];
-    assert.match(sql, /SET professor_tutorial_pending = 0/);
+    assert.match(sql, /SET professor_tutorial_pending = (?:FALSE|0)/);
     assert.doesNotMatch(sql, /must_change_password/);
     completionWrites++;
     user.professor_tutorial_pending = 0;
@@ -148,9 +148,14 @@ test("login reports the saved professor tutorial state for new and existing acco
   context.mock.method(bcrypt, "compare", async () => true);
   context.mock.method(db, "execute", async (sql) => {
     if (sql.includes("FROM users")) return [[{ ...user }]];
-    if (sql.includes("FROM system_settings")) return [[]];
-    if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
-    assert.fail(`Unexpected database request: ${sql}`);
+if (sql.includes("FROM system_settings")) return [[]];
+if (sql.includes("INSERT INTO audit_logs")) return [{ insertId: 1 }];
+
+if (sql.includes("SET session_last_active = NOW()")) {
+  return [{ affectedRows: 1 }];
+}
+
+assert.fail(`Unexpected database request: ${sql}`);
   });
   const req = {
     body: { email: user.email, password: "test-password" },

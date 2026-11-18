@@ -108,11 +108,11 @@ async function authenticate(req, res, next, allowAccountSetup) {
     }
 
     const primaryRole = normalizeRole(user.role);
-    if (
-      !["super_admin", "professor"].includes(primaryRole) &&
-      Number(user.must_change_password) === 1 &&
-      !allowAccountSetup
-    ) {
+   if (
+  primaryRole !== "super_admin" &&
+  Number(user.must_change_password) === 1 &&
+  !allowAccountSetup
+) {
       return res.status(403).json({
         success: false,
         code: "PASSWORD_CHANGE_REQUIRED",
@@ -163,7 +163,7 @@ async function authenticate(req, res, next, allowAccountSetup) {
     req.user = {
       ...decoded,
       id: user.userId,
-      userId: user.userId,
+   userId: user.userId,
       email: user.email,
       role,
       primaryRole,
