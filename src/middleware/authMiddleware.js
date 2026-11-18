@@ -54,7 +54,7 @@ async function authenticate(req, res, next, allowAccountSetup) {
         `SELECT userId, email, role, verification_status, is_archived,
          is_temporary, temporary_expires_at, must_change_password,
          onboarding_completed, student_tutorial_pending, is_verified, professor_admin_access,
-(session_last_active <= NOW() - INTERVAL '${SESSION_TIMEOUT_MINUTES} minutes') AS session_idle_expired        
+(session_last_active <= NOW() - INTERVAL '${SESSION_TIMEOUT_MINUTES} minutes') AS session_idle_expired
  FROM users
          WHERE userId = ?
          LIMIT 1`,
