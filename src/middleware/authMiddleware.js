@@ -3,7 +3,7 @@ import { db } from "../db.js";
 import { hasPendingStudentTutorial } from "../utils/studentTutorial.js";
 import { hasProfessorAdminAccess } from "../utils/professorAdminAccess.js";
 
-import { JWT_SECRET } from "../config/security.js";
+import { JWT_SECRET, SESSION_TIMEOUT_MINUTES } from "../config/security.js";
 
 function normalizeRole(value) {
   return String(value || "")
@@ -53,7 +53,7 @@ async function authenticate(req, res, next, allowAccountSetup) {
         `SELECT userId, email, role, verification_status, is_archived,
          is_temporary, temporary_expires_at, must_change_password,
          onboarding_completed, student_tutorial_pending, is_verified, professor_admin_access,
-         (session_last_active <= NOW() - INTERVAL '20 minutes') AS session_idle_expired
+         (session_last_active <= NOW() - INTERVAL '${SESSION_TIMEOUT_MINUTES} minutes') AS session_idle_expired
          FROM users
          WHERE userId = ?
          LIMIT 1`,
@@ -64,7 +64,7 @@ async function authenticate(req, res, next, allowAccountSetup) {
         `SELECT userId, email, role, verification_status, is_archived,
          is_temporary, temporary_expires_at, must_change_password,
          onboarding_completed, student_tutorial_pending, is_verified, professor_admin_access,
-         (session_last_active <= NOW() - INTERVAL '20 minutes') AS session_idle_expired
+         (session_last_active <= NOW() - INTERVAL '${SESSION_TIMEOUT_MINUTES} minutes') AS session_idle_expired
          FROM users
          WHERE email = ?
          LIMIT 1`,
@@ -85,7 +85,7 @@ async function authenticate(req, res, next, allowAccountSetup) {
       return res.status(401).json({
         success: false,
         code: "SESSION_IDLE_TIMEOUT",
-        message: "Your session expired after 20 minutes of inactivity. Please sign in again.",
+        message: `Your session expired after ${SESSION_TIMEOUT_MINUTES} minutes of inactivity. Please sign in again.`,
       });
     }
 

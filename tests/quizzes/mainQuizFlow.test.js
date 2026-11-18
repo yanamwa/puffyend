@@ -78,7 +78,6 @@ async function execute(sql, args) {
     return [[{ revision, config_json: JSON.stringify(config) }]];
   if (sql.includes("JOIN main_quiz_results"))
     return [saved.submissions ? [{ quiz_id: saved.quiz_id }] : []];
-  if (sql.includes("FROM main_quiz_verifications")) return [[{}]];
   if (sql.includes("FROM users") && sql.includes("FOR UPDATE")) return [[{}]];
   if (sql.includes("FROM personalized_main_quizzes"))
     return [missingSavedQuiz ? [] : [{ ...saved }]];
@@ -217,7 +216,7 @@ try {
   assert.ok(!("correct_answer" in quiz.questions[0]));
   missingSavedQuiz = true;
   await assert.rejects(
-    () => startMainQuiz(user, { course_id: 1, module_id: "module-1" }, "verified-session"),
+    () => startMainQuiz(user, { course_id: 1, module_id: "module-1" }),
     /No indexed source evidence/,
   );
   missingSavedQuiz = false;

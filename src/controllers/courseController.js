@@ -2424,6 +2424,37 @@ export async function getEnrolledPracticeModule(user, courseId, moduleId) {
   return { ...module, moduleIndex };
 }
 
+export async function getCourseModuleLabels(courseIds) {
+  if (!courseIds.length) return new Map();
+
+  const idColumn = await getCourseIdColumn();
+  const [rows] = await db.execute(
+    `SELECT c.${idColumn} AS course_pk, c.title, c.course_name, c.content_modules,
+            c.lesson_pages, c.quiz_items
+     FROM courses c WHERE c.${idColumn} IN (${courseIds.map(() => "?").join(", ")})`,
+    courseIds,
+  );
+  const legacyCourseIds = rows
+    .filter(
+      (row) =>
+        !parseJsonList(row.lesson_pages).length &&
+        !parseJsonList(row.quiz_items).length,
+    )
+    .map(getCourseId);
+  const learningModules = await getCourseLearningModules(legacyCourseIds);
+
+  return new Map(
+    rows.map((row) => {
+      const courseId = getCourseId(row);
+      const course = rowToCourse(row, learningModules.get(String(courseId)) || []);
+      const moduleTitles = new Map(
+        course.contentModules.map((module) => [String(module.id), module.title]),
+      );
+      return [courseId, { title: course.title, moduleTitles }];
+    }),
+  );
+}
+
 export async function joinCourseByCode(req, res) {
   const courseCode = cleanText(
     req.body?.courseCode ||

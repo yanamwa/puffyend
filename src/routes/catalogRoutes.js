@@ -1,5 +1,3 @@
-import { queueCatalogLessons } from "../services/catalog/catalogLessonGeneration.js";
-import { archiveCatalogClasses } from "../services/catalog/catalogArchive.js";
 import { getCourseById } from "../controllers/courseController.js";
 import express from "express";
 import multer from "multer";
@@ -7,7 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { db } from "../db.js";
-import { sendCatalogCourseArchivedEmail } from "../utils/mailer.js";
+import { sendCatalogCourseStatusEmail } from "../utils/mailer.js";
 import authenticateUser from "../middleware/authMiddleware.js";
 import { requireRole } from "../middleware/roleMiddleware.js";
 import {
@@ -27,6 +25,8 @@ import { getRequestIp } from "../services/system/auditLogService.js";
 
 const router = express.Router();
 const admin = requireRole("admin", "super_admin");
+const uploadSyllabus = requireRole("admin", "professor");
+const manageCatalogStatus = requireRole("super_admin");
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024, files: 1, fields: 0 },
@@ -49,13 +49,6 @@ const fail = (message, statusCode = 400) => {
   throw Object.assign(new Error(message), { statusCode });
 };
 const actor = (req) => req.user.userId;
-const actorRoleOf = (req) => {
-  const role = String(req.user?.role || "admin")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-  return role === "superadmin" ? "super_admin" : role;
-};
 const programs = (value) =>
   Array.isArray(value) ? value : JSON.parse(value || "[]");
 const present = (row) => {
@@ -133,7 +126,7 @@ async function analyzeFile(data) {
 router.post(
   "/uploads/:id/extract",
   authenticateUser,
-  admin,
+  uploadSyllabus,
   run(async (req, res) => {
     const [[row]] = await db.execute(
       "SELECT * FROM syllabus_uploads WHERE upload_id=? AND uploader_id=? AND expires_at>NOW()",
@@ -170,6 +163,97 @@ router.get(
     });
   }),
 );
+// Syllabus Management shares the catalog's upload and approval workflow.
+const syllabusAccess = requireRole("professor", "admin", "super_admin");
+const syllabusRecordsSql = `
+  SELECT v.version_id,v.catalog_id,v.filename,v.academic_year,v.semester,
+         v.uploaded_at,v.uploaded_by,c.code,c.title,c.description,c.units,
+         c.programs,c.status,c.archived_at,c.reviewed_at,
+         COALESCE(u.display_name,u.name,u.email,'Unavailable') AS uploader,
+         COALESCE(reviewer.display_name,reviewer.name,reviewer.email) AS reviewer
+  FROM syllabus_versions v
+  JOIN course_catalog c ON c.catalog_id=v.catalog_id
+  LEFT JOIN users u ON u.userId=v.uploaded_by
+  LEFT JOIN users reviewer ON reviewer.userId=c.reviewed_by
+`;
+router.get(
+  "/syllabi",
+  syllabusAccess,
+  run(async (req, res) => {
+    const { page, size } = windowFor(req);
+    const history = req.query.view === "history";
+    const conditions = [];
+    const values = [];
+    const professor = req.user.role === "professor";
+    if (professor) {
+      conditions.push("v.uploaded_by=?");
+      values.push(actor(req));
+    }
+    const latestSubmission = "v.version_id=(SELECT MAX(latest.version_id) FROM syllabus_versions latest WHERE latest.catalog_id=v.catalog_id)";
+    const visibleWhere = " WHERE " + [...conditions, latestSubmission].join(" AND ");
+    const [[summary]] = await db.execute(
+      `SELECT COUNT(DISTINCT c.catalog_id) FILTER (WHERE c.archived_at IS NULL) AS total,
+              COUNT(DISTINCT c.catalog_id) FILTER (WHERE c.archived_at IS NULL AND c.status='active') AS active,
+              COUNT(DISTINCT c.catalog_id) FILTER (WHERE c.archived_at IS NULL AND c.status='draft') AS pending,
+              COUNT(DISTINCT c.catalog_id) FILTER (WHERE c.archived_at IS NULL AND c.status='inactive') AS inactive
+       FROM syllabus_versions v
+       JOIN course_catalog c ON c.catalog_id=v.catalog_id ${visibleWhere}`,
+      values,
+    );
+    if (!history) {
+      conditions.push("c.archived_at IS NULL");
+      conditions.push(latestSubmission);
+    }
+    if (req.query.view === "approval") conditions.push("c.status='draft'");
+    else if (["active", "inactive", "pending"].includes(req.query.status)) {
+      conditions.push("c.status=? AND c.archived_at IS NULL");
+      values.push(req.query.status === "pending" ? "draft" : req.query.status);
+    } else if (history && req.query.status === "archived") {
+      conditions.push("c.archived_at IS NOT NULL");
+    }
+    if (req.query.q) {
+      conditions.push("(c.code ILIKE ? OR c.title ILIKE ? OR v.filename ILIKE ? OR COALESCE(u.display_name,u.name,u.email,'') ILIKE ?)");
+      values.push(...Array(4).fill("%" + String(req.query.q).slice(0, 255) + "%"));
+    }
+    if (["BSIT", "BSCS"].includes(req.query.program)) {
+      conditions.push("c.programs::jsonb @> ?::jsonb");
+      values.push(JSON.stringify(req.query.program));
+    }
+    const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
+    const [[count]] = await db.execute(
+      "SELECT COUNT(*) AS total FROM (" + syllabusRecordsSql + where + ") records",
+      values,
+    );
+    const [records] = await db.query(
+      syllabusRecordsSql + where + " ORDER BY v.uploaded_at DESC,v.version_id DESC LIMIT ? OFFSET ?",
+      [...values, size, (page - 1) * size],
+    );
+    res.json({
+      success: true,
+      records: records.map(present),
+      total: Number(count.total),
+      summary,
+      page,
+    });
+  }),
+);
+router.get(
+  "/syllabi/:id",
+  syllabusAccess,
+  run(async (req, res) => {
+    const [[record]] = await db.execute(
+      syllabusRecordsSql + " WHERE v.version_id=?" +
+        (req.user.role === "professor" ? " AND v.uploaded_by=?" : ""),
+      req.user.role === "professor" ? [req.params.id, actor(req)] : [req.params.id],
+    );
+    if (!record) fail("Syllabus not found.", 404);
+    const [[version]] = await db.execute(
+      "SELECT coverage_modules FROM syllabus_versions WHERE version_id=?",
+      [record.version_id],
+    );
+    res.json({ success: true, syllabus: { ...present(record), coverage_modules: version.coverage_modules } });
+  }),
+);
 router.get(
   "/versions/:id/pdf",
   requireRole("professor", "admin", "super_admin"),
@@ -181,6 +265,7 @@ router.get(
     if (!version) fail("Syllabus not found.", 404);
     if (
       req.user.role === "professor" &&
+      Number(version.uploaded_by) !== Number(actor(req)) &&
       (version.status !== "active" || version.archived_at)
     ) {
       const [[linked]] = await db.execute(
@@ -204,7 +289,7 @@ router.get(
   admin,
   run(async (_req, res) => {
     const [[summary]] = await db.query(
-      `SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE status='active' AND archived_at IS NULL) AS active,COUNT(*) FILTER (WHERE status='draft' AND archived_at IS NULL) AS draft,(SELECT COUNT(*) FROM courses WHERE professor_id IS NOT NULL OR COALESCE(professor_email,'') <> '') AS classes FROM course_catalog`,
+      `SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE status='active' AND archived_at IS NULL) AS active,COUNT(*) FILTER (WHERE status='draft' AND archived_at IS NULL) AS draft,COUNT(*) FILTER (WHERE status IN ('draft', 'inactive') AND archived_at IS NULL) AS inactive,(SELECT COUNT(*) FROM courses WHERE professor_id IS NOT NULL OR COALESCE(professor_email,'') <> '') AS classes FROM course_catalog`,
     );
     res.json({ success: true, summary });
   }),
@@ -316,7 +401,7 @@ router.get("/classes", admin, run(catalogClasses));
 router.get("/classes/:id", admin, run(getCourseById));
 router.post(
   "/uploads",
-  admin,
+  uploadSyllabus,
   (req, res, next) =>
     upload.single("file")(req, res, (error) =>
       error ? next(Object.assign(error, { statusCode: 400 })) : next(),
@@ -356,7 +441,7 @@ router.post(
 );
 router.get(
   "/uploads/:id/pdf",
-  admin,
+  uploadSyllabus,
   run(async (req, res) => {
     const [[row]] = await db.execute(
       "SELECT * FROM syllabus_uploads WHERE upload_id=? AND uploader_id=? AND expires_at>NOW()",
@@ -374,7 +459,7 @@ router.get(
 );
 router.delete(
   "/uploads/:id",
-  admin,
+  uploadSyllabus,
   run(async (req, res) => {
     await transaction(async (connection) => {
       const [[row]] = await connection.execute(
@@ -414,7 +499,9 @@ router.get(
         ...Array(2).fill("%" + String(req.query.q).slice(0, 255) + "%"),
       );
     }
-    if (["active", "draft"].includes(req.query.status)) {
+    if (req.query.status === "inactive") {
+      conditions.push("status IN ('draft', 'inactive')");
+    } else if (["active", "draft"].includes(req.query.status)) {
       conditions.push("status=?");
       values.push(req.query.status);
     }
@@ -445,11 +532,6 @@ router.get(
     });
   }),
 );
-router.post("/versions/:id/retry-lessons", admin, run(async (req,res) => {
-  const [result] = await db.execute("UPDATE catalog_lesson_jobs j SET status='queued',error_message=NULL FROM syllabus_versions v JOIN course_catalog c ON c.catalog_id=v.catalog_id WHERE v.version_id=j.version_id AND j.version_id=? AND j.status='failed' AND c.status='active' AND c.archived_at IS NULL",[req.params.id]);
-  if (!result.affectedRows) fail("No failed generation is available to retry.",409);
-  res.json({success:true});
-}));
 router.get(
   "/:id",
   admin,
@@ -468,8 +550,11 @@ router.get(
 );
 router.post(
   "/",
-  admin,
+  uploadSyllabus,
   run(async (req, res) => {
+    if (req.body.activate === true || req.body.restoreArchived === true) {
+      fail("Syllabus uploads cannot change a catalog course's status.", 403);
+    }
     const result = await transaction(async (connection) => {
       if (!req.body.uploadId) fail("Upload a syllabus PDF before saving.");
       const [[file]] = await connection.execute(
@@ -533,27 +618,11 @@ router.post(
         if (course.normalized_code !== normalizeCatalogCode(syllabus.code)) {
           fail(`The PDF is for ${syllabus.code}. Upload a syllabus for ${course.code}.`);
         }
-        if (course.archived_at) {
-          if (req.body.restoreArchived !== true)
-            fail("Restore this course before uploading a syllabus.");
-          if (req.body.reviewed !== true)
-            fail("Review the archived course details before restoring and saving.");
-          const [[conflict]] = await connection.execute(
-            "SELECT catalog_id FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL AND catalog_id<>? LIMIT 1",
-            [course.normalized_code, course.catalog_id],
-          );
-          if (conflict) fail("An unarchived course already uses this code. Select that course instead.", 409);
-          await connection.execute("UPDATE course_catalog SET archived_at=NULL WHERE catalog_id=?", [course.catalog_id]);
-          await audit(connection, req, "Restored catalog course", course.catalog_id, { archived_at: { before: course.archived_at, after: null } });
-        }
+        if (course.archived_at)
+          fail("This course is archived. Submit the syllabus as a new catalog course.");
       }
-      if (
-        (req.body.activate === true || course.status === "active") &&
-        req.body.reviewed !== true
-      )
-        fail(
-          "Confirm that you reviewed the extracted information before activation.",
-        );
+      if (course.status === "active" && req.body.reviewed !== true)
+        fail("Confirm that you reviewed the extracted information before saving a version to an active course.");
       const coverageModules = validateCoverageModules(
         req.body.coverage_modules,
       );
@@ -587,166 +656,109 @@ router.post(
           filename: file.filename,
         },
       );
-      if (req.body.activate === true) {
+      if (!creating) {
         await connection.execute(
-          "UPDATE course_catalog SET status='active',reviewed_by=?,reviewed_at=NOW() WHERE catalog_id=?",
-          [actor(req), course.catalog_id],
+          "UPDATE course_catalog SET status='draft',reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE catalog_id=?",
+          [course.catalog_id],
         );
-        await audit(
-          connection,
-          req,
-          "Activated catalog course",
-          course.catalog_id,
-          { status: { before: course.status, after: "active" } },
-        );
+        await audit(connection, req, "Submitted syllabus for approval", course.catalog_id, {
+          versionId: version.insertId,
+          status: { before: course.status, after: "draft" },
+        });
       }
-      const generationQueued = (req.body.activate === true || course.status === "active") && coverageModules.length > 0;
-      if (generationQueued) await queueCatalogLessons(connection, version.insertId);
-      return { catalogId: course.catalog_id, versionId: version.insertId, generationQueued };
+      return { catalogId: course.catalog_id, versionId: version.insertId, generationQueued: false };
     });
     res.status(201).json({ success: true, ...result });
   }),
 );
 router.patch(
   "/:id",
-  admin,
+  manageCatalogStatus,
   run(async (req, res) => {
-    let archivedClassCount = 0;
-    let professorEmailNotifications = [];
-    await transaction(async (connection) => {
+    const { action, reviewed } = req.body;
+    if (action !== "activate" && action !== "deactivate")
+      fail("Choose Activate or Deactivate.");
+    const activating = action === "activate";
+    const status = activating ? "active" : "inactive";
+
+    const change = await transaction(async (connection) => {
       const [[course]] = await connection.execute(
         "SELECT * FROM course_catalog WHERE catalog_id=? FOR UPDATE",
         [req.params.id],
       );
       if (!course) fail("Course not found.", 404);
-      const action = req.body.action;
-      if (action === "archive" || action === "restore") {
-        if (action === "restore") {
-          const [[conflict]] = await connection.execute(
-            "SELECT catalog_id FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL AND catalog_id<>? LIMIT 1",
-            [course.normalized_code, course.catalog_id],
-          );
-          if (conflict) fail("Cannot restore this course because an unarchived course already uses its code. Archive that course first.", 409);
-        }
+      if (course.archived_at) fail("This catalog course is archived.", 409);
+      if (activating && reviewed !== true)
+        fail("Explicit review confirmation is required.");
+
+      const [[version]] = await connection.execute(
+        `SELECT v.version_id,v.filename,v.uploaded_by,u.email,
+                COALESCE(u.display_name,u.name) AS uploader_name
+         FROM syllabus_versions v
+         LEFT JOIN users u ON u.userId=v.uploaded_by
+           AND u.role IN ('admin','professor')
+         WHERE v.catalog_id=?
+         ORDER BY v.version_id DESC LIMIT 1`,
+        [course.catalog_id],
+      );
+      if (activating && !version) fail("Upload a syllabus before activation.");
+      if (req.body.versionId != null && Number(req.body.versionId) !== Number(version?.version_id))
+        fail("A newer syllabus was submitted. Refresh and review the latest upload.", 409);
+      if (course.status === status) return null;
+
+      if (activating) {
         await connection.execute(
-          `UPDATE course_catalog SET archived_at=${action === "archive" ? "NOW()" : "NULL"} WHERE catalog_id=?`,
-          [course.catalog_id],
-        );
-        if (action === "archive") {
-          const archiveResult = await archiveCatalogClasses(
-            connection,
-            course.catalog_id,
-            actor(req),
-            actorRoleOf(req),
-          );
-          archivedClassCount = archiveResult.archivedCount;
-          professorEmailNotifications = archiveResult.emailNotifications;
-        }
-        await audit(
-          connection,
-          req,
-          action === "archive"
-            ? "Archived catalog course"
-            : "Restored catalog course",
-          course.catalog_id,
-          {
-            archived_at: {
-              before: course.archived_at,
-              after: action === "archive" ? "now" : null,
-            },
-            status: course.status,
-          },
-        );
-        return;
-      }
-      if (course.archived_at)
-        fail("Restore this course before making changes.");
-      if (action === "activate") {
-        if (req.body.reviewed !== true)
-          fail("Explicit review confirmation is required.");
-        const [[version]] = await connection.execute(
-          "SELECT version_id,coverage_modules FROM syllabus_versions WHERE catalog_id=? ORDER BY version_id DESC LIMIT 1",
-          [course.catalog_id],
-        );
-        if (!version) fail("Upload a syllabus before activation.");
-        await connection.execute(
-          "UPDATE course_catalog SET status='active',reviewed_by=?,reviewed_at=NOW() WHERE catalog_id=?",
+          "UPDATE course_catalog SET status='active',reviewed_by=?,reviewed_at=NOW(),updated_at=NOW() WHERE catalog_id=?",
           [actor(req), course.catalog_id],
         );
-        await queueCatalogLessons(connection, version.version_id);
-        await audit(
-          connection,
-          req,
-          "Activated catalog course",
-          course.catalog_id,
-          { status: { before: course.status, after: "active" } },
+        await connection.execute(
+          `INSERT INTO catalog_lesson_jobs (version_id)
+           SELECT version_id FROM syllabus_versions
+           WHERE catalog_id=? AND coverage_modules IS NOT NULL
+             AND coverage_modules <> '[]'::jsonb
+           ON CONFLICT (version_id) DO UPDATE
+             SET status='queued',error_message=NULL,updated_at=NOW()
+             WHERE catalog_lesson_jobs.status='failed'`,
+          [course.catalog_id],
         );
-        return;
+      } else {
+        await connection.execute(
+          "UPDATE course_catalog SET status='inactive',reviewed_by=?,reviewed_at=NOW(),updated_at=NOW() WHERE catalog_id=?",
+          [actor(req), course.catalog_id],
+        );
       }
-      if (action !== "edit") fail("Unknown catalog action.");
-      const details = catalogDetails(req.body),
-        changes = {};
-      for (const key of ["code", "title", "description", "units", "programs"]) {
-        const before = key === "programs" ? programs(course[key]) : course[key];
-        if (JSON.stringify(before) !== JSON.stringify(details[key]))
-          changes[key] = { before, after: details[key] };
-      }
-      if (course.status === "active" && req.body.reviewed !== true)
-        fail("Confirm review before updating an active course.");
-      await connection.execute(
-        "UPDATE course_catalog SET code=?,normalized_code=?,title=?,description=?,units=?,programs=?,reviewed_by=?,reviewed_at=? WHERE catalog_id=?",
-        [
-          details.code,
-          details.normalizedCode,
-          details.title,
-          details.description,
-          details.units,
-          JSON.stringify(details.programs),
-          req.body.reviewed ? actor(req) : null,
-          req.body.reviewed ? new Date() : null,
-          course.catalog_id,
-        ],
-      );
       await audit(
         connection,
         req,
-        "Edited catalog details",
+        activating ? "Activated catalog course" : "Deactivated catalog course",
         course.catalog_id,
-        changes,
+        { status: { before: course.status, after: status }, versionId: version?.version_id },
       );
+      return { course, version };
     });
 
-    let emailNotificationsSent = 0;
-    let emailNotificationsFailed = 0;
-    if (req.body.action === "archive" && professorEmailNotifications.length) {
-      const outcomes = await Promise.allSettled(
-        professorEmailNotifications.map((notice) =>
-          sendCatalogCourseArchivedEmail(notice),
-        ),
-      );
-      outcomes.forEach((outcome, index) => {
-        if (outcome.status === "fulfilled") {
-          emailNotificationsSent += 1;
-        } else {
-          emailNotificationsFailed += 1;
-          console.error(
-            `Catalog archive email failed for ${professorEmailNotifications[index].email}:`,
-            outcome.reason,
-          );
+    let notification = "not_needed";
+    if (change) {
+      const { course, version } = change;
+      notification = "unavailable";
+      if (version?.email?.trim()) {
+        try {
+          await sendCatalogCourseStatusEmail({
+            email: version.email,
+            name: version.uploader_name,
+            code: course.code,
+            title: course.title,
+            syllabusFilename: version.filename,
+            status,
+          });
+          notification = "sent";
+        } catch (error) {
+          notification = "failed";
+          console.error(`Catalog status email failed for syllabus version ${version.version_id}:`, error);
         }
-      });
+      }
     }
-
-    res.json({
-      success: true,
-      ...(req.body.action === "archive"
-        ? {
-            archivedClassCount,
-            emailNotificationsSent,
-            emailNotificationsFailed,
-          }
-        : {}),
-    });
+    res.json({ success: true, status, changed: Boolean(change), notification });
   }),
 );
 router.use((error, _req, res, _next) => {

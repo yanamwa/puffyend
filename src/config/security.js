@@ -44,3 +44,4 @@ export function securityConfig(env = process.env) {
 }
 export const security = securityConfig();
 export const JWT_SECRET = security.jwtSecret;
+export const SESSION_TIMEOUT_MINUTES = 90;

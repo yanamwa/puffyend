@@ -9,12 +9,6 @@ import { retrieveContexts } from "../rag/retrievalService.js";
 import { generateQuizBatch } from "../rag/quizRagService.js";
 import { createMainQuizPrompt } from "./mainQuizPrompt.js";
 import {
-  confirmMainQuizCode,
-  hasMainQuizVerification,
-  initMainQuizVerificationTable,
-  sendMainQuizCode,
-} from "./mainQuizVerification.js";
-import {
   validateMainSettings,
   mainQuizBlueprint,
   validateAdaptiveQuestions,
@@ -34,7 +28,6 @@ export async function initMainQuizTables() {
   await db.execute(
     `CREATE TABLE IF NOT EXISTS main_quiz_results (result_id SERIAL PRIMARY KEY, quiz_id INT NOT NULL, user_id INT NOT NULL, attempts_id INT NOT NULL, result_json TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`,
   );
-  await initMainQuizVerificationTable();
 }
 async function studentAccess(user, courseId, moduleId, database = db) {
   if (user.role !== "student")
@@ -220,7 +213,7 @@ const publicQuiz = (row) => {
   };
 };
 const inFlight = new Map();
-export async function startMainQuiz(user, body, sessionHash) {
+export async function startMainQuiz(user, body) {
   const scope = quizScope(user, body.course_id, body.module_id);
   const [courseId, moduleId] = scope;
   const module = await studentAccess(user, courseId, moduleId);
@@ -242,10 +235,6 @@ export async function startMainQuiz(user, body, sessionHash) {
     }
   } else if (!manualQuestions.length) {
     throw requestError("Your professor has not configured this Main Quiz yet.", 409);
-  }
-
-  if (!(await hasMainQuizVerification(scope, sessionHash))) {
-    throw requestError("Verify your email with a code before starting the Main Quiz.", 403);
   }
 
   if (manualQuestions.length) validateManualQuestions(manualQuestions);
@@ -883,7 +872,7 @@ async function hasSubmittedMainQuiz(scope, database = db) {
   return results.length > 0;
 }
 
-export async function mainQuizStatus(user, courseId, moduleId, sessionHash) {
+export async function mainQuizStatus(user, courseId, moduleId) {
   if (user.role !== "student")
     throw requestError("Only students can access Main Quiz.", 403);
   const scope = quizScope(user, courseId, moduleId);
@@ -901,30 +890,6 @@ export async function mainQuizStatus(user, courseId, moduleId, sessionHash) {
         409,
       );
   }
-  const [drafts] = await db.execute(
-    `SELECT q.quiz_id FROM personalized_main_quizzes q
-       JOIN main_quiz_configs c ON c.course_id=q.course_id AND c.module_id=q.module_id AND c.revision=q.revision
-     WHERE q.course_id=? AND q.module_id=? AND q.user_id=? AND q.submissions=0 LIMIT 1`,
-    scope,
-  );
-  return {
-    taken: false,
-    verificationRequired: !drafts.length && !(await hasMainQuizVerification(scope, sessionHash)),
-  };
-}
-
-export async function requestMainQuizCode(user, body, sessionHash) {
-  const scope = quizScope(user, body.course_id, body.module_id);
-  const status = await mainQuizStatus(user, scope[0], scope[1], sessionHash);
-  if (status.taken) throw alreadyTakenError();
-  if (!status.verificationRequired) return { verified: true };
-  return sendMainQuizCode(scope, sessionHash, user.email);
-}
-
-export async function verifyMainQuizCode(user, body, sessionHash) {
-  const scope = quizScope(user, body.course_id, body.module_id);
-  const status = await mainQuizStatus(user, scope[0], scope[1], sessionHash);
-  if (status.taken) throw alreadyTakenError();
-  if (!status.verificationRequired) return { verified: true };
-  return confirmMainQuizCode(scope, sessionHash, body.code);
+  // Older frontend builds use this field to decide whether to prompt for a code.
+  return { taken: false, verificationRequired: false };
 }
