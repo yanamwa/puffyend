@@ -16,6 +16,10 @@ export async function migrateModulePracticeJobs(database) {
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
+  // NULL until the first claim. Existing running jobs use their last claim
+  // timestamp until a new worker takes over.
+  await database.execute(`ALTER TABLE module_practice_jobs
+    ADD COLUMN IF NOT EXISTS started_at TIMESTAMP NULL`);
   await database.execute(`CREATE UNIQUE INDEX IF NOT EXISTS module_practice_active_job
     ON module_practice_jobs (user_id, course_id, module_id, question_format)
     WHERE status IN ('queued', 'running')`);

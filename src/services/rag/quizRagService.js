@@ -500,6 +500,7 @@ export async function generateQuizBatch(
                 `Objectives are learning targets, never evidence.`,
                 `When lesson content contains Practice Activity prompts, use those activities to guide source-supported practice questions. Convert reflections into objectively answerable questions; never grade personal opinions as facts.`,
                 `Every question must be directly supported by cited evidence_ids.`,
+                "For comparisons, rankings or predictions, cite the facts needed for every side of the reasoning. When the lesson supports only one fact, choose a different learning check that the available evidence can answer.",
                 "Choose wording that tests the current lesson objective. When objectives are absent, use the skill taught by the cited passage.",
                 "Ask directly by default. Include essential values, conditions or excerpts in the question. For HOTS, a direct comparison, prediction or judgment can test the required reasoning.",
                 "preferred_wording is a flexible guide across the whole quiz. In a scenario_if_useful slot, use a brief scenario only if its details are needed to answer the question. Every slot may be direct. If an objective specifically requires interpreting a case, give just the details needed in any slot.",
@@ -635,12 +636,13 @@ export async function generateQuizBatch(
                 "For ANSI-SPARC questions, distinguish the internal physical-storage level from external user views and verify the level against the quotes.",
               ]
             : []),
-          "Reject duplicate learning checks within the batch or previous_questions, including semantic paraphrases of the same fact. A weak topic may recur only with a distinct sub-concept or a meaningfully different application, not a cosmetic scenario change.",
+          "Reject duplicate learning checks within the batch or previous_questions, including semantic paraphrases of the same fact. Allow the exact same missed concept when a different inference, distinction, or application is needed to answer. Changing a name or rewording a definition alone is a duplicate.",
           "For each assigned topic and concept, verify the question actually assesses the specific missed concept using practice_focus, rather than just using its label or testing another part of the general topic.",
           "For practice questions also verify that the topic is supported and the cognitive level reflects the actual reasoning required, with LOTS=Remember/Understand/Apply and HOTS=Analyze/Evaluate/Create.",
           ...(isPractice
             ? [
                 "For a practice scenario, identify the detail the student must use for the objective. If removing the story leaves the same task, request a direct rewrite of that question.",
+                "For comparisons and rankings, check that the cited passages support the facts on each side and the conclusion. Reject only the unsupported slots.",
                 "Flag a repeated setup that only asks for a new label. A shared passage or dataset is fine when different reasoning is required. Accept a fully direct quiz. Never reject a question solely because of the suggested wording mix.",
               ]
             : []),
@@ -659,7 +661,7 @@ export async function generateQuizBatch(
                 ...question,
               }))
             : questions,
-          previous_questions: [...promptPreviousQuestions],
+          previous_questions: [...(preserveValidated ? previousQuestions : promptPreviousQuestions)],
           ...(reviewObjectives ? { objectives: reviewObjectives } : {}),
           assigned_slots: reviewSlots,
           ...(reviewFocus ? { practice_focus: reviewFocus } : {}),

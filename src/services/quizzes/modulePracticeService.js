@@ -2,6 +2,7 @@ import { getEnrolledPracticeModule } from "../../controllers/courseController.js
 import { db } from "../../db.js";
 import { removeLessonPracticeActivities } from "../lessons/lessonPracticeContent.js";
 import { requestError } from "../rag/courseAccessService.js";
+import { createPracticeJsonGenerator } from "../rag/aiProviderService.js";
 import {
   generateQuizBatch,
   selectPracticeFocus,
@@ -26,6 +27,7 @@ import {
 } from "./quizValidation.js";
 
 const QUESTION_COUNT = 10;
+export const PRACTICE_GENERATION_TIMEOUT_MS = 240_000;
 const MASTERY_TARGET = PRACTICE_MASTERY_TARGET;
 const RECAP_LIMIT = 5;
 const PROMPT_HISTORY_LIMIT = RECAP_LIMIT + 2 * QUESTION_COUNT;
@@ -234,8 +236,13 @@ export async function generatePracticeQuestions(
   module,
   performance,
   previousQuestions,
-  { format = "mixed", generateBatch = generateQuizBatch, history = [] } = {},
+  { format = "mixed", generateBatch, history = [], isRepeatPractice = false, signal: jobSignal, deadlineAt: jobDeadline } = {},
 ) {
+  const now = Date.now();
+  const deadlineAt = Math.min(jobDeadline ?? Infinity, now + PRACTICE_GENERATION_TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(Math.max(0, deadlineAt - now));
+  const signal = jobSignal ? AbortSignal.any([jobSignal, timeout]) : timeout;
+  const generateJson = createPracticeJsonGenerator();
   const shortAnswer = format === "qna";
   const types = shortAnswer
     ? Array(QUESTION_COUNT).fill("identification")
@@ -303,13 +310,17 @@ export async function generatePracticeQuestions(
       ];
     }),
   );
-  // Reserve six of ten slots for weak topics, with more slots for recurring misses.
-  // Exact topic assignments are validated after generation, not just suggested.
+  // On a repeat attempt, one missed concept needs one required fresh check.
+  // Leave the other slots open to the lesson instead of requiring six variants.
+  const missedConcepts = new Set(weakTopics.flatMap(({ misconceptions }) =>
+    misconceptions.map(({ concept }) => normalizeAnswer(concept)),
+  ));
+  const focusLimit = isRepeatPractice && missedConcepts.size === 1 ? 1 : 6;
   const allocation = weakTopics
-    .slice(0, 6)
+    .slice(0, focusLimit)
     .map((group) => ({ ...group, count: 1 }));
   for (
-    let remaining = 6 - allocation.length;
+    let remaining = focusLimit - allocation.length;
     allocation.length && remaining > 0;
     remaining--
   ) {
@@ -355,8 +366,7 @@ export async function generatePracticeQuestions(
     ),
   );
   const focusedChunks = targets.flatMap((topic) => related.get(topic) || []);
-  // Draft and independently review the whole set together so both calls can
-  // check for repeated concepts across all ten slots.
+  // Draft and independently review all ten slots before repairing any gaps.
   const questions = await generatePracticeBatch(
     {
       types,
@@ -368,9 +378,10 @@ export async function generatePracticeQuestions(
       distribution,
       shortAnswer,
       requestOptions: {
-        signal: AbortSignal.timeout(120000),
+        signal,
+        deadlineAt,
         timeoutMs: 45000,
-        maxAttempts: 1,
+        maxAttempts: 3,
       },
       previousQuestions: accepted,
       promptPreviousQuestions,
@@ -389,7 +400,7 @@ export async function generatePracticeQuestions(
         promptPreviousQuestions.push(...stems);
       },
     },
-    generateBatch,
+    generateBatch ?? ((batch) => generateQuizBatch(batch, generateJson)),
   );
 
   if (questions.length !== QUESTION_COUNT)
@@ -491,6 +502,7 @@ export async function startModulePractice(
   user,
   body,
   generate = generatePracticeQuestions,
+  { signal, deadlineAt } = {},
 ) {
   const { courseId, module, mode, format } = await modulePracticeScope(
     user,
@@ -563,6 +575,9 @@ export async function startModulePractice(
       questions = await generate(module, performance, previousQuestions, {
         format,
         history: history.slice(1),
+        isRepeatPractice: Boolean(latestCompleted),
+        signal,
+        deadlineAt,
       });
       if (!Array.isArray(questions) || questions.length !== QUESTION_COUNT)
         throw requestError(
@@ -571,7 +586,7 @@ export async function startModulePractice(
         );
     } catch (error) {
       if (error.statusCode === 409) throw error;
-      console.error("Module Practice generation failed:", error.message);
+      console.error("Module Practice generation failed:", error.code || error.statusCode || "GENERATION_ERROR");
       const reason =
         generationMessages[error.code] ||
         (error.statusCode === 422
@@ -590,73 +605,35 @@ export async function startModulePractice(
       publicError.cause = error;
       throw publicError;
     }
-
+    signal?.throwIfAborted();
     let attemptId;
-
     if (unfinished) {
-      // Repair an unfinished practice attempt without creating
-      // another attempt or overwriting a submitted one.
+      // Repair an incomplete saved set without creating a completed attempt or
+      // overwriting a set that another request has already repaired/submitted.
       await db.execute(
-        `UPDATE module_practice_attempts
-         SET questions_json = ?
-         WHERE attempt_id = ?
-           AND result_json IS NULL
-           AND questions_json = ?`,
+        `UPDATE module_practice_attempts SET questions_json=?
+         WHERE attempt_id=? AND result_json IS NULL AND questions_json=?`,
         [
           JSON.stringify(questions),
           previousInFormat.attempt_id,
           previousInFormat.questions_json,
         ],
       );
-
       attemptId = previousInFormat.attempt_id;
     } else {
-      const previousAttemptId = previousInFormat?.attempt_id ?? 0;
-
-      await db.execute(
-        `INSERT INTO module_practice_attempts
-         (user_id, course_id, module_id, question_format, previous_attempt_id, questions_json)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT (
-           user_id,
-           course_id,
-           module_id,
-           question_format,
-           previous_attempt_id
-         )
-         DO UPDATE SET
-           attempt_id = module_practice_attempts.attempt_id`,
+      const [insert] = await db.execute(
+        `INSERT INTO module_practice_attempts (user_id, course_id, module_id, question_format, previous_attempt_id, questions_json)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (user_id, course_id, module_id, question_format, previous_attempt_id)
+       DO UPDATE SET previous_attempt_id = EXCLUDED.previous_attempt_id`,
         [
           ...formatScope,
-          previousAttemptId,
+          previousInFormat?.attempt_id ?? 0,
           JSON.stringify(questions),
         ],
       );
-
-      // Retrieve the actual attempt ID, including when an
-      // existing record was reused after a conflict.
-      const [[savedAttempt]] = await db.execute(
-        `SELECT attempt_id
-         FROM module_practice_attempts
-         WHERE user_id = ?
-           AND course_id = ?
-           AND module_id = ?
-           AND question_format = ?
-           AND previous_attempt_id = ?`,
-        [...formatScope, previousAttemptId],
-      );
-
-      if (!savedAttempt) {
-        throw requestError(
-          "Unable to retrieve the saved practice attempt.",
-          500,
-        );
-      }
-
-      attemptId = savedAttempt.attempt_id;
+      attemptId = insert.insertId;
     }
-
-
     const [[attempt]] = await db.execute(
       "SELECT attempt_id, questions_json, result_json FROM module_practice_attempts WHERE attempt_id=?",
       [attemptId],
