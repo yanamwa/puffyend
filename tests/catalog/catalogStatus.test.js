@@ -17,7 +17,7 @@ import {
 import { makePdf } from "../helpers/fixtureBuilders.js";
 
 test(
-  "syllabus uploaders receive SMTP notices on super admin status changes",
+  "super admins toggle syllabus catalog visibility directly and notify uploaders",
   { timeout: 60_000 },
   async (t) => {
     const engine = new PGlite();
@@ -182,26 +182,29 @@ test(
     assert.equal(submitted.status, 201, JSON.stringify(submitted.data));
     const { catalogId, versionId } = submitted.data;
     const path = "/" + catalogId;
-    const activate = { action: "activate", reviewed: true };
+    const activate = { action: "activate" };
     assert.equal((await request("admin", path, "PATCH", activate)).status, 403);
     assert.equal(
       (await request("professor", path, "PATCH", activate)).status,
       403,
     );
-    assert.equal(
-      (await request("super_admin", path, "PATCH", { action: "edit" })).status,
-      400,
-    );
-    assert.equal(
-      (await request("super_admin", path, "PATCH", { action: "activate" }))
-        .status,
-      400,
-    );
+    for (const action of ["edit", "approve", "reject"]) {
+      assert.equal((await request("super_admin", path, "PATCH", { action })).status, 400);
+    }
     assert.equal(
       (await request("professor", "/active")).data.courses.length,
       0,
     );
 
+    const initial = await request("super_admin", "/syllabi?view=activation&status=inactive");
+    assert.equal(initial.data.records[0].status, "inactive");
+    assert.equal(initial.data.summary.inactive, 1);
+    for (const role of ["admin", "professor"]) {
+      for (const action of ["activate", "deactivate"]) {
+        assert.equal((await request(role, path, "PATCH", { action })).status, 403);
+      }
+    }
+    assert.equal(mail.length, 0);
     const activated = await request("super_admin", path, "PATCH", activate);
     assert.deepEqual(activated.data, {
       success: true,
@@ -211,6 +214,7 @@ test(
     });
     const repeated = await request("super_admin", path, "PATCH", activate);
     assert.equal(repeated.data.changed, false);
+    assert.equal(mail.length, 1, "repeated activation does not send another email");
     assert.equal(
       (await request("professor", "/active")).data.courses.length,
       1,
@@ -219,6 +223,9 @@ test(
       rows: [job],
     } = await engine.query("SELECT version_id FROM catalog_lesson_jobs");
     assert.equal(job.version_id, versionId);
+    assert.match(mail[0].text, /now active and available in catalog selection/);
+    assert.doesNotMatch(mail[0].text, /approved|rejected/);
+    const [[activationRecord]] = await db.query("SELECT reviewed_by,reviewed_at FROM course_catalog WHERE catalog_id=?", [catalogId]);
 
     await db.execute(
       "INSERT INTO courses (title,code,summary,subject,catalog_id,syllabus_version_id) VALUES ('Existing class','CLASS-1','','Database',?,?)",
@@ -233,6 +240,10 @@ test(
       changed: true,
       notification: "sent",
     });
+    const [[afterDeactivation]] = await db.query("SELECT reviewed_by,reviewed_at FROM course_catalog WHERE catalog_id=?", [catalogId]);
+    assert.equal(afterDeactivation.reviewed_by, activationRecord.reviewed_by);
+    assert.ok(afterDeactivation.reviewed_at >= activationRecord.reviewed_at);
+    assert.match(mail[1].text, /inactive and hidden from catalog selection/);
     assert.equal(
       (await request("professor", "/active")).data.courses.length,
       0,
@@ -313,15 +324,15 @@ test(
 
     assert.equal((await request("student", "/syllabi")).status, 403);
     assert.equal((await request("student", "/syllabi/" + replacement.data.versionId)).status, 403);
-    const pending = await request("super_admin", "/syllabi?view=approval");
+    const pending = await request("super_admin", "/syllabi?view=activation&status=inactive");
     assert.equal(pending.status, 200, JSON.stringify(pending.data));
     assert.equal(pending.data.records.length, 1);
     assert.equal(
       pending.data.records[0].version_id,
       replacement.data.versionId,
     );
-    assert.equal(pending.data.summary.pending, 1);
-    assert.equal(pending.data.records[0].status, "draft");
+    assert.equal(pending.data.summary.inactive, 1);
+    assert.equal(pending.data.records[0].status, "inactive");
     assert.equal((await request("other_professor", "/syllabi")).data.total, 0);
     assert.equal(
       (await request("other_professor", "/syllabi?view=history")).data.total,
@@ -374,25 +385,27 @@ test(
     });
     assert.equal(stale.status, 409);
     assert.equal(mail.length, 3);
-    const rejected = await request("super_admin", path, "PATCH", {
-      action: "deactivate",
+    const latestActivated = await request("super_admin", path, "PATCH", {
+      action: "activate",
       versionId: replacement.data.versionId,
     });
-    assert.equal(rejected.data.changed, true);
-    assert.equal(rejected.data.notification, "sent");
-    assert.equal(
-      (await request("professor", "/syllabi?view=approval")).data.total,
-      0,
-    );
-    assert.equal(
-      (await request("professor", "/syllabi?status=inactive")).data.total,
-      1,
-    );
+    assert.equal(latestActivated.data.changed, true);
+    assert.equal(latestActivated.data.notification, "sent");
+    assert.equal(latestActivated.data.status, "active");
+    assert.doesNotMatch(mail[3].text, /approved|rejected/);
+    assert.equal((await request("professor", "/syllabi?status=inactive")).data.total, 0);
+    assert.equal((await request("professor", "/active")).data.courses.length, 1);
+    const correctedUpload = await request("professor", "/uploads", "POST", syllabus("corrected-professor.pdf"));
+    const corrected = await request("professor", "", "POST", {
+      ...review, uploadId: correctedUpload.data.uploadId, catalogId, reviewed: true,
+    });
+    assert.equal(corrected.status, 201, JSON.stringify(corrected.data));
+    assert.equal((await request("super_admin", "/syllabi?view=activation&status=inactive")).data.total, 1);
     assert.equal(
       (
         await request("super_admin", path, "PATCH", {
           ...activate,
-          versionId: replacement.data.versionId,
+          versionId: corrected.data.versionId,
         })
       ).data.notification,
       "sent",
@@ -403,6 +416,27 @@ test(
     );
     assert.equal(mail.length, 5);
     assert.equal(mail[4].to.address, "professor@example.test");
-    assert.match(mail[4].text, /updated-professor\.pdf/);
+    assert.match(mail[4].text, /corrected-professor\.pdf/);
+    // Reactivation uses the same direct action without a separate decision.
+    await request("super_admin", path, "PATCH", { action: "deactivate" });
+    const reactivated = await request("super_admin", path, "PATCH", activate);
+    assert.equal(reactivated.status, 200, JSON.stringify(reactivated.data));
+    assert.equal(reactivated.data.status, "active");
+
+    // Existing statuses from the older workflow remain usable without migrating data.
+    for (const legacyStatus of ["draft", "rejected"]) {
+      await db.execute("UPDATE course_catalog SET status=? WHERE catalog_id=?", [legacyStatus, catalogId]);
+      const legacyList = await request("super_admin", "/syllabi?status=inactive");
+      assert.equal(legacyList.data.total, 1);
+      assert.equal(legacyList.data.summary.inactive, 1);
+      assert.equal(legacyList.data.records[0].status, "inactive");
+      const catalogList = await request("super_admin", "?status=inactive");
+      assert.equal(catalogList.data.records[0].status, "inactive");
+      assert.equal((await request("professor", "/active")).data.courses.length, 0);
+      const restored = await request("super_admin", path, "PATCH", activate);
+      assert.equal(restored.status, 200, JSON.stringify(restored.data));
+      assert.equal(restored.data.status, "active");
+      assert.equal((await request("professor", "/active")).data.courses.length, 1);
+    }
   },
 );

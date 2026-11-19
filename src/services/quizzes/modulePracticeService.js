@@ -15,7 +15,7 @@ import {
   validateQuizUniqueness,
 } from "./quizValidation.js";
 
-const QUESTION_COUNT = 20;
+const QUESTION_COUNT = 10;
 const MASTERY_TARGET = 90;
 const RECAP_LIMIT = 5;
 const practiceModes = new Set([
@@ -85,9 +85,7 @@ function recapPerformance(questions, submitted) {
       throw recapRequired();
     const rawKey = item.correct_answer || item.correctAnswer || item.answer;
     const letter = /^\s*([a-z])[.)]?\s*$/i.exec(String(rawKey ?? ""));
-    const labeledAnswer = /^\s*[a-z][.)]\s+(.+)$/i.exec(
-      String(rawKey ?? ""),
-    );
+    const labeledAnswer = /^\s*[a-z][.)]\s+(.+)$/i.exec(String(rawKey ?? ""));
     const key = letter
       ? (options[letter[1].toUpperCase().charCodeAt(0) - 65] ?? rawKey)
       : labeledAnswer
@@ -166,10 +164,10 @@ export async function generatePracticeQuestions(
   const accuracy = performance.length
     ? performance.filter((item) => item.isCorrect).length / performance.length
     : 0.7;
-  const difficulty =
-    accuracy < 0.6 ? "easy" : accuracy >= 0.85 ? "hard" : "medium";
+  // Keep a steady baseline at 60% and above; adapt through missed concepts.
+  const difficulty = accuracy < 0.6 ? "easy" : "medium";
   const batchCount = QUESTION_COUNT / batchTypes.length;
-  const hotsPerBatch = { easy: 1, medium: 2, hard: 3 }[difficulty];
+  const hotsPerBatch = difficulty === "easy" ? 1 : 2;
   const hotsCount = hotsPerBatch * batchCount;
   const misses = performance
     .filter((item) => !item.isCorrect)
@@ -190,9 +188,9 @@ export async function generatePracticeQuestions(
   );
   const distribution = {
     questionCount: QUESTION_COUNT,
-    multipleChoiceCount: shortAnswer ? 0 : 12,
-    trueFalseCount: shortAnswer ? 0 : 4,
-    identificationCount: shortAnswer ? QUESTION_COUNT : 4,
+    multipleChoiceCount: shortAnswer ? 0 : 3 * batchCount,
+    trueFalseCount: shortAnswer ? 0 : batchCount,
+    identificationCount: shortAnswer ? QUESTION_COUNT : batchCount,
     hotsCount,
     lotsCount: QUESTION_COUNT - hotsCount,
   };
@@ -237,7 +235,7 @@ export async function generatePracticeQuestions(
 
   if (questions.length !== QUESTION_COUNT)
     throw requestError(
-      "Practice did not generate 20 questions. Please try again.",
+      `Practice did not generate ${QUESTION_COUNT} questions. Please try again.`,
       502,
     );
   validateQuizUniqueness(questions, previousQuestions);
@@ -247,10 +245,15 @@ export async function generatePracticeQuestions(
   }));
 }
 
+function attemptQuestions(row) {
+  // Apply the current limit when resuming an unfinished older practice set.
+  return JSON.parse(row.questions_json).slice(0, QUESTION_COUNT);
+}
+
 function publicAttempt(row, mode) {
   return {
     id: row.attempt_id,
-    questions: JSON.parse(row.questions_json).map(
+    questions: attemptQuestions(row).map(
       ({
         id,
         question,
@@ -370,7 +373,7 @@ export async function startModulePractice(
       if (error.statusCode === 409) throw error;
       console.error("Module Practice generation failed:", error.message);
       throw requestError(
-        "We couldn't prepare 20 practice questions. Please try again.",
+        `We couldn't prepare ${QUESTION_COUNT} practice questions. Please try again.`,
         error.statusCode || 500,
       );
     }
@@ -418,7 +421,10 @@ function getPracticeMode(mode) {
 
 function gradeAttempt(attemptId, questions, submitted, mode) {
   if (!Array.isArray(submitted) || submitted.length !== QUESTION_COUNT)
-    throw requestError("Submit one answer for each of the 20 questions.", 400);
+    throw requestError(
+      `Submit one answer for each of the ${QUESTION_COUNT} questions.`,
+      400,
+    );
 
   const byQuestion = new Map();
   for (const item of submitted) {
@@ -459,8 +465,7 @@ function gradeAttempt(attemptId, questions, submitted, mode) {
       isCorrect:
         mode === "flashcard"
           ? userAnswer === "easy" || userAnswer === "good"
-          : Boolean(userAnswer) &&
-            answersMatchQuestion(userAnswer, question),
+          : Boolean(userAnswer) && answersMatchQuestion(userAnswer, question),
     };
   });
   const score = answers.filter((answer) => answer.isCorrect).length;
@@ -512,7 +517,7 @@ export async function submitModulePractice(user, body) {
     const mode = getPracticeMode(body.mode);
     const result = gradeAttempt(
       attemptId,
-      JSON.parse(row.questions_json),
+      attemptQuestions(row),
       body.answers,
       row.question_format === "qna" ? "qna" : mode,
     );
