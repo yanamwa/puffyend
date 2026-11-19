@@ -124,33 +124,40 @@ async function generatePracticeBatch(options, generateBatch) {
   try {
     return await generateBatch(options);
   } catch (error) {
-    if (error.code !== DUPLICATE_QUIZ_QUESTION) throw error;
+    const validationFailed =
+      error.statusCode === 422 || error.code === DUPLICATE_QUIZ_QUESTION;
+    if (!validationFailed || options.types.length <= 1) throw error;
   }
 
   const { types, skills, practiceFocus } = options;
   const midpoint = Math.ceil(types.length / 2);
   const generateRange = (start, end) =>
-    generateBatch({
-      ...options,
-      types: types.slice(start, end),
-      skills: skills.slice(start, end),
-      practiceFocus: practiceFocus && {
-        ...practiceFocus,
-        target_count:
-          Math.round((practiceFocus.target_count * end) / types.length) -
-          Math.round((practiceFocus.target_count * start) / types.length),
-        target_topics: practiceFocus.target_topics?.slice(
-          Math.round((practiceFocus.target_count * start) / types.length),
-          Math.round((practiceFocus.target_count * end) / types.length),
-        ),
-        target_concepts: practiceFocus.target_concepts?.slice(
-          Math.round((practiceFocus.target_count * start) / types.length),
-          Math.round((practiceFocus.target_count * end) / types.length),
-        ),
+    generatePracticeBatch(
+      {
+        ...options,
+        types: types.slice(start, end),
+        skills: skills.slice(start, end),
+        practiceFocus: practiceFocus && {
+          ...practiceFocus,
+          target_count:
+            Math.round((practiceFocus.target_count * end) / types.length) -
+            Math.round((practiceFocus.target_count * start) / types.length),
+          target_topics: practiceFocus.target_topics?.slice(
+            Math.round((practiceFocus.target_count * start) / types.length),
+            Math.round((practiceFocus.target_count * end) / types.length),
+          ),
+          target_concepts: practiceFocus.target_concepts?.slice(
+            Math.round((practiceFocus.target_count * start) / types.length),
+            Math.round((practiceFocus.target_count * end) / types.length),
+          ),
+        },
       },
-    });
+      generateBatch,
+    );
 
-  // Let the second prompt see the first set of newly accepted stems.
+  // Smaller groups retain every assigned slot and pass the same validation.
+  // Stop splitting at one question; rejected answers must never become practice.
+  // Each accepted group is visible to the following prompts for diversity.
   const first = await generateRange(0, midpoint);
   const second = await generateRange(midpoint, types.length);
   return [...first, ...second];
