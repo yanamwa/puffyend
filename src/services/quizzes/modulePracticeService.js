@@ -2,8 +2,13 @@ import { getEnrolledPracticeModule } from "../../controllers/courseController.js
 import { db } from "../../db.js";
 import { removeLessonPracticeActivities } from "../lessons/lessonPracticeContent.js";
 import { requestError } from "../rag/courseAccessService.js";
-import { parallelMap } from "../rag/parallelMap.js";
 import { generateQuizBatch } from "../rag/quizRagService.js";
+import {
+  analyzePractice,
+  buildPracticeFeedback,
+  loadPracticeHistory,
+  PRACTICE_MASTERY_TARGET,
+} from "./practiceAnalysis.js";
 import {
   answersMatchQuestion,
   normalizeAnswer,
@@ -12,11 +17,12 @@ import {
 import { savedLessonChunks } from "./mainQuizService.js";
 import {
   DUPLICATE_QUIZ_QUESTION,
+  validateKnownAnswerKey,
   validateQuizUniqueness,
 } from "./quizValidation.js";
 
 const QUESTION_COUNT = 10;
-const MASTERY_TARGET = 90;
+const MASTERY_TARGET = PRACTICE_MASTERY_TARGET;
 const RECAP_LIMIT = 5;
 const practiceModes = new Set([
   "flashcard",
@@ -97,6 +103,13 @@ function recapPerformance(questions, submitted) {
       {
         question: item.question,
         topic: item.topic || item.category || item.subject || "",
+        concept: item.concept || item.subtopic,
+        userAnswer:
+          submitted.find(
+            (answer) => answer.question.trim() === item.question.trim(),
+          )?.userAnswer || "",
+        correctAnswer: key,
+        explanation: item.explanation || "",
         isCorrect: answersMatchQuestion(submittedAnswer, {
           ...item,
           correct_answer: key,
@@ -125,6 +138,14 @@ async function generatePracticeBatch(options, generateBatch) {
         target_count:
           Math.round((practiceFocus.target_count * end) / types.length) -
           Math.round((practiceFocus.target_count * start) / types.length),
+        target_topics: practiceFocus.target_topics?.slice(
+          Math.round((practiceFocus.target_count * start) / types.length),
+          Math.round((practiceFocus.target_count * end) / types.length),
+        ),
+        target_concepts: practiceFocus.target_concepts?.slice(
+          Math.round((practiceFocus.target_count * start) / types.length),
+          Math.round((practiceFocus.target_count * end) / types.length),
+        ),
       },
     });
 
@@ -138,7 +159,7 @@ export async function generatePracticeQuestions(
   module,
   performance,
   previousQuestions,
-  { format = "mixed", generateBatch = generateQuizBatch } = {},
+  { format = "mixed", generateBatch = generateQuizBatch, history = [] } = {},
 ) {
   const shortAnswer = format === "qna";
   const batchTypes = shortAnswer
@@ -169,20 +190,73 @@ export async function generatePracticeQuestions(
   const batchCount = QUESTION_COUNT / batchTypes.length;
   const hotsPerBatch = difficulty === "easy" ? 1 : 2;
   const hotsCount = hotsPerBatch * batchCount;
-  const misses = performance
-    .filter((item) => !item.isCorrect)
-    .map(({ topic, question }) => ({ topic, question }));
-  const focusTopics = [
-    ...new Set(
-      misses.map(({ topic }) => normalizeAnswer(topic)).filter(Boolean),
+  const weakTopics = analyzePractice(performance, history, module.title).filter(
+    (group) => group.needsReview,
+  );
+  const misses = weakTopics.flatMap((group) =>
+    group.misconceptions.slice(0, 3),
+  );
+  const related = new Map(
+    weakTopics.map((group) => {
+      const labels = [
+        group.topic,
+        ...group.misconceptions.map((miss) => miss.concept),
+      ].map(normalizeAnswer);
+      const words = [
+        ...new Set(
+          labels
+            .flatMap((label) => label.split(/\W+/))
+            .filter((word) => word.length >= 4),
+        ),
+      ];
+      const ranked = chunks
+        .map((chunk) => {
+          const text = normalizeAnswer(
+            `${chunk.source_filename} ${chunk.chunk_text}`,
+          );
+          return {
+            chunk,
+            score:
+              labels.filter((label) => text.includes(label)).length * 4 +
+              words.filter((word) => text.includes(word)).length,
+          };
+        })
+        .sort((a, b) => b.score - a.score);
+      return [
+        group.topic,
+        ranked
+          .filter((item) => item.score > 0)
+          .slice(0, 2)
+          .map((item) => item.chunk),
+      ];
+    }),
+  );
+  // Reserve six of ten slots for weak topics, with more slots for recurring misses.
+  // Exact topic assignments are validated after generation, not just suggested.
+  const allocation = weakTopics
+    .slice(0, 6)
+    .map((group) => ({ ...group, count: 1 }));
+  for (
+    let remaining = 6 - allocation.length;
+    allocation.length && remaining > 0;
+    remaining--
+  ) {
+    const next = [...allocation].sort(
+      (a, b) => b.priority / (b.count + 1) - a.priority / (a.count + 1),
+    )[0];
+    next.count++;
+  }
+  const targets = allocation.flatMap((group) =>
+    Array(group.count).fill(group.topic),
+  );
+  const concepts = allocation.flatMap((group) =>
+    Array.from(
+      { length: group.count },
+      (_, index) =>
+        group.misconceptions[index % group.misconceptions.length]?.concept ||
+        group.topic,
     ),
-  ];
-  const related = chunks.filter((chunk) => {
-    const text = normalizeAnswer(
-      `${chunk.source_filename} ${chunk.chunk_text}`,
-    );
-    return focusTopics.some((topic) => text.includes(topic));
-  });
+  );
   const skills = batchTypes.map((_, index) =>
     index < hotsPerBatch ? "HOTS" : "LOTS",
   );
@@ -197,41 +271,46 @@ export async function generatePracticeQuestions(
   const batches = Array.from({ length: batchCount }, (_, index) => index);
   const accepted = [...previousQuestions];
 
-  const questions = (
-    await parallelMap(batches, 3, async (index) => {
-      const start = Math.floor((index * chunks.length) / batchCount);
-      const spread = Array.from(
-        { length: Math.min(chunks.length, 4) },
-        (_, offset) => chunks[(start + offset) % chunks.length],
-      );
-      const focus = Array.from(
-        { length: Math.min(related.length, 3) },
-        (_, offset) => related[(index * 3 + offset) % related.length],
-      );
-      const context = [...new Set([...spread, ...focus])];
-      return generatePracticeBatch(
-        {
-          types: batchTypes,
-          chunks: context,
-          title: module.title,
-          objectives: module.learningObjectives,
-          difficulty,
-          skills,
-          distribution,
-          shortAnswer,
-          previousQuestions: accepted,
-          practiceFocus: misses.length
-            ? { target_count: 3, missed_concepts: misses }
-            : undefined,
-          onValidated: (batch) => {
-            validateQuizUniqueness(batch, accepted);
-            accepted.push(...batch.map((question) => question.question));
-          },
+  const questions = [];
+  // The second batch must see the first batch's accepted questions for diversity.
+  for (const index of batches) {
+    const start = Math.floor((index * chunks.length) / batchCount);
+    const spread = Array.from(
+      { length: Math.min(chunks.length, 4) },
+      (_, offset) => chunks[(start + offset) % chunks.length],
+    );
+    const focus = targets
+      .slice(index * 3, index * 3 + 3)
+      .flatMap((topic) => related.get(topic) || []);
+    const context = [...new Set([...spread, ...focus])];
+    const batch = await generatePracticeBatch(
+      {
+        types: batchTypes,
+        chunks: context,
+        title: module.title,
+        objectives: module.learningObjectives,
+        difficulty,
+        skills,
+        distribution,
+        shortAnswer,
+        previousQuestions: accepted,
+        practiceFocus: misses.length
+          ? {
+              target_count: 3,
+              target_topics: targets.slice(index * 3, index * 3 + 3),
+              target_concepts: concepts.slice(index * 3, index * 3 + 3),
+              missed_concepts: misses,
+            }
+          : undefined,
+        onValidated: (batch) => {
+          validateQuizUniqueness(batch, accepted);
+          accepted.push(...batch.map((question) => question.question));
         },
-        generateBatch,
-      );
-    })
-  ).flat();
+      },
+      generateBatch,
+    );
+    questions.push(...batch);
+  }
 
   if (questions.length !== QUESTION_COUNT)
     throw requestError(
@@ -250,6 +329,15 @@ function attemptQuestions(row) {
   return JSON.parse(row.questions_json).slice(0, QUESTION_COUNT);
 }
 
+function hasValidSavedKeys(row) {
+  try {
+    attemptQuestions(row).forEach(validateKnownAnswerKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function publicAttempt(row, mode) {
   return {
     id: row.attempt_id,
@@ -260,6 +348,7 @@ function publicAttempt(row, mode) {
         type,
         options,
         topic,
+        concept,
         correct_answer,
         accepted_answers,
         acceptedAnswers,
@@ -275,6 +364,7 @@ function publicAttempt(row, mode) {
         type,
         options,
         topic,
+        concept,
         // The practice players show answer feedback and use keys for flips and pairs.
         ...(mode
           ? {
@@ -331,15 +421,16 @@ export async function startModulePractice(
        ORDER BY attempt_id DESC LIMIT 1`,
       formatScope,
     );
-    if (previousInFormat && !previousInFormat.result_json)
+    const unfinished = previousInFormat && !previousInFormat.result_json;
+    if (
+      unfinished &&
+      attemptQuestions(previousInFormat).length === QUESTION_COUNT &&
+      hasValidSavedKeys(previousInFormat)
+    )
       return previousInFormat;
 
-    const [[latestCompleted]] = await db.execute(
-      `SELECT attempt_id, questions_json, result_json FROM module_practice_attempts
-       WHERE user_id=? AND course_id=? AND module_id=? AND result_json IS NOT NULL
-       ORDER BY completed_at DESC, attempt_id DESC LIMIT 1`,
-      scope,
-    );
+    const history = await loadPracticeHistory(scope, db);
+    const latestCompleted = history[0];
 
     const recap = module.quizItems
       .filter(
@@ -352,23 +443,31 @@ export async function startModulePractice(
           (Array.isArray(item.options) && item.options.some(Boolean)),
       );
     const performance = latestCompleted
-      ? JSON.parse(latestCompleted.result_json).answers
+      ? latestCompleted.answers
       : recapPerformance(recap, body.recapAnswers);
     const previousQuestions = [
       ...new Set([
         ...recap.map((item) => item.question),
-        ...[previousInFormat, latestCompleted]
-          .filter(Boolean)
-          .flatMap((attempt) =>
-            JSON.parse(attempt.questions_json).map((item) => item.question),
-          ),
+        ...(previousInFormat
+          ? JSON.parse(previousInFormat.questions_json)
+          : []
+        ).map((item) => item.question),
+        ...history.flatMap((attempt) =>
+          attempt.questions.map((item) => item.question),
+        ),
       ]),
     ];
     let questions;
     try {
       questions = await generate(module, performance, previousQuestions, {
         format,
+        history: history.slice(1),
       });
+      if (!Array.isArray(questions) || questions.length !== QUESTION_COUNT)
+        throw requestError(
+          `Practice requires ${QUESTION_COUNT} questions.`,
+          502,
+        );
     } catch (error) {
       if (error.statusCode === 409) throw error;
       console.error("Module Practice generation failed:", error.message);
@@ -377,26 +476,76 @@ export async function startModulePractice(
         error.statusCode || 500,
       );
     }
-    const [insert] = await db.execute(
-      `INSERT INTO module_practice_attempts (user_id, course_id, module_id, question_format, previous_attempt_id, questions_json)
-       VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (
-         user_id,
-         course_id,
-         module_id,
-         question_format,
-         previous_attempt_id
-       )
-       DO UPDATE SET
-         attempt_id = module_practice_attempts.attempt_id`,
-      [
-        ...formatScope,
-        previousInFormat?.attempt_id ?? 0,
-        JSON.stringify(questions),
-      ],
-    );
+
+    let attemptId;
+
+    if (unfinished) {
+      // Repair an unfinished practice attempt without creating
+      // another attempt or overwriting a submitted one.
+      await db.execute(
+        `UPDATE module_practice_attempts
+         SET questions_json = ?
+         WHERE attempt_id = ?
+           AND result_json IS NULL
+           AND questions_json = ?`,
+        [
+          JSON.stringify(questions),
+          previousInFormat.attempt_id,
+          previousInFormat.questions_json,
+        ],
+      );
+
+      attemptId = previousInFormat.attempt_id;
+    } else {
+      const previousAttemptId = previousInFormat?.attempt_id ?? 0;
+
+      await db.execute(
+        `INSERT INTO module_practice_attempts
+         (user_id, course_id, module_id, question_format, previous_attempt_id, questions_json)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (
+           user_id,
+           course_id,
+           module_id,
+           question_format,
+           previous_attempt_id
+         )
+         DO UPDATE SET
+           attempt_id = module_practice_attempts.attempt_id`,
+        [
+          ...formatScope,
+          previousAttemptId,
+          JSON.stringify(questions),
+        ],
+      );
+
+      // Retrieve the actual attempt ID, including when an
+      // existing record was reused after a conflict.
+      const [[savedAttempt]] = await db.execute(
+        `SELECT attempt_id
+         FROM module_practice_attempts
+         WHERE user_id = ?
+           AND course_id = ?
+           AND module_id = ?
+           AND question_format = ?
+           AND previous_attempt_id = ?`,
+        [...formatScope, previousAttemptId],
+      );
+
+      if (!savedAttempt) {
+        throw requestError(
+          "Unable to retrieve the saved practice attempt.",
+          500,
+        );
+      }
+
+      attemptId = savedAttempt.attempt_id;
+    }
+
+
     const [[attempt]] = await db.execute(
       "SELECT attempt_id, questions_json, result_json FROM module_practice_attempts WHERE attempt_id=?",
-      [insert.insertId],
+      [attemptId],
     );
     if (attempt.result_json)
       throw requestError(
@@ -460,6 +609,10 @@ function gradeAttempt(attemptId, questions, submitted, mode) {
       correctAnswer: question.correct_answer,
       explanation: question.explanation,
       topic: question.topic,
+      concept: question.concept || "",
+      subtopic: question.subtopic || "",
+      type: question.type,
+      isSelfAssessed: mode === "flashcard",
       cognitive_level: question.cognitive_level,
       thinking_skill: question.thinking_skill,
       isCorrect:
@@ -500,6 +653,14 @@ export async function submitModulePractice(user, body) {
   );
 
   const connection = await db.getConnection();
+  const completedCount = async () => {
+    const [[row]] = await connection.execute(
+      `SELECT COUNT(*) AS attempts FROM module_practice_attempts
+       WHERE user_id = ? AND course_id = ? AND module_id = ? AND result_json IS NOT NULL`,
+      [user.userId, attempt.course_id, String(module.id)],
+    );
+    return Number(row.attempts);
+  };
   try {
     await connection.beginTransaction();
     const [[row]] = await connection.execute(
@@ -510,17 +671,51 @@ export async function submitModulePractice(user, body) {
     if (!row) throw requestError("Practice attempt not found.", 404);
     if (row.result_json) {
       const result = JSON.parse(row.result_json);
+      if (!Array.isArray(result.feedback)) {
+        const history = await loadPracticeHistory(
+          [user.userId, attempt.course_id, String(module.id)],
+          connection,
+          attemptId,
+        );
+        result.feedback = buildPracticeFeedback(result.answers, history, {
+          contentTitle: module.title,
+          quizMode: body.mode || "mixed",
+          questionCount: QUESTION_COUNT,
+        });
+      }
+      result.attempts = await completedCount();
       await connection.commit();
       return result;
     }
 
     const mode = getPracticeMode(body.mode);
+    if (!hasValidSavedKeys(row))
+      throw Object.assign(
+        requestError(
+          "This practice contains an inconsistent answer key. Return to the course and start practice again to prepare a validated set.",
+          409,
+        ),
+        { code: "PRACTICE_KEY_INVALID" },
+      );
+    const gradingMode = row.question_format === "qna" ? "qna" : mode;
     const result = gradeAttempt(
       attemptId,
       attemptQuestions(row),
       body.answers,
-      row.question_format === "qna" ? "qna" : mode,
+      gradingMode,
     );
+    const history = await loadPracticeHistory(
+      [user.userId, attempt.course_id, String(module.id)],
+      connection,
+      attemptId,
+    );
+    result.assessmentBasis =
+      gradingMode === "flashcard" ? "self_assessment" : "graded_answers";
+    result.feedback = buildPracticeFeedback(result.answers, history, {
+      contentTitle: module.title,
+      quizMode: gradingMode || "mixed",
+      questionCount: QUESTION_COUNT,
+    });
     const [record] = await connection.execute(
       "INSERT INTO quiz_attempts(user_id,course_id,score,total,source,quiz_mode) VALUES(?,?,?,?,?,?)",
       [
@@ -545,6 +740,7 @@ export async function submitModulePractice(user, body) {
       "UPDATE module_practice_attempts SET result_json=?, completed_at=CURRENT_TIMESTAMP(6) WHERE attempt_id=?",
       [JSON.stringify(result), attemptId],
     );
+    result.attempts = await completedCount();
     await connection.commit();
     return result;
   } catch (error) {

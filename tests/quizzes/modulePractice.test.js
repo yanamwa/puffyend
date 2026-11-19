@@ -86,10 +86,20 @@ test("practice adapts to misses and creates 10 unique mixed questions from the s
           lotsCount: 8,
         });
         assert.equal(batch.chunks[0].source_filename, "Social Learning");
-        assert.deepEqual(batch.practiceFocus, {
-          target_count: 3,
-          missed_concepts: [{ question: missed.question, topic: missed.topic }],
-        });
+        assert.equal(batch.practiceFocus.target_count, 3);
+        assert.deepEqual(batch.practiceFocus.target_topics, [
+          "Identity",
+          "Identity",
+          "Identity",
+        ]);
+        assert.equal(
+          batch.practiceFocus.missed_concepts[0].question,
+          missed.question,
+        );
+        assert.equal(
+          batch.practiceFocus.missed_concepts[0].topic,
+          missed.topic,
+        );
         assert.equal(
           batch.skills.filter((skill) => skill === "HOTS").length,
           1,
@@ -135,12 +145,21 @@ test("scores from 60% through 100% keep the same practice difficulty and focus o
         assert.equal(batch.difficulty, "medium", `${correct}/${total}`);
         assert.equal(batch.distribution.hotsCount, 4);
         assert.equal(batch.distribution.lotsCount, 6);
-        assert.deepEqual(
-          batch.practiceFocus,
-          misses.length
-            ? { target_count: 3, missed_concepts: misses }
-            : undefined,
-        );
+        if (misses.length) {
+          assert.equal(batch.practiceFocus.target_count, 3);
+          assert.deepEqual(batch.practiceFocus.target_topics, [
+            "Identity",
+            "Identity",
+            "Identity",
+          ]);
+          assert.deepEqual(
+            batch.practiceFocus.missed_concepts.map(({ question, topic }) => ({
+              question,
+              topic,
+            })),
+            misses,
+          );
+        } else assert.equal(batch.practiceFocus, undefined);
         return batch.types.map((type, index) => ({
           ...question(++generatedCount, "Reinforcement"),
           type,
@@ -347,9 +366,14 @@ test("students resume their own attempt, submit once, then retry with the latest
     if (sql.includes("ORDER BY completed_at DESC"))
       return [
         rows
-          .filter((item) => item.user_id === values[0] && item.result_json)
+          .filter(
+            (item) =>
+              item.user_id === values[0] &&
+              item.result_json &&
+              item.attempt_id !== values[3],
+          )
           .sort((a, b) => b.completed_at - a.completed_at)
-          .slice(0, 1),
+          .slice(0, 20),
       ];
     if (sql.startsWith("INSERT INTO module_practice_attempts")) {
       const [
@@ -371,6 +395,24 @@ test("students resume their own attempt, submit once, then retry with the latest
         questions_json,
       });
       return [{ insertId: attempt_id }];
+    }
+    if (
+      /^\s*SELECT\s+attempt_id\s+FROM\s+module_practice_attempts\b/i.test(sql)
+    ) {
+      const savedAttempt = rows.find(
+        (item) =>
+          item.user_id === values[0] &&
+          item.course_id === values[1] &&
+          item.module_id === values[2] &&
+          item.question_format === values[3] &&
+          item.previous_attempt_id === values[4],
+      );
+
+      return [
+        savedAttempt
+          ? [{ attempt_id: savedAttempt.attempt_id }]
+          : [],
+      ];
     }
     if (
       sql.includes("FROM module_practice_attempts WHERE attempt_id") ||
