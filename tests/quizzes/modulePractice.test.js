@@ -316,6 +316,90 @@ test("practice splits only the exhausted duplicate batch and keeps all 10 slots"
   );
 });
 
+test("practice recovers from exhausted grounding reviews in smaller validated batches", async () => {
+  let drafts = 0;
+  const batchSizes = [];
+  const reviewedSizes = [];
+  const questions = await generatePracticeQuestions(lesson, [], [], {
+    generateBatch: (batch) => {
+      batchSizes.push(batch.types.length);
+      return generateQuizBatch(batch, async (request) => {
+        if (!request.schema.properties.questions) {
+          const count = request.data.questions.length;
+          reviewedSizes.push(count);
+          return {
+            verdicts: request.data.questions.map((_, index) => ({
+              question_index: index,
+              supported: count <= 2,
+              reason: "Rewrite the ambiguous learning check.",
+            })),
+          };
+        }
+        drafts++;
+        return {
+          questions: request.data.assigned_slots.map((slot, index) => ({
+            question: `Practice ${drafts}-${index}?`,
+            type: slot.type,
+            options:
+              slot.type === "multiple_choice"
+                ? ["Role model", "Identity", "Algorithm", "Database"]
+                : slot.type === "true_false"
+                  ? ["True", "False"]
+                  : [],
+            correct_answer: slot.type === "true_false" ? "True" : "Role model",
+            explanation: "Role models give students examples to observe.",
+            topic: "Learning",
+            concept: "Role models",
+            thinking_skill: slot.thinking_skill,
+            cognitive_level: slot.allowed_cognitive_levels[0],
+            evidence_ids: [request.data.evidence[0].evidence_id],
+          })),
+        };
+      });
+    },
+  });
+  assert.deepEqual(batchSizes, [5, 3, 2, 1, 2, 5, 3, 2, 1, 2]);
+  assert.ok(reviewedSizes.includes(5));
+  assert.ok(reviewedSizes.includes(1));
+  assert.equal(questions.length, 10);
+  assert.equal(new Set(questions.map(({ question }) => question)).size, 10);
+  assert.equal(
+    questions.filter(({ type }) => type === "multiple_choice").length,
+    6,
+  );
+  assert.equal(
+    questions.filter(({ thinking_skill }) => thinking_skill === "HOTS").length,
+    4,
+  );
+  assert.ok(
+    questions.every(
+      (item) =>
+        item.grounding.exact_quotes_verified &&
+        item.grounding.model_review_passed &&
+        item.source_chunks.length,
+    ),
+  );
+});
+
+test("practice stops at rejected individual questions and provider failures", async () => {
+  for (const statusCode of [422, 503]) {
+    const failure = Object.assign(new Error("Generation rejected"), {
+      statusCode,
+    });
+    const batchSizes = [];
+    await assert.rejects(
+      generatePracticeQuestions(lesson, [], [], {
+        generateBatch: async (batch) => {
+          batchSizes.push(batch.types.length);
+          throw failure;
+        },
+      }),
+      (error) => error === failure,
+    );
+    assert.deepEqual(batchSizes, statusCode === 422 ? [5, 3, 2, 1] : [5]);
+  }
+});
+
 test("students resume their own attempt, submit once, then retry with the latest result", async (t) => {
   const course = {
     course_id: scope.courseId,

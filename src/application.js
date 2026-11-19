@@ -8,6 +8,7 @@ import { productionErrorHandler } from "./middleware/productionErrorHandler.js";
 import { startModulePublicationNotifications } from "./services/modulePublicationNotifications.js";
 import { startMainQuizAvailabilityNotifications } from "./services/mainQuizAvailabilityNotifications.js";
 import { startCatalogLessonWorker } from "./services/catalog/catalogLessonGeneration.js";
+import { startModulePracticeWorker } from "./services/quizzes/modulePracticeJobs.js";
 import academicCalendarRoutes from "./routes/academicCalendarRoutes.js";
 import { failStartup } from "./middleware/apiAvailability.js";
 import dotenv from "dotenv";
@@ -118,16 +119,6 @@ export async function startApplication(app, availability) {
       });
     },
   );
-
-  /* =========================================
-   ROUTES
-========================================= */
-
-  /*
-  Dedicated notification routes first.
-  This prevents broad /api routers from
-  intercepting /api/notifications.
-*/
   app.use("/api/notifications", notificationRoutes);
 
   /*
@@ -141,10 +132,6 @@ export async function startApplication(app, availability) {
   app.use("/api/auth", authRoutes);
 
   app.use("/api", authRoutes);
-
-  /*
-  Course routes
-*/
   app.use("/api/academic-calendars", academicCalendarRoutes);
   app.use("/api/catalog", catalogRoutes);
   app.use("/api", courseRoutes);
@@ -244,10 +231,9 @@ export async function startApplication(app, availability) {
           ),
         );
         startCatalogLessonWorker(db);
+        startModulePracticeWorker();
       }
-
       console.log("PostgreSQL initialized successfully.");
-
       availability.stage = "ready";
       availability.ready = true;
     } catch (error) {
