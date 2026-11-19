@@ -1,3 +1,4 @@
+import { buildPracticeFeedback } from "../services/quizzes/practiceAnalysis.js";
 import { assertCourseAccess } from "../services/rag/courseAccessService.js";
 import { db } from "../db.js";
 import { sendQuizResultEmail } from "../utils/mailer.js";
@@ -350,7 +351,10 @@ export async function getCourseMonitoring(req, res) {
 
     return res.status(error.statusCode || 500).json({
       success: false,
-      message: error.statusCode && error.statusCode < 500 ? error.message : "Failed to fetch student monitoring data.",
+      message:
+        error.statusCode && error.statusCode < 500
+          ? error.message
+          : "Failed to fetch student monitoring data.",
     });
   }
 }
@@ -597,86 +601,14 @@ export async function generateAdaptiveFeedback(req, res) {
   const answers = Array.isArray(req.body.answers) ? req.body.answers : [];
 
   try {
-    const grouped = new Map();
-
-    answers.forEach((answer, index) => {
-      const userAnswer = answer.userAnswer || answer.selectedAnswer || "";
-      const correctAnswer = answer.correctAnswer || answer.answer || "";
-      const isCorrect =
-        typeof answer.isCorrect === "boolean"
-          ? answer.isCorrect
-          : String(userAnswer).trim().toLowerCase() ===
-            String(correctAnswer).trim().toLowerCase();
-      const topic =
-        String(
-          answer.topic || answer.subject || answer.category || "",
-        ).trim() ||
-        contentTitle ||
-        "Course topic";
-
-      if (!grouped.has(topic)) {
-        grouped.set(topic, {
-          topic,
-          total: 0,
-          correct: 0,
-          questionIndexes: [],
-          strengths: [],
-          improvements: [],
-        });
-      }
-
-      const group = grouped.get(topic);
-      const question = String(
-        answer.question || `Question ${index + 1}`,
-      ).trim();
-
-      group.total += 1;
-      group.questionIndexes.push(index);
-
-      if (isCorrect) {
-        group.correct += 1;
-        group.strengths.push(`Answered correctly: ${question}`);
-      } else {
-        group.improvements.push(question);
-      }
+    const feedback = buildPracticeFeedback(answers, [], {
+      contentTitle,
+      quizMode,
     });
-
-    const feedback = [...grouped.values()].map((group) => {
-      const confidence =
-        group.total > 0 ? clampScore((group.correct / group.total) * 100) : 0;
-      const understanding =
-        confidence >= 80
-          ? "Good Understanding"
-          : confidence >= 60
-            ? "Developing Understanding"
-            : "Needs More Practice";
-      const reviewTopics = group.improvements.length
-        ? group.improvements.slice(0, 3)
-        : [group.topic];
-
-      return {
-        topic: group.topic,
-        quizType: quizMode,
-        understanding,
-        confidence,
-        questionIndexes: group.questionIndexes,
-        strengths: group.strengths.slice(0, 2),
-        areasForImprovement: group.improvements.slice(0, 3),
-        suggestedReviewTopics: reviewTopics,
-        recommendation:
-          confidence >= 80
-            ? `Keep practicing ${group.topic} to maintain mastery.`
-            : `Review ${group.topic}, then retry the quiz to improve your score.`,
-        adaptiveRecommendation:
-          confidence >= 80
-            ? `Use higher difficulty questions for ${group.topic}.`
-            : `Prioritize review questions for ${group.topic} before moving to harder items.`,
-        nextGoal:
-          confidence >= 80
-            ? "Reach 100% confidence on your next attempt."
-            : "Reach 80% confidence to move into good understanding.",
-      };
-    });
+    if (source === "deck") {
+      for (const item of feedback)
+        item.adaptiveRecommendation = item.recommendation;
+    }
 
     if (feedback.length > 0) {
       let attemptId = req.body.attempts_id || req.body.attemptId || null;

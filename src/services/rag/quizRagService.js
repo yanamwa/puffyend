@@ -1,6 +1,7 @@
 import { validateAdaptiveQuestions } from "../quizzes/mainQuizAdaptive.js";
 import {
   DUPLICATE_QUIZ_QUESTION,
+  validateKnownAnswerKey,
   validateQuizUniqueness,
 } from "../quizzes/quizValidation.js";
 import { db } from "../../db.js";
@@ -49,13 +50,19 @@ const practiceItem = practiceSchema.properties.questions.items;
 practiceItem.properties.type.enum.push("true_false");
 Object.assign(practiceItem.properties, {
   topic: stringSchema,
+  concept: stringSchema,
   cognitive_level: {
     type: "STRING",
     enum: Object.values(cognitiveLevels).flat(),
   },
   thinking_skill: { type: "STRING", enum: ["LOTS", "HOTS"] },
 });
-practiceItem.required.push("topic", "cognitive_level", "thinking_skill");
+practiceItem.required.push(
+  "topic",
+  "concept",
+  "cognitive_level",
+  "thinking_skill",
+);
 const reviewSchema = {
   type: "OBJECT",
   properties: {
@@ -155,6 +162,7 @@ export function validateQuizBatch(
     buildEvidence(chunks).map((e) => [e.evidence_id, e]),
   );
   const questions = draft.questions.map((item, index) => {
+    validateKnownAnswerKey(item);
     if (skills.length) {
       const skill =
         typeof item.thinking_skill === "string"
@@ -243,6 +251,10 @@ export function validateQuizBatch(
       ...(skills.length
         ? {
             topic: item.topic.trim(),
+            concept:
+              typeof item.concept === "string"
+                ? item.concept.trim().slice(0, 100)
+                : item.topic.trim(),
             cognitive_level: item.cognitive_level,
             thinking_skill: item.thinking_skill,
           }
@@ -306,6 +318,12 @@ export async function generateQuizBatch(
     : types.map((type, index) => ({
         question_number: index + 1,
         type,
+        ...(practiceFocus?.target_topics?.[index]
+          ? { topic: practiceFocus.target_topics[index] }
+          : {}),
+        ...(practiceFocus?.target_concepts?.[index]
+          ? { concept: practiceFocus.target_concepts[index] }
+          : {}),
         ...(skills.length
           ? {
               thinking_skill: skills[index],
@@ -355,7 +373,9 @@ export async function generateQuizBatch(
                 `Do not refer to the text above or the provided lesson.`,
                 `LOTS assesses Remember, Understand, Apply; HOTS assesses Analyze, Evaluate, Create.`,
                 `Each question needs exactly one matching cognitive_level and thinking_skill.`,
-                `Assign a short consistent topic supported by the source; use the same topic name for the same concept.`,
+                `Assign a short consistent topic supported by the source; use the same topic name for the same concept. Include concept: a specific sub-concept tested, not just the module title.`,
+                `If assigned_slots specifies a topic, use that exact topic and test it meaningfully. Do not merely relabel a question about another topic.`,
+                `If assigned_slots specifies a concept, assess that exact missed concept and use its exact concept label. Use different applications or sub-skills when a concept occurs in more than one slot.`,
                 `Multiple choice: exactly four distinct plain options without letter prefixes, one correct answer, believable but clearly incorrect distractors.`,
                 `Identification: options=[], one unique short expected answer, do not reveal it in the question.`,
                 `True/False: options exactly ["True", "False"], correct_answer exactly True or False.`,
@@ -377,6 +397,9 @@ export async function generateQuizBatch(
                       "Revisit missed concepts with short, direct sentences and familiar examples supported by the evidence. Make these questions clearer and easier to understand; avoid trick wording and unnecessary complexity.",
                       "Keep the remaining questions at the supplied baseline difficulty. Do not increase difficulty or reasoning depth merely because previous answers were correct.",
                       "Use concise explanations to clarify each missed concept and why the answer is correct.",
+                      "Contrast the student's selected wrong answer with the source-supported correct answer when the evidence supports that distinction. Do not copy an incorrect answer as evidence.",
+                      "For isSelfAssessed=true, userAnswer is a flashcard rating, not a factual response. Use the rated-difficult concept for review without interpreting the rating as a misconception.",
+                      "Repeated practice on a weak topic must test different sub-concepts or genuinely different applications. Rephrasing the same fact is a duplicate.",
                     ]
                   : []),
               ].join(" ")
@@ -430,15 +453,36 @@ export async function generateQuizBatch(
         skills,
         previousQuestions,
       );
+      for (const [index, topic] of (
+        practiceFocus?.target_topics || []
+      ).entries()) {
+        if (questions[index]?.topic !== topic)
+          throw new Error(
+            `Question ${index + 1} must assess assigned weak topic ${topic} and use that exact topic label.`,
+          );
+      }
+      for (const [index, concept] of (
+        practiceFocus?.target_concepts || []
+      ).entries()) {
+        if (questions[index]?.concept !== concept)
+          throw new Error(
+            `Question ${index + 1} must assess assigned missed concept ${concept} and use that exact concept label.`,
+          );
+      }
       if (
         shortAnswer &&
-        questions.some(({ question, correct_answer }) =>
-          !question.endsWith("?") ||
-          /\b(?:of (?:the following|these|those)|(?:options|choices|statements) (?:above|below)|(?:choose|select) (?:the |an? )?(?:(?:correct|best) )?(?:option|answer|statement)|(?:true or false|yes or no))\b/i.test(question) ||
-          /^(?:true|false|yes|no)[.!?]?$/i.test(correct_answer),
+        questions.some(
+          ({ question, correct_answer }) =>
+            !question.endsWith("?") ||
+            /\b(?:of (?:the following|these|those)|(?:options|choices|statements) (?:above|below)|(?:choose|select) (?:the |an? )?(?:(?:correct|best) )?(?:option|answer|statement)|(?:true or false|yes or no))\b/i.test(
+              question,
+            ) ||
+            /^(?:true|false|yes|no)[.!?]?$/i.test(correct_answer),
         )
       ) {
-        throw new Error("Q&A questions must stand alone and ask for a short typed answer. Remove references to choices or binary answers.");
+        throw new Error(
+          "Q&A questions must stand alone and ask for a short typed answer. Remove references to choices or binary answers.",
+        );
       }
       if (mainPrompt)
         validateAdaptiveQuestions(questions, assignedSlots, previousQuestions);
@@ -449,14 +493,25 @@ export async function generateQuizBatch(
           "supported=true only if the question is answerable, the correct answer and ALL explanation claims follow from the quotes, and multiple choice has exactly one correct option (check every distractor for ambiguity).",
           "Identification must have a unique short answer and must not reveal it.",
           ...(shortAnswer
-            ? ["Reject any question a student cannot answer without choices, and any question that only asks for a True/False or Yes/No response."]
+            ? [
+                "Reject any question a student cannot answer without choices, and any question that only asks for a True/False or Yes/No response.",
+              ]
             : []),
           "For True/False, check the truth value from evidence.",
+          "Check for contradictions between the keyed answer and explanation, and check every answer option independently. Never accept an answer merely because the generator selected it.",
+          "For ANSI-SPARC questions, distinguish the internal physical-storage level from external user views; verify the level against the quotes. Reject swapped labels or conflicting explanations.",
+          "Reject duplicate learning checks within the batch or previous_questions, including semantic paraphrases of the same fact. A weak topic may recur only with a distinct sub-concept or a meaningfully different application, not a cosmetic scenario change.",
+          "For each assigned topic and concept, verify the question actually assesses the specific missed concept using practice_focus, rather than just using its label or testing another part of the general topic.",
           "For practice questions also verify that the topic is supported and the cognitive level reflects the actual reasoning required, with LOTS=Remember/Understand/Apply and HOTS=Analyze/Evaluate/Create.",
           "Do not rely on prior knowledge.",
           "Return one verdict per zero-based question_index with a specific reason for any rejection.",
         ].join(" "),
-        data: { questions },
+        data: {
+          questions,
+          previous_questions: [...previousQuestions],
+          assigned_slots: slots,
+          ...(practiceFocus ? { practice_focus: practiceFocus } : {}),
+        },
       });
       previousReview = review;
       validateQuizReview(review, questions);
