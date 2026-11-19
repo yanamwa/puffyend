@@ -218,7 +218,7 @@ test("missed-concept prompts ask for clearer questions without increasing diffic
       assert.deepEqual(request.data.practice_focus, practiceFocus);
       assert.match(
         request.instruction,
-        /short, direct sentences and familiar examples/,
+        /Use an example only if it contributes information the student must apply/,
       );
       assert.match(request.instruction, /clearer and easier to understand/);
       assert.match(
@@ -337,7 +337,7 @@ test("practice splits only the exhausted duplicate batch and keeps all 10 slots"
   );
 });
 
-test("an accepted practice set uses one draft and one independent review for all ten questions", async () => {
+test("a fully direct practice set can pass one draft and one independent review for all ten questions", async () => {
   const calls = [];
   const questions = await generatePracticeQuestions(
     lesson,
@@ -349,10 +349,17 @@ test("an accepted practice set uses one draft and one independent review for all
           assert.deepEqual(request.data.previous_questions, [
             "Earlier practice?",
           ]);
+          assert.equal(request.data.objectives, lesson.learningObjectives);
+          assert.doesNotMatch(request.instruction, /ANSI-SPARC/i);
           if (request.schema.properties.questions) {
-            calls.push(["draft", request.data.assigned_slots.length]);
+            const wording = request.data.assigned_slots.map((slot) => slot.preferred_wording);
+            assert.equal(wording.filter((style) => style === "direct").length, 7);
+            assert.equal(wording.filter((style) => style === "scenario_if_useful").length, 3);
+            assert.match(request.instruction, /Every slot may be direct/);
+            calls.push(["draft", wording.length]);
             return practiceDraft(request, 1);
           }
+          assert.match(request.instruction, /Accept a fully direct quiz/);
           calls.push(["review", request.data.questions.length]);
           return {
             verdicts: request.data.questions.map((_, question_index) => ({
@@ -445,6 +452,10 @@ for (const format of ["mixed", "qna"]) {
     let reviews = 0;
     let signal;
     const batchSizes = [];
+    const directQuestion =
+      "What term describes a person whose behavior students observe as an example?";
+    const paddedQuestion = `A student opens a notebook in class. ${directQuestion}`;
+    let originalWording;
     const missed = {
       question: "Who gives students examples to observe?",
       topic: "Learning",
@@ -464,7 +475,9 @@ for (const format of ["mixed", "qna"]) {
           assert.equal(request.timeoutMs, 45000);
           assert.equal(request.maxAttempts, 1);
           if (request.schema.properties.questions) {
+            const slots = request.data.assigned_slots;
             if (drafts === 1) {
+              assert.equal(slots[0].preferred_wording, originalWording);
               assert.deepEqual(request.data.types, [
                 format === "qna" ? "identification" : "multiple_choice",
               ]);
@@ -478,16 +491,28 @@ for (const format of ["mixed", "qna"]) {
               assert.deepEqual(request.data.practice_focus.target_concepts, [
                 "Role models",
               ]);
-              assert.match(request.data.correction, /ambiguous/);
+              assert.match(request.data.correction, /unnecessary setup/);
+            } else {
+              originalWording = slots[1].preferred_wording;
+              assert.equal(originalWording, "scenario_if_useful");
             }
-            return practiceDraft(request, ++drafts);
+            const draft = practiceDraft(request, ++drafts);
+            if (drafts === 1) draft.questions[1].question = paddedQuestion;
+            else draft.questions[0].question = directQuestion;
+            return draft;
           }
           reviews++;
+          assert.match(
+            request.instruction,
+            /request a direct rewrite of that question/,
+          );
           return {
-            verdicts: request.data.questions.map((_, index) => ({
+            verdicts: request.data.questions.map((item, index) => ({
               question_index: index,
-              supported: reviews !== 1 || index !== 1,
-              reason: "Rewrite this ambiguous question.",
+              supported: item.question !== paddedQuestion,
+              reason: item.question === paddedQuestion
+                ? "Remove the unnecessary setup."
+                : "",
             })),
           };
         });
@@ -500,8 +525,8 @@ for (const format of ["mixed", "qna"]) {
     const stems = questions.map(({ question }) => question);
     assert.ok(stems.includes("Practice 1-0?"));
     assert.ok(stems.includes("Practice 1-4?"));
-    assert.ok(stems.includes("Practice 2-0?"));
-    assert.ok(!stems.includes("Practice 1-1?"));
+    assert.ok(stems.includes(directQuestion));
+    assert.ok(!stems.includes(paddedQuestion));
     assert.ok(
       questions.every((question) => question.grounding.model_review_passed),
     );

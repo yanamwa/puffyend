@@ -211,6 +211,7 @@ async function generatePracticeBatch(options, generateBatch) {
           ...options,
           types: indexes.map((index) => types[index]),
           skills: indexes.map((index) => skills[index]),
+          practiceSlotIndexes: indexes,
           initialCorrection: indexes
             .map((index, i) => `Slot ${i + 1}: ${reasons.get(index)}`)
             .join("\n"),
