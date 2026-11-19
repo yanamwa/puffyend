@@ -2408,6 +2408,20 @@ export async function getEnrolledPracticeModule(user, courseId, moduleId) {
     ? []
     : (await getCourseLearningModules([courseId])).get(String(courseId)) || [];
   const { contentModules } = rowToCourse(row, learningModules);
+  if (moduleId === "all-modules") {
+    const hasPublication = contentModules.some((module) => module.studentPublished !== undefined);
+    const visible = contentModules.filter((module) => !hasPublication || module.studentPublished === true);
+    if (!visible.length) throw requestError("No modules are available for practice.", 409);
+    return {
+      id: "all-modules",
+      title: row.title || row.course_name || "Course practice",
+      moduleIndex: -1,
+      learningObjectives: visible.map((module) => module.learningObjectives || "").join("\n"),
+      lessonPages: visible.flatMap((module) => module.lessonPages),
+      quizItems: visible.flatMap((module) => module.quizItems),
+      practiceModuleIds: visible.map((module) => String(module.id)),
+    };
+  }
   const matches = (id) => id != null && String(id) === moduleId;
   const index = contentModules.findIndex((module) => matches(module.id));
   const moduleIndex = index === -1

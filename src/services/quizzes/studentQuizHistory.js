@@ -53,7 +53,7 @@ export async function studentPracticeHistory(user) {
         courseId: row.course_id,
         moduleId: row.module_id,
         courseTitle: course?.title || "Course",
-        moduleTitle: course?.moduleTitles.get(row.module_id) || "Module Practice",
+        moduleTitle: row.module_id === "all-modules" ? "Practice All" : course?.moduleTitles.get(row.module_id) || "Module Practice",
         attempts: [],
       });
     }

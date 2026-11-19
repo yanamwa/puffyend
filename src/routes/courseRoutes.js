@@ -380,11 +380,11 @@ router.get("/getLessonProgress.php", authenticateUser, getLessonProgress);
 
 router.post("/saveLessonProgress.php", authenticateUser, saveLessonProgress);
 
-router.post("/saveQuizAttempt.php", authenticateUser, saveQuizAttempt);
+router.post(["/quiz-attempts", "/saveQuizAttempt.php"], authenticateUser, saveQuizAttempt);
 
-router.get("/getQuizAttempts.php", authenticateUser, getQuizAttempts);
+router.get(["/quiz-attempts", "/getQuizAttempts.php"], authenticateUser, getQuizAttempts);
 
-router.post("/generateAdaptiveFeedback.php", authenticateUser, generateAdaptiveFeedback);
+router.post(["/quiz-feedback", "/generateAdaptiveFeedback.php"], authenticateUser, generateAdaptiveFeedback);
 
 /* =====================================================
    LEGACY MODE ROUTES

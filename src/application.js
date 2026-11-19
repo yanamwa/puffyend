@@ -13,7 +13,7 @@ import { failStartup } from "./middleware/apiAvailability.js";
 import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
+import { startModulePracticeWorker } from "./services/quizzes/modulePracticeJobs.js";
 import authRoutes from "./routes/authRoutes.js";
 import courseRoutes from "./routes/courseRoutes.js";
 import catalogRoutes, {
@@ -28,33 +28,18 @@ import backupRoutes from "./routes/backupRoutes.js";
 import systemSettingsRoutes from "./routes/systemSettingsRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import contactRoutes from "./routes/contactRoutes.js";
-
 import { migrateApplication } from "./migrations/applicationMigration.js";
 import { startLessonWorker } from "./services/rag/lessonJobService.js";
-
 dotenv.config();
-
 export async function startApplication(app, availability) {
   app.disable("x-powered-by");
   app.set("trust proxy", security.proxyHops);
   app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-
   /* =========================================
    GET SERVER DIRECTORY
 ========================================= */
-
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
-
-  /*
-  If index.js is located here:
-
-  C:\xampp\htdocs\server\index.js
-
-  this becomes:
-
-  C:\xampp\htdocs\server\uploads
-*/
 
   const profileUploadsDirectory = path.join(__dirname, "uploads");
 
@@ -246,6 +231,7 @@ export async function startApplication(app, availability) {
           ),
         );
         startCatalogLessonWorker(db);
+        startModulePracticeWorker();
       }
 
       console.log("PostgreSQL initialized successfully.");

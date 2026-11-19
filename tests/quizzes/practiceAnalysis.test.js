@@ -62,7 +62,7 @@ test("strengths merge case variants and exclude a concept with a contradictory c
     answer(false, { concept: "durability" }),
   ])[0];
   assert.deepEqual(feedback.strengths, [
-    "Atomicity: 2/2 correct in this attempt.",
+    "Demonstrated understanding of Atomicity in this attempt.",
   ]);
   assert.deepEqual(feedback.areasForImprovement, ["durability"]);
 });
@@ -83,6 +83,99 @@ test("flashcard ratings are never treated as verified strengths or historical ma
   assert.equal(feedback.selfAssessed, true);
   assert.deepEqual(feedback.strengths, []);
   assert.match(feedback.nextGoal, /graded practice quiz/);
+  const legacyFlashcard = buildPracticeFeedback(
+    [answer(true, { userAnswer: "good" })],
+    [],
+    { quizMode: "flashcard" },
+  )[0];
+  assert.equal(legacyFlashcard.selfAssessed, true);
+  assert.deepEqual(legacyFlashcard.strengths, []);
+});
+
+test("feedback sections teach concepts, suggest study actions, and keep the plan separate from corrections", () => {
+  const feedback = buildPracticeFeedback([
+    answer(true, { concept: "Data redundancy" }),
+    answer(true, { concept: "Database Administrator" }),
+    answer(false, {
+      concept: "Data Definition Language (DDL)",
+      userAnswer: "DML",
+      correctAnswer: "DDL",
+      explanation:
+        "DDL defines database structures; CREATE TABLE is DDL, while INSERT INTO is DML.",
+    }),
+    answer(false, {
+      concept: "External Level",
+      userAnswer: "Internal Level",
+      correctAnswer: "External Level",
+      explanation:
+        "The external level represents user views; the internal level describes physical storage.",
+    }),
+  ])[0];
+  assert.equal(feedback.feedbackVersion, 2);
+  assert.equal(feedback.difficulty, "Foundation Practice");
+  assert.match(
+    feedback.recommendation,
+    /Data redundancy.*Database Administrator.*Data Definition Language.*External Level/,
+  );
+  assert.doesNotMatch(feedback.recommendation, /CREATE TABLE|physical storage/);
+  assert.match(
+    feedback.adaptiveRecommendation,
+    /simpler explanations.*10-question practice/,
+  );
+  const [ddl, architecture] = feedback.suggestedReviewTopics;
+  assert.match(
+    ddl.explanation,
+    /suggests possible confusion between DML and DDL/,
+  );
+  assert.match(ddl.explanation, /CREATE TABLE.*INSERT INTO/);
+  assert.match(ddl.studyTip, /two-column comparison of DML and DDL/);
+  assert.match(
+    architecture.explanation,
+    /represents user views.*physical storage/,
+  );
+  assert.notEqual(ddl.explanation, ddl.studyTip);
+  assert.doesNotMatch(
+    JSON.stringify([
+      feedback.recommendation,
+      feedback.adaptiveRecommendation,
+      ddl,
+      architecture,
+    ]),
+    /You answered|saved correct answer|You confused/,
+  );
+});
+
+test("unanswered and true-false feedback does not invent the learner's reasoning or new subject facts", () => {
+  const [blank, boolean] = buildPracticeFeedback([
+    answer(false, {
+      topic: "Unanswered",
+      concept: "Unfamiliar concept",
+      userAnswer: "",
+      explanation: "",
+    }),
+    answer(false, {
+      topic: "Statements",
+      type: "true_false",
+      userAnswer: "False",
+      correctAnswer: "True",
+      explanation:
+        "Atomicity completes the entire transaction or rolls it back.",
+    }),
+  ]).flatMap((item) => item.suggestedReviewTopics);
+  assert.match(blank.explanation, /left unanswered/);
+  assert.doesNotMatch(blank.explanation, /confusion between|DDL|DBMS/);
+  assert.match(blank.studyTip, /example from the lesson/);
+  assert.doesNotMatch(boolean.explanation, /confusion between False and True/);
+  assert.match(boolean.studyTip, /detail that makes it true or false/);
+});
+
+test("concept review merges duplicate misses and retains the most useful saved explanation", () => {
+  const feedback = buildPracticeFeedback([
+    answer(false, { explanation: "" }),
+    answer(false),
+  ])[0];
+  assert.equal(feedback.suggestedReviewTopics.length, 1);
+  assert.match(feedback.suggestedReviewTopics[0].explanation, /rolls it back/);
 });
 
 test("history queries are bounded and scoped to account, course and module", async () => {

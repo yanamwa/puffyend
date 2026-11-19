@@ -363,22 +363,34 @@ async function resolveCourseId(value) {
   if (!value) return null;
 
   const idColumn = await getCourseIdColumn();
+  const numericId = quizNumericId(value);
   const [courseRows] = await db.execute(
     `SELECT ${idColumn} AS course_pk
      FROM courses
      WHERE ${idColumn} = ? OR code = ? OR course_code = ?
      LIMIT 1`,
-    [value, value, value],
+    [numericId, String(value), String(value)],
   );
 
   if (courseRows.length) return courseRows[0].course_pk;
 
+  if (!numericId) return null;
   const [moduleRows] = await db.execute(
     "SELECT course_id FROM learning_modules WHERE lesson_id = ? LIMIT 1",
-    [value],
+    [numericId],
   );
 
   return moduleRows[0]?.course_id || null;
+}
+
+function quizNumericId(value) {
+  const id = /^\d+$/.test(String(value ?? "")) ? Number(value) : NaN;
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function quizCourseId(explicitId, lessonId) {
+  const composite = /^(\d+)-.+$/.exec(String(lessonId || ""));
+  return quizNumericId(explicitId) || quizNumericId(composite?.[1]);
 }
 
 async function refreshPerformanceAnalytics(userId, courseId) {
@@ -533,8 +545,16 @@ export async function saveQuizAttempt(req, res) {
       message: "Submit Main Quiz through its saved assessment endpoint.",
     });
   const userId = req.user.userId;
-  const lessonId = req.body.lesson_id || req.body.lessonId || null;
-  const requestedCourseId = req.body.course_id || req.body.courseId || null;
+  const rawLessonId = req.body.lesson_id || req.body.lessonId || null;
+  const lessonId =
+    quizNumericId(rawLessonId) ||
+    (req.body.source === "deck"
+      ? quizNumericId(req.body.deck_id || req.body.deckId)
+      : null);
+  const requestedCourseId = quizCourseId(
+    req.body.course_id || req.body.courseId,
+    rawLessonId,
+  );
   const score = Number(req.body.score || 0);
   const total = Number(req.body.total || 0);
   const source = String(req.body.source || "lesson");
@@ -542,7 +562,10 @@ export async function saveQuizAttempt(req, res) {
   const timeSpent = Number(req.body.time_spent || req.body.timeSpent || 0);
 
   try {
-    const courseId = requestedCourseId || (await resolveCourseId(lessonId));
+    const courseId =
+      source === "deck"
+        ? null
+        : requestedCourseId || (await resolveCourseId(lessonId));
 
     const [result] = await db.execute(
       `INSERT INTO quiz_attempts
@@ -594,7 +617,12 @@ export async function saveQuizAttempt(req, res) {
 
 export async function generateAdaptiveFeedback(req, res) {
   const userId = req.user.userId;
-  const lessonId = req.body.lessonId || req.body.lesson_id || null;
+  const rawLessonId = req.body.lessonId || req.body.lesson_id || null;
+  const lessonId = quizNumericId(rawLessonId);
+  const courseId = quizCourseId(
+    req.body.courseId || req.body.course_id,
+    rawLessonId,
+  );
   const source = String(req.body.source || "lesson");
   const quizMode = String(req.body.quizMode || req.body.quiz_mode || "quiz");
   const contentTitle = String(req.body.contentTitle || "This lesson").trim();
@@ -607,23 +635,30 @@ export async function generateAdaptiveFeedback(req, res) {
     });
     if (source === "deck") {
       for (const item of feedback)
-        item.adaptiveRecommendation = item.recommendation;
+        item.adaptiveRecommendation = item.areasForImprovement.length
+          ? "Review the definitions and examples for these concepts in your deck. Explain each concept in your own words, then test your recall with a new example."
+          : "Use fresh examples from your deck to check that you can explain each concept without hints.";
     }
 
     if (feedback.length > 0) {
-      let attemptId = req.body.attempts_id || req.body.attemptId || null;
+      let attemptId = quizNumericId(req.body.attempts_id || req.body.attemptId);
 
-      if (!attemptId && lessonId) {
+      if (!attemptId && (lessonId || courseId)) {
         const [attemptRows] = await db.execute(
           `SELECT attempts_id
            FROM quiz_attempts
            WHERE user_id = ?
-             AND lesson_id = ?
+             AND ${courseId && source !== "deck" ? "course_id" : "lesson_id"} = ?
              AND source = ?
              AND quiz_mode = ?
            ORDER BY created_at DESC, attempts_id DESC
            LIMIT 1`,
-          [userId, lessonId, source, quizMode],
+          [
+            userId,
+            courseId && source !== "deck" ? courseId : lessonId,
+            source,
+            quizMode,
+          ],
         );
 
         attemptId = attemptRows[0]?.attempts_id || null;
@@ -662,6 +697,10 @@ export async function getQuizAttempts(req, res) {
   const lessonId = req.query.lessonId || req.query.lesson_id || "";
   const deckId = req.query.deckId || req.query.deck_id || "";
   const quizMode = req.query.quizMode || req.query.quiz_mode || "";
+  const courseId = quizCourseId(
+    req.query.courseId || req.query.course_id,
+    lessonId,
+  );
 
   try {
     if (
@@ -698,13 +737,28 @@ export async function getQuizAttempts(req, res) {
       where.push("source = ?");
       params.push(source);
     }
-    if (lessonId) {
+    if (courseId && source !== "deck") {
+      where.push("course_id = ?");
+      params.push(courseId);
+    } else if (quizNumericId(lessonId)) {
       where.push("(lesson_id = ? OR course_id = ?)");
-      params.push(lessonId, lessonId);
+      params.push(quizNumericId(lessonId), quizNumericId(lessonId));
+    } else if (lessonId) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "A valid lesson or course is required.",
+        });
     }
     if (deckId) {
       where.push("lesson_id = ?");
-      params.push(deckId);
+      const numericDeckId = quizNumericId(deckId);
+      if (!numericDeckId)
+        return res
+          .status(400)
+          .json({ success: false, message: "A valid deck is required." });
+      params.push(numericDeckId);
     }
     if (quizMode) {
       where.push("quiz_mode = ?");

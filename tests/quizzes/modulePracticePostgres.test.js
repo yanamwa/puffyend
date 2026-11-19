@@ -14,7 +14,7 @@ import {
 after(() => db.end());
 
 test("PostgreSQL saves six practices, resumes once, and repairs a five-question set", async (context) => {
-  const engine = new PGlite();
+  const engine = await PGlite.create();
   await engine.exec(
     "CREATE SCHEMA puffybrain; SET search_path=puffybrain,public",
   );
@@ -114,6 +114,31 @@ test("PostgreSQL saves six practices, resumes once, and repairs a five-question 
     assert.equal(result.feedback[0].latestAccuracy, 100);
     assert.equal(result.feedback[0].historicalTotal, count * 10);
     assert.equal(result.feedback[0].gradedAttempts, count);
+    assert.equal(result.feedback[0].feedbackVersion, 2);
+    if (count === 1) {
+      const legacy = {
+        ...result,
+        feedback: [
+          {
+            ...result.feedback[0],
+            feedbackVersion: 1,
+            recommendation: "Old answer-key summary.",
+          },
+        ],
+      };
+      await db.execute(
+        "UPDATE module_practice_attempts SET result_json=? WHERE attempt_id=?",
+        [JSON.stringify(legacy), attempt.id],
+      );
+      const upgraded = await submitModulePractice(user, submission);
+      assert.equal(upgraded.feedback[0].feedbackVersion, 2);
+      assert.notEqual(
+        upgraded.feedback[0].recommendation,
+        legacy.feedback[0].recommendation,
+      );
+      assert.equal(upgraded.score, result.score);
+      assert.equal(upgraded.attempts, count);
+    }
     assert.equal(
       (await submitModulePractice(user, submission)).attempts,
       count,
