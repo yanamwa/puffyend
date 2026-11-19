@@ -700,8 +700,9 @@ export async function submitModulePractice(user, body) {
         );
         result.feedback = buildPracticeFeedback(result.answers, history, {
           contentTitle: module.title,
-          quizMode: body.mode || "mixed",
-          questionCount: QUESTION_COUNT,
+          quizMode: result.assessmentBasis === "self_assessment" ? "flashcard" : result.feedback?.[0]?.quizType || body.mode || "mixed",
+          questionCount: result.total,
+          masteryTarget: result.masteryTarget,
         });
       }
       result.attempts = await completedCount();
@@ -735,7 +736,8 @@ export async function submitModulePractice(user, body) {
     result.feedback = buildPracticeFeedback(result.answers, history, {
       contentTitle: module.title,
       quizMode: gradingMode || "mixed",
-      questionCount: QUESTION_COUNT,
+      questionCount: result.total,
+      masteryTarget: result.masteryTarget,
     });
     const [record] = await connection.execute(
       "INSERT INTO quiz_attempts(user_id,course_id,score,total,source,quiz_mode) VALUES(?,?,?,?,?,?)",

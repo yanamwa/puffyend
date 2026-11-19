@@ -633,12 +633,6 @@ export async function generateAdaptiveFeedback(req, res) {
       contentTitle,
       quizMode,
     });
-    if (source === "deck") {
-      for (const item of feedback)
-        item.adaptiveRecommendation = item.areasForImprovement.length
-          ? "Review the definitions and examples for these concepts in your deck. Explain each concept in your own words, then test your recall with a new example."
-          : "Use fresh examples from your deck to check that you can explain each concept without hints.";
-    }
 
     if (feedback.length > 0) {
       let attemptId = quizNumericId(req.body.attempts_id || req.body.attemptId);

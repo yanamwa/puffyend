@@ -36,10 +36,10 @@ test("feedback explains the actual misconception and separates latest accuracy f
   assert.equal(feedback.analyzedAttempts, 3);
   assert.equal(feedback.missedAttempts, 2);
   assert.equal(feedback.recurring, true);
-  assert.match(feedback.recommendation, /Durability.*Atomicity/);
+  assert.match(feedback.recommendation, /missed 1 of the 2/);
   assert.match(feedback.suggestedReviewTopics[0].explanation, /rolls it back/);
-  assert.match(feedback.nextGoal, /6\/10/);
-  assert.match(feedback.nextGoal, /90% \(9\/10\)/);
+  assert.doesNotMatch(feedback.nextGoal, /6\/10/);
+  assert.match(feedback.nextGoal, /new question/);
 });
 
 test("a perfect latest score does not erase persistent weaknesses or invent full mastery", () => {
@@ -62,7 +62,7 @@ test("strengths merge case variants and exclude a concept with a contradictory c
     answer(false, { concept: "durability" }),
   ])[0];
   assert.deepEqual(feedback.strengths, [
-    "Demonstrated understanding of Atomicity in this attempt.",
+    "Correctly answered on this attempt: Atomicity.",
   ]);
   assert.deepEqual(feedback.areasForImprovement, ["durability"]);
 });
@@ -111,24 +111,21 @@ test("feedback sections teach concepts, suggest study actions, and keep the plan
         "The external level represents user views; the internal level describes physical storage.",
     }),
   ])[0];
-  assert.equal(feedback.feedbackVersion, 2);
+  assert.equal(feedback.feedbackVersion, 4);
   assert.equal(feedback.difficulty, "Foundation Practice");
   assert.match(
     feedback.recommendation,
-    /Data redundancy.*Database Administrator.*Data Definition Language.*External Level/,
+    /missed 2 of the 4/,
   );
   assert.doesNotMatch(feedback.recommendation, /CREATE TABLE|physical storage/);
   assert.match(
     feedback.adaptiveRecommendation,
-    /simpler explanations.*10-question practice/,
+    /Start with Data Definition Language.*Then revisit External Level/,
   );
   const [ddl, architecture] = feedback.suggestedReviewTopics;
-  assert.match(
-    ddl.explanation,
-    /suggests possible confusion between DML and DDL/,
-  );
+  assert.doesNotMatch(ddl.explanation, /confusion between/);
   assert.match(ddl.explanation, /CREATE TABLE.*INSERT INTO/);
-  assert.match(ddl.studyTip, /two-column comparison of DML and DDL/);
+  assert.match(ddl.studyTip, /Compare DML with DDL/);
   assert.match(
     architecture.explanation,
     /represents user views.*physical storage/,
@@ -166,7 +163,7 @@ test("unanswered and true-false feedback does not invent the learner's reasoning
   assert.doesNotMatch(blank.explanation, /confusion between|DDL|DBMS/);
   assert.match(blank.studyTip, /example from the lesson/);
   assert.doesNotMatch(boolean.explanation, /confusion between False and True/);
-  assert.match(boolean.studyTip, /detail that makes it true or false/);
+  assert.match(boolean.studyTip, /detail that makes the statement true or false/);
 });
 
 test("concept review merges duplicate misses and retains the most useful saved explanation", () => {
@@ -185,7 +182,7 @@ test("history queries are bounded and scoped to account, course and module", asy
       execute: async (sql, params) => {
         assert.match(sql, /user_id=\? AND course_id=\? AND module_id=\?/);
         assert.match(sql, /LIMIT 20/);
-        assert.match(sql, /attempt_id <> \?/);
+        assert.match(sql, /\(completed_at, attempt_id\) </);
         assert.deepEqual(params, [4, 8, "module-a", 7]);
         return [
           [
