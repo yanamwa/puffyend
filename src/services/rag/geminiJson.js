@@ -11,7 +11,10 @@ export async function generateJson({
   maxAttempts = 3,
 }) {
   if (!process.env.GEMINI_API_KEY)
-    throw new Error("GEMINI_API_KEY is missing.");
+    throw Object.assign(new Error("GEMINI_API_KEY is missing."), {
+      statusCode: 503,
+      retryable: false,
+    });
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
   let response;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -79,7 +82,7 @@ export async function generateJson({
   if (candidate?.finishReason && candidate.finishReason !== "STOP")
     throw Object.assign(
       new Error("Gemini did not complete the structured response."),
-      { statusCode: 502 },
+      { statusCode: 502, code: "GENERATION_INCOMPLETE" },
     );
   const text = candidate?.content?.parts
     ?.filter((p) => !p.thought)
@@ -90,6 +93,7 @@ export async function generateJson({
   } catch {
     throw Object.assign(new Error("Gemini returned invalid JSON."), {
       statusCode: 502,
+      code: "GENERATION_INVALID_OUTPUT",
     });
   }
 }

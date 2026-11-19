@@ -136,7 +136,7 @@ export async function runModulePracticeJob({
     console.error(
       "Practice preparation failed:",
       error.code || error.statusCode || "GENERATION_ERROR",
-      timing(),
+      { ...timing(), reason: error.cause?.message || error.message },
     );
     await database.execute(
       `UPDATE module_practice_jobs SET status = 'failed', error_json = ?,
@@ -147,7 +147,11 @@ export async function runModulePracticeJob({
           message: error.statusCode
             ? error.message
             : "Practice could not be prepared. Please try again.",
-          code: error.code === "QUICK_RECAP_REQUIRED" ? error.code : undefined,
+          code: ["QUICK_RECAP_REQUIRED", "PRACTICE_VALIDATION_FAILED"].includes(
+            error.code,
+          )
+            ? error.code
+            : undefined,
           status: error.statusCode || 500,
         }),
         job.job_id,

@@ -673,18 +673,49 @@ await test("partial quiz repair never retains answers from incomplete or invalid
           request.schema.properties.questions
             ? {
                 questions: [
-                  question,
                   {
                     ...question,
+                    evidence_ids: [request.data.evidence[0].evidence_id],
+                  },
+                  {
+                    ...question,
+                    evidence_ids: [request.data.evidence[0].evidence_id],
                     question: "Plants produce food using sunlight.",
                   },
                 ],
               }
             : { verdicts },
       ),
-      (error) => error.statusCode === 422 && !error.validatedQuestions?.length,
+      (error) =>
+        error.statusCode === 422 &&
+        error.code === "QUIZ_REVIEW_INCOMPLETE" &&
+        !error.validatedQuestions?.length,
     );
   }
+});
+
+await test("unavailable generation and incomplete provider replies are reported before question validation", async (context) => {
+  const previousKey = process.env.GEMINI_API_KEY;
+  context.after(() => {
+    if (previousKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previousKey;
+  });
+  delete process.env.GEMINI_API_KEY;
+  const prepare = () => generateQuizBatch({
+    types: ["true_false"], skills: ["LOTS"], chunks, preserveValidated: true,
+  });
+  const candidate = { finishReason: "MAX_TOKENS" };
+  const post = context.mock.method(axios, "post", async () => ({
+    data: { candidates: [candidate] },
+  }));
+  await assert.rejects(prepare, { statusCode: 503 });
+  assert.equal(post.mock.callCount(), 0);
+  process.env.GEMINI_API_KEY = "test-key";
+  await assert.rejects(prepare, { statusCode: 502, code: "GENERATION_INCOMPLETE" });
+  candidate.finishReason = "STOP";
+  candidate.content = { parts: [{ text: "invalid" }] };
+  await assert.rejects(prepare, { statusCode: 502, code: "GENERATION_INVALID_OUTPUT" });
+  assert.equal(post.mock.callCount(), 2);
 });
 
 await test("practice AI calls cap provider retries and cancel at the shared deadline", async (context) => {

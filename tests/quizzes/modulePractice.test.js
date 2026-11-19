@@ -508,6 +508,126 @@ for (const format of ["mixed", "qna"]) {
   });
 }
 
+test("module practice reviews valid draft slots and repairs only the missing or rejected questions", async () => {
+  const module = { ...lesson, id: "3354ba16-1848-4c84-a6b3-efd32843f47c" };
+  const draftSizes = [];
+  const reviewSizes = [];
+  const performance = [{ ...recap[0], concept: "Self", isCorrect: false }];
+  const questions = await generatePracticeQuestions(module, performance, [], {
+    generateBatch: (batch) =>
+      generateQuizBatch(batch, async ({ data, schema }) => {
+        if (schema.properties.questions) {
+          draftSizes.push(data.types.length);
+          const draft = practiceDraft({ data }, draftSizes.length);
+          const ids = data.evidence.map((passage) => passage.evidence_id);
+          assert.deepEqual(
+            schema.properties.questions.items.properties.evidence_ids.items
+              .enum,
+            ids,
+          );
+          if (draftSizes.length === 1) {
+            draft.questions[0].topic = " identity ";
+            draft.questions[1].question = draft.questions[0].question;
+            draft.questions[4].evidence_ids = ["unknown-passage"];
+          } else if (draftSizes.length === 2) {
+            assert.match(data.correction, /Duplicate quiz question/);
+            assert.match(data.correction, /Unknown quiz evidence ID/);
+            assert.match(data.correction, /Unsupported inference/);
+            assert.ok(data.previous_questions.includes("Practice 1-0?"));
+          } else {
+            assert.ok(data.previous_questions.includes("Practice 2-0?"));
+          }
+          return draft;
+        }
+        reviewSizes.push(data.questions.length);
+        assert.deepEqual(
+          data.questions.map((q) => q.type),
+          data.assigned_slots.map((slot) => slot.type),
+        );
+        return {
+          verdicts: data.questions
+            .map((q, i) => ({
+              question_index: i,
+              supported: !["Practice 1-5?", "Practice 2-2?"].includes(
+                q.question,
+              ),
+              reason: "Unsupported inference.",
+            }))
+            .reverse(),
+        };
+      }),
+  });
+  assert.deepEqual(draftSizes, [10, 3, 1]);
+  assert.deepEqual(reviewSizes, [8, 3, 1]);
+  assert.equal(questions.length, 10);
+  assert.equal(new Set(questions.map((item) => item.question)).size, 10);
+  assert.ok(
+    questions.every((item) =>
+      item.source_chunks[0].chunk_id.includes(module.id),
+    ),
+  );
+  assert.ok(
+    questions.some(
+      (item) => item.question === "Practice 1-0?" && item.topic === "Identity",
+    ),
+  );
+  assert.ok(questions.some((item) => item.question === "Practice 3-0?"));
+  assert.ok(
+    questions.every(
+      (item) =>
+        !["Practice 1-4?", "Practice 1-5?", "Practice 2-2?"].includes(
+          item.question,
+        ),
+    ),
+  );
+});
+
+test("eight approved questions survive a historical duplicate and a rejected answer", async () => {
+  const history = Array.from(
+    { length: 40 },
+    (_, i) => `Earlier practice question ${i + 1}?`,
+  );
+  const draftSizes = [];
+  const result = await generatePracticeQuestions(lesson, [], history, {
+    generateBatch: (batch) =>
+      generateQuizBatch(batch, async ({ data, schema, instruction }) => {
+        assert.ok(!data.previous_questions.includes(history.at(-1)));
+        if (schema.properties.questions) {
+          draftSizes.push(data.types.length);
+          const draft = practiceDraft({ data }, draftSizes.length);
+          if (draftSizes.length === 1) {
+            assert.deepEqual(data.previous_questions, history.slice(0, 25));
+            draft.questions[2].question = history.at(-1);
+          } else {
+            assert.deepEqual(data.types, ["multiple_choice", "true_false"]);
+            assert.equal(data.previous_questions.length, 25 + 8);
+          }
+          return draft;
+        }
+        assert.equal(data.objectives, lesson.learningObjectives);
+        assert.match(instruction, /assesses a relevant lesson objective/);
+        return {
+          verdicts: data.questions.map(({ question, question_index }) => ({
+            question_index,
+            supported: question !== "Practice 1-8?",
+            reason: "The cited evidence does not support this answer.",
+          })),
+        };
+      }),
+  });
+  assert.deepEqual(draftSizes, [10, 2]);
+  assert.equal(result.length, 10);
+  assert.equal(
+    result.filter((q) => q.question.startsWith("Practice 1-")).length,
+    8,
+  );
+  assert.ok(
+    result.every(
+      (q) => !history.includes(q.question) && q.question !== "Practice 1-8?",
+    ),
+  );
+});
+
 test("the shared practice deadline stops later batches and repairs", async (context) => {
   let controller;
   const timeouts = [];
@@ -701,7 +821,8 @@ test("students resume their own attempt, submit once, then retry with the latest
     }),
     {
       statusCode: 422,
-      message: "We couldn't prepare 10 practice questions. Please try again.",
+      code: "PRACTICE_VALIDATION_FAILED",
+      message: "The generated questions did not pass validation for this lesson. Please try again.",
     },
   );
   assert.equal(rows.length, 0);
