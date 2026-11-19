@@ -379,7 +379,7 @@ export async function generateQuizBatch(
                 `Multiple choice: exactly four distinct plain options without letter prefixes, one correct answer, believable but clearly incorrect distractors.`,
                 `Identification: options=[], one unique short expected answer, do not reveal it in the question.`,
                 `True/False: options exactly ["True", "False"], correct_answer exactly True or False.`,
-                `Return question, type, options, correct_answer, explanation, topic, cognitive_level, thinking_skill, evidence_ids in valid JSON.`,
+                `Return question, type, options, correct_answer, explanation, topic, concept, cognitive_level, thinking_skill, evidence_ids in valid JSON.`,
                 `Keep fields under 500 characters and identification answers under 150.`,
                 `Repair rejected questions using reviewer reasons.`,
                 ...(shortAnswer
@@ -392,7 +392,7 @@ export async function generateQuizBatch(
                 ...(practiceFocus
                   ? [
                       "Use practice_focus.target_count questions to check the concepts described by practice_focus.missed_concepts. Use the remaining questions to review other concepts where the supplied evidence covers them.",
-                      "If none of the missed concepts appear in the supplied evidence, cover other concepts supported by the supplied evidence.",
+                      "Assigned slots are mandatory. Use the exact assigned topic and concept labels, and ensure each question genuinely assesses its assigned concept using the supplied evidence. Never substitute an unrelated concept or merely relabel an unrelated question.",
                       "Use different wording and contexts from the missed questions. Missed concepts are learning targets and never evidence.",
                       "Revisit missed concepts with short, direct sentences and familiar examples supported by the evidence. Make these questions clearer and easier to understand; avoid trick wording and unnecessary complexity.",
                       "Keep the remaining questions at the supplied baseline difficulty. Do not increase difficulty or reasoning depth merely because previous answers were correct.",
