@@ -25,6 +25,8 @@ import contactRoutes from "./routes/contactRoutes.js";
 
 import { initDb } from "./db.js";
 import { startLessonWorker } from "./services/rag/lessonJobService.js";
+import { migrateModulePracticeJobs } from "./migrations/modulePracticeJobs.js";
+import { startModulePracticeWorker } from "./services/quizzes/modulePracticeJobs.js";
 import publicUploads, { uploadsDirectory } from "./middleware/publicUploads.js";
 import { cleanupDeclinedRegistrations } from "./services/declinedRegistrationCleanup.js";
 
@@ -296,6 +298,7 @@ async function startServer() {
     console.log("Connecting to MySQL...");
 
     await initDb();
+    await migrateModulePracticeJobs(db);
     await cleanupDeclinedRegistrations();
     setInterval(() => cleanupDeclinedRegistrations().catch((error) => {
       console.error("Declined registration cleanup failed:", error.code || "CLEANUP_FAILED");
@@ -307,6 +310,7 @@ async function startServer() {
     await cleanupSyllabusUploads();
     setInterval(() => cleanupSyllabusUploads().catch(console.error), 3600000).unref();
     startLessonWorker();
+    startModulePracticeWorker();
     startCatalogLessonWorker(db);
 
     console.log("MySQL Connected Successfully.");

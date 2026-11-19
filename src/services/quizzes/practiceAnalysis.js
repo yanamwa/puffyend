@@ -1,8 +1,14 @@
 import { answersMatchQuestion, normalizeAnswer } from "./mainQuizAdaptive.js";
 import { validateKnownAnswerKey } from "./quizValidation.js";
+import {
+  buildConceptReview,
+  buildLearningPlan,
+  LEARNING_FEEDBACK_VERSION,
+} from "./learningFeedback.js";
 
 export const PRACTICE_MASTERY_TARGET = 90;
 export const PRACTICE_HISTORY_LIMIT = 20;
+export const PRACTICE_FEEDBACK_VERSION = LEARNING_FEEDBACK_VERSION;
 const clean = (value) =>
   String(value ?? "")
     .replace(/\s+/g, " ")
@@ -165,6 +171,7 @@ export function analyzePractice(
                 answer.correctAnswer || answer.correct_answer || answer.answer,
               ),
               explanation: clean(answer.explanation),
+              type: answer.type,
               isSelfAssessed: Boolean(answer.isSelfAssessed),
             },
           ]),
@@ -194,15 +201,6 @@ export function analyzePractice(
     .sort((a, b) => b.priority - a.priority);
 }
 
-function reviewExplanation(miss) {
-  if (miss.isSelfAssessed)
-    return `You rated this card as difficult. Review ${miss.concept}, then check it with a graded question.`;
-  const correction = miss.correctAnswer
-    ? `You answered "${miss.userAnswer || "No answer"}"; the saved correct answer is "${miss.correctAnswer}".`
-    : `Review the unanswered concept in: ${miss.question}`;
-  return `${correction}${miss.explanation ? ` ${miss.explanation}` : " Revisit the lesson explanation before trying a new example."}`;
-}
-
 export function buildPracticeFeedback(
   answers,
   history = [],
@@ -212,6 +210,8 @@ export function buildPracticeFeedback(
     questionCount = 10,
   } = {},
 ) {
+  if (quizMode === "flashcard")
+    answers = answers.map((answer) => ({ ...answer, isSelfAssessed: true }));
   const analysis = analyzePractice(answers, history, contentTitle);
   const verified = answers.filter(isVerified);
   const score = verified.filter(isPracticeCorrect).length;
@@ -229,18 +229,20 @@ export function buildPracticeFeedback(
       const currentMisses = group.current.filter(
         (answer) => !isPracticeCorrect(answer),
       );
-      const reviewTopics = [
-        ...new Map(
-          group.misconceptions.map((miss) => [
-            normalizeAnswer(miss.concept),
-            {
-              topic: miss.concept,
-              explanation: reviewExplanation(miss),
-              question: miss.question,
-            },
-          ]),
-        ).values(),
-      ].slice(0, 3);
+      const reviews = new Map();
+      for (const miss of group.misconceptions) {
+        const key = normalizeAnswer(miss.concept);
+        const existing = reviews.get(key);
+        // Prefer a saved explanation, retaining current evidence before history.
+        if (!existing || (!existing.hasExplanation && miss.explanation))
+          reviews.set(key, {
+            review: buildConceptReview(miss, group.topic),
+            hasExplanation: Boolean(miss.explanation),
+          });
+      }
+      const reviewTopics = [...reviews.values()]
+        .slice(0, 3)
+        .map(({ review }) => review);
       // A correct answer is evidence of that response, not proof of full mastery.
       const concepts = new Map();
       for (const answer of group.current.filter(isVerified)) {
@@ -252,34 +254,40 @@ export function buildPracticeFeedback(
         record.total++;
         if (isPracticeCorrect(answer)) record.correct++;
       }
-      const strengths = [...concepts.values()]
+      const strengthConcepts = [...concepts.values()]
         .filter(
           (record) => record.correct === record.total && record.correct > 0,
         )
-        .map(
-          ({ concept, correct, total }) =>
-            `${concept}: ${correct}/${total} correct in this attempt.`,
-        )
+        .map(({ concept }) => concept)
         .slice(0, 2);
-      const focus = unique(group.misconceptions.map((miss) => miss.concept))
-        .slice(0, 3)
-        .join(", ");
-      const historyNote = group.recurring
-        ? ` This topic was missed in ${group.missedAttempts} of ${group.observedAttempts} analyzed attempts.`
-        : "";
-      const recommendation = group.needsReview
-        ? `Review ${focus || group.topic}. ${reviewTopics[0]?.explanation || "Compare your answers with the lesson."}${historyNote}`
-        : `You answered ${group.latestCorrect}/${group.latestTotal} graded questions correctly in this topic. Check your understanding with new examples.`;
+      const strengths = strengthConcepts.map(
+        (concept) =>
+          `Demonstrated understanding of ${concept} in this attempt.`,
+      );
+      const weakConcepts = unique(
+        group.misconceptions.map((miss) => miss.concept),
+      );
+      const focus = weakConcepts.slice(0, 3).join(", ");
       const latest = group.latestAccuracy;
       const overallAccuracy = percent(
         answers.filter(isPracticeCorrect).length,
         answers.length,
       );
-      const difficulty =
-        overallAccuracy !== null && overallAccuracy < 60
-          ? "Foundation"
-          : "Steady practice";
+      const plan = buildLearningPlan({
+        topic: group.topic,
+        strongConcepts: strengthConcepts,
+        currentWeakConcepts: unique(
+          currentMisses.map((answer) => practiceConcept(answer, group.topic)),
+        ),
+        weakConcepts,
+        selfAssessed,
+        hasCurrentAnswers: group.current.length > 0,
+        recurring: group.recurring,
+        foundation: overallAccuracy !== null && overallAccuracy < 60,
+        questionCount,
+      });
       return {
+        feedbackVersion: PRACTICE_FEEDBACK_VERSION,
         topic: group.topic,
         quizType: quizMode,
         questionIndexes: group.questionIndexes,
@@ -315,14 +323,10 @@ export function buildPracticeFeedback(
                 ? "Developing Understanding"
                 : "Needs More Practice",
         strengths,
-        areasForImprovement: reviewTopics.map((review) => review.topic),
+        areasForImprovement: weakConcepts,
         suggestedReviewTopics: reviewTopics,
         misconceptions: group.misconceptions,
-        recommendation,
-        difficulty,
-        adaptiveRecommendation: group.needsReview
-          ? `The next 10-question practice will prioritize current mistakes and recurring weak topics, including ${focus || group.topic} where supported by the module, using clearer questions and different scenarios.${historyNote} Correct answers do not trigger harder questions.`
-          : "The next practice will check other weak topics from recent attempts, if present, and review this topic with fresh examples at the same baseline difficulty.",
+        ...plan,
         nextGoal: selfAssessed
           ? `Complete a graded practice quiz and aim for ${target}/${questionCount} (${PRACTICE_MASTERY_TARGET}%). Flashcard ratings do not establish mastery.`
           : `${achievedTarget ? `Maintain at least ${target}` : `Aim for at least ${nextScore}`}/${questionCount} correct on the next practice quiz${!achievedTarget ? ` (current: ${score}/${verified.length})` : ""}. The mastery target is ${PRACTICE_MASTERY_TARGET}% (${target}/${questionCount}).${currentMisses.length || group.recurring ? ` Correctly answer a new question about ${focus || group.topic}.` : ""}`,

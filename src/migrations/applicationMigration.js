@@ -2,6 +2,7 @@ import { db, initDb } from "../db.js";
 import { migrateCourseCatalog } from "./courseCatalogMigration.js";
 import { migrateAcademicCalendar } from "./academicCalendarMigration.js";
 import { migrateLessonTables, finalizeDatabase } from "../database/postgres.js";
+import { migrateModulePracticeJobs } from "./modulePracticeJobs.js";
 
 export async function migrateApplication() {
   // Deployments may overlap. Serialize schema changes on a dedicated session.
@@ -15,6 +16,7 @@ export async function migrateApplication() {
     );
     locked = true;
     await initDb({ migrate: true });
+    await migrateModulePracticeJobs(db);
     await migrateCourseCatalog(db);
     await migrateAcademicCalendar(db);
     await migrateLessonTables(db);

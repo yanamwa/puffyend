@@ -7,6 +7,7 @@ import {
   analyzePractice,
   buildPracticeFeedback,
   loadPracticeHistory,
+  PRACTICE_FEEDBACK_VERSION,
   PRACTICE_MASTERY_TARGET,
 } from "./practiceAnalysis.js";
 import {
@@ -388,11 +389,7 @@ function publicAttempt(row, mode) {
   };
 }
 
-export async function startModulePractice(
-  user,
-  body,
-  generate = generatePracticeQuestions,
-) {
+export async function modulePracticeScope(user, body) {
   const courseId = Number(body?.courseId);
   const requestedId = ["string", "number"].includes(typeof body?.moduleId)
     ? String(body.moduleId).trim()
@@ -408,6 +405,18 @@ export async function startModulePractice(
   const module = await getEnrolledPracticeModule(user, courseId, requestedId);
   const mode = getPracticeMode(body.mode);
   const format = mode === "qna" ? "qna" : "mixed";
+  return { courseId, module, mode, format };
+}
+
+export async function startModulePractice(
+  user,
+  body,
+  generate = generatePracticeQuestions,
+) {
+  const { courseId, module, mode, format } = await modulePracticeScope(
+    user,
+    body,
+  );
   const scope = [user.userId, courseId, String(module.id)];
   const formatScope = [...scope, format];
   const scopeKey = JSON.stringify(formatScope);
@@ -430,6 +439,19 @@ export async function startModulePractice(
       return previousInFormat;
 
     const history = await loadPracticeHistory(scope, db);
+    let coursePerformance = null;
+    if (!history.length && module.practiceModuleIds) {
+      // The first course-wide set uses the latest completed practice per module.
+      const moduleHistory = await Promise.all(
+        module.practiceModuleIds.map((id) =>
+          loadPracticeHistory([user.userId, courseId, id], db),
+        ),
+      );
+      history.push(
+        ...moduleHistory.flatMap((attempts) => attempts.slice(0, 1)),
+      );
+      coursePerformance = history.flatMap((attempt) => attempt.answers);
+    }
     const latestCompleted = history[0];
 
     const recap = module.quizItems
@@ -443,7 +465,7 @@ export async function startModulePractice(
           (Array.isArray(item.options) && item.options.some(Boolean)),
       );
     const performance = latestCompleted
-      ? latestCompleted.answers
+      ? coursePerformance || latestCompleted.answers
       : recapPerformance(recap, body.recapAnswers);
     const previousQuestions = [
       ...new Set([
@@ -632,7 +654,13 @@ export async function submitModulePractice(user, body) {
     if (!row) throw requestError("Practice attempt not found.", 404);
     if (row.result_json) {
       const result = JSON.parse(row.result_json);
-      if (!Array.isArray(result.feedback)) {
+      if (
+        !Array.isArray(result.feedback) ||
+        !result.feedback.length ||
+        result.feedback.some(
+          (feedback) => feedback?.feedbackVersion !== PRACTICE_FEEDBACK_VERSION,
+        )
+      ) {
         const history = await loadPracticeHistory(
           [user.userId, attempt.course_id, String(module.id)],
           connection,
