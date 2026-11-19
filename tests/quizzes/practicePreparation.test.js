@@ -7,7 +7,9 @@ import { migrateApplication } from "../../src/migrations/applicationMigration.js
 import lessonRoutes from "../../src/routes/lessonRoutes.js";
 import courseRoutes from "../../src/routes/courseRoutes.js";
 import { getEnrolledPracticeModule } from "../../src/controllers/courseController.js";
+import { generateQuizBatch } from "../../src/services/rag/quizRagService.js";
 import {
+  generatePracticeQuestions,
   startModulePractice,
   submitModulePractice,
 } from "../../src/services/quizzes/modulePracticeService.js";
@@ -45,7 +47,7 @@ test("a request wakes an idle worker and two students can prepare practice concu
   worker.stop();
 });
 
-test("background practice survives retries, rejects partial sets, and uses Node quiz routes with legacy course IDs", async (context) => {
+async function enrolledPracticeCourse(context) {
   const engine = await PGlite.create();
   await engine.exec(
     "CREATE SCHEMA puffybrain; SET search_path=puffybrain,public",
@@ -102,6 +104,11 @@ test("background practice survives retries, rejects partial sets, and uses Node 
     "INSERT INTO course_enrollments(course_id,user_id,status) VALUES(?,?,'approved')",
     [scope.courseId, user.userId],
   );
+  return { user, scope, module };
+}
+
+test("background practice survives retries, rejects partial sets, and uses Node quiz routes with legacy course IDs", async (context) => {
+  const { user, scope, module } = await enrolledPracticeCourse(context);
   // Invoke the registered Express handlers in-process; no listening port or AI API is needed.
   let wakeCalls = 0;
   const practiceWorker = {
@@ -299,4 +306,121 @@ test("background practice survives retries, rejects partial sets, and uses Node 
     (await invoke("/quiz-attempts", "get", undefined, true)).status,
     401,
   );
+
+  const rejected = (await (await post("/lessons/practice/start", scope)).json())
+    .job;
+  await runModulePracticeJob({
+    start: (student, body) =>
+      startModulePractice(student, body, async () => {
+        throw Object.assign(new Error("Private text from the answer review"), {
+          statusCode: 422,
+          code: "QUIZ_REVIEW_REJECTED",
+        });
+      }),
+  });
+  const rejectedStatus = await get(`/lessons/practice/jobs/${rejected.id}`);
+  assert.equal(rejectedStatus.status, 200);
+  const rejectedJob = (await rejectedStatus.json()).job;
+  assert.equal(rejectedJob.status, "failed");
+  assert.equal(rejectedJob.error.status, 422);
+  assert.equal(rejectedJob.error.code, "PRACTICE_VALIDATION_FAILED");
+  assert.match(rejectedJob.error.message, /lesson evidence check/);
+  assert.doesNotMatch(rejectedJob.error.message, /Private text/);
+  const retried = (await (await post("/lessons/practice/start", scope)).json())
+    .job;
+  assert.notEqual(retried.id, rejected.id);
+  await runModulePracticeJob({
+    start: (student, body) =>
+      startModulePractice(student, body, async () => questions),
+  });
+  const retriedJob = (
+    await (await get(`/lessons/practice/jobs/${retried.id}`)).json()
+  ).job;
+  assert.equal(retriedJob.status, "ready");
+  assert.equal(retriedJob.attempt.questions.length, 10);
+});
+
+test("every practice mode can recover and submit a full module or course quiz", async (context) => {
+  const { user, scope } = await enrolledPracticeCourse(context);
+  for (const moduleId of [scope.moduleId, "all-modules"]) {
+    for (const mode of ["flashcard", "qna", "multiple", "matching", "timed", "mixed"]) {
+      await context.test(`${moduleId} / ${mode}`, async () => {
+        const body = { ...scope, moduleId, mode };
+        let retry = false;
+        const drafts = [];
+        async function provider({ schema, data }) {
+          if (schema.properties.verdicts) {
+            return {
+              verdicts: data.questions.map((_, index) => ({
+                question_index: index,
+                supported: retry && (drafts.length > 1 || index !== 1),
+                reason: "Answer needs better lesson evidence.",
+              })),
+            };
+          }
+          const draft = drafts.push(data.assigned_slots.length);
+          const sampleName = `${mode}${moduleId === scope.moduleId ? "Module" : "Course"}Set${draft}`;
+          const questions = data.assigned_slots.map((slot, index) => ({
+            question: slot.type === "true_false"
+              ? `Database ${sampleName}Case${index} stores organized data.`
+              : `What stores records for ${sampleName}Case${index}?`,
+            type: slot.type,
+            options: slot.type === "multiple_choice"
+              ? ["Database", "Mouse", "Monitor", "Cable"]
+              : slot.type === "true_false" ? ["True", "False"] : [],
+            correct_answer: slot.type === "true_false" ? "True" : "Database",
+            explanation: "A database stores organized data.",
+            topic: slot.topic || "Storage",
+            concept: slot.concept || "Organized data",
+            thinking_skill: slot.thinking_skill,
+            cognitive_level: slot.allowed_cognitive_levels[0],
+            evidence_ids: [data.evidence[0].evidence_id],
+          }));
+          if (retry && draft === 1) questions[1].question = questions[0].question;
+          return { questions };
+        }
+        const generate = (module, performance, previousQuestions, options) =>
+          generatePracticeQuestions(module, performance, previousQuestions, {
+            ...options,
+            generateBatch: (batch) => generateQuizBatch(batch, provider),
+          });
+        const start = (student, request) => startModulePractice(student, request, generate);
+
+        const first = await queueModulePractice(user, body);
+        await runModulePracticeJob({ start });
+        const failed = await getModulePracticeJob(user, first.id);
+        assert.equal(failed.status, "failed");
+        assert.equal(failed.error.status, 422);
+        assert.match(failed.error.message, /lesson evidence check/);
+        const [[{ count }]] = await db.execute(
+          "SELECT COUNT(*) AS count FROM module_practice_attempts WHERE user_id=? AND course_id=? AND module_id=? AND result_json IS NULL",
+          [user.userId, scope.courseId, moduleId],
+        );
+        assert.equal(Number(count), 0);
+
+        retry = true;
+        drafts.length = 0;
+        const next = await queueModulePractice(user, body);
+        assert.notEqual(next.id, first.id);
+        await runModulePracticeJob({ start });
+        const ready = await getModulePracticeJob(user, next.id);
+        assert.equal(ready.status, "ready", ready.error?.message);
+        assert.deepEqual(drafts, [10, 2]);
+        const { id, questions } = ready.attempt;
+        assert.equal(new Set(questions.map((item) => item.question)).size, 10);
+        assert.equal(questions.filter((item) => item.question.includes("Set1Case")).length, 8);
+        assert.equal(questions.filter((item) => item.type === "identification").length, mode === "qna" ? 10 : 2);
+
+        const answers = questions.map((item, index) => ({
+          questionId: item.id,
+          answer: mode === "flashcard" ? (index ? "good" : "hard")
+            : mode === "timed" && index === 0 ? "" : item.correct_answer,
+        }));
+        const result = await submitModulePractice(user, { attemptId: id, mode, answers });
+        assert.equal(result.total, 10);
+        assert.equal(result.score, ["flashcard", "timed"].includes(mode) ? 9 : 10);
+        assert.equal(result.assessmentBasis, mode === "flashcard" ? "self_assessment" : "graded_answers");
+      });
+    }
+  }
 });

@@ -6,6 +6,7 @@ import { createDatabase } from "../../src/database/postgres.js";
 import { migrateApplication } from "../../src/migrations/applicationMigration.js";
 import { getQuizAttempts } from "../../src/controllers/monitoringController.js";
 import { studentPracticeHistory } from "../../src/services/quizzes/studentQuizHistory.js";
+import { PRACTICE_FEEDBACK_VERSION } from "../../src/services/quizzes/practiceAnalysis.js";
 import {
   startModulePractice,
   submitModulePractice,
@@ -114,7 +115,7 @@ test("PostgreSQL saves six practices, resumes once, and repairs a five-question 
     assert.equal(result.feedback[0].latestAccuracy, 100);
     assert.equal(result.feedback[0].historicalTotal, count * 10);
     assert.equal(result.feedback[0].gradedAttempts, count);
-    assert.equal(result.feedback[0].feedbackVersion, 2);
+    assert.equal(result.feedback[0].feedbackVersion, PRACTICE_FEEDBACK_VERSION);
     if (count === 1) {
       const legacy = {
         ...result,
@@ -131,7 +132,7 @@ test("PostgreSQL saves six practices, resumes once, and repairs a five-question 
         [JSON.stringify(legacy), attempt.id],
       );
       const upgraded = await submitModulePractice(user, submission);
-      assert.equal(upgraded.feedback[0].feedbackVersion, 2);
+      assert.equal(upgraded.feedback[0].feedbackVersion, PRACTICE_FEEDBACK_VERSION);
       assert.notEqual(
         upgraded.feedback[0].recommendation,
         legacy.feedback[0].recommendation,

@@ -2,7 +2,10 @@ import { getEnrolledPracticeModule } from "../../controllers/courseController.js
 import { db } from "../../db.js";
 import { removeLessonPracticeActivities } from "../lessons/lessonPracticeContent.js";
 import { requestError } from "../rag/courseAccessService.js";
-import { generateQuizBatch } from "../rag/quizRagService.js";
+import {
+  generateQuizBatch,
+  selectPracticeFocus,
+} from "../rag/quizRagService.js";
 import {
   analyzePractice,
   buildPracticeFeedback,
@@ -25,6 +28,7 @@ import {
 const QUESTION_COUNT = 10;
 const MASTERY_TARGET = PRACTICE_MASTERY_TARGET;
 const RECAP_LIMIT = 5;
+const PROMPT_HISTORY_LIMIT = RECAP_LIMIT + 2 * QUESTION_COUNT;
 const practiceModes = new Set([
   "flashcard",
   "qna",
@@ -41,6 +45,23 @@ const mixedPracticeTypes = [
   "identification",
 ];
 const starting = new Map();
+const generationMessages = {
+  [DUPLICATE_QUIZ_QUESTION]:
+    "A generated question repeated an earlier question.",
+  QUIZ_EVIDENCE_INVALID:
+    "A generated question could not be linked to a passage in this lesson.",
+  QUIZ_REVIEW_REJECTED:
+    "A generated question or its answer did not pass the lesson evidence check.",
+  QUIZ_REVIEW_INCOMPLETE: "The review did not verify every generated answer.",
+  QUIZ_FOCUS_MISMATCH:
+    "A generated question missed the review topic assigned from your earlier answers.",
+  QUIZ_QUESTION_FORMAT:
+    "A generated question did not meet the required question or answer format.",
+  INVALID_ANSWER_KEY: "A generated answer key conflicted with its question.",
+  GENERATION_TIMEOUT: "The question generator took too long to respond.",
+  GENERATION_INCOMPLETE: "The question generator stopped before finishing its response.",
+  GENERATION_INVALID_OUTPUT: "The question generator returned a response that could not be read.",
+};
 
 function normalizeRecapAnswer(value) {
   return normalizeAnswer(value);
@@ -123,9 +144,12 @@ function recapPerformance(questions, submitted) {
 async function generatePracticeBatch(options, generateBatch) {
   const checkDeadline = () => {
     if (options.requestOptions.signal.aborted)
-      throw requestError(
-        "Practice preparation took too long. Please try again.",
-        503,
+      throw Object.assign(
+        requestError(
+          "Practice preparation took too long. Please try again.",
+          503,
+        ),
+        { code: "GENERATION_TIMEOUT" },
       );
   };
   const prepare = async (batch) => {
@@ -136,6 +160,11 @@ async function generatePracticeBatch(options, generateBatch) {
       preserveValidated: true,
     });
     checkDeadline();
+    if (!Array.isArray(questions) || questions.length !== batch.types.length)
+      throw requestError(
+        "The generator returned an incomplete question set.",
+        502,
+      );
     return questions;
   };
   let failure;
@@ -150,44 +179,52 @@ async function generatePracticeBatch(options, generateBatch) {
 
   const { types, skills, practiceFocus } = options;
   const questions = Array(types.length).fill(null);
-  for (const { index, question } of failure.validatedQuestions || [])
-    questions[index] = question;
-  const retained = questions.filter(Boolean);
-  if (retained.length) options.onValidated?.(retained);
-
-  const pending = types
-    .map((_, index) => index)
-    .filter((index) => !questions[index]);
-  const midpoint = Math.ceil(pending.length / 2);
-  const groups =
-    pending.length > 5
-      ? [pending.slice(0, midpoint), pending.slice(midpoint)]
-      : [pending];
-  // One repair round only: retain reviewed questions, regenerate rejected slots,
-  // and share accepted stems with the following group. Never split recursively.
-  for (const indexes of groups) {
-    const focusIndexes = indexes.filter(
-      (index) => index < practiceFocus?.target_count,
-    );
-    const repaired = await prepare({
-      ...options,
-      types: indexes.map((index) => types[index]),
-      skills: indexes.map((index) => skills[index]),
-      initialCorrection: failure.message,
-      practiceFocus: practiceFocus && {
-        ...practiceFocus,
-        target_count: focusIndexes.length,
-        target_topics:
-          practiceFocus.target_topics &&
-          focusIndexes.map((index) => practiceFocus.target_topics[index]),
-        target_concepts:
-          practiceFocus.target_concepts &&
-          focusIndexes.map((index) => practiceFocus.target_concepts[index]),
-      },
-    });
+  const allIndexes = [...types.keys()];
+  const reasons = new Map();
+  function retainReviewed(error, indexes) {
+    const approved = error.validatedQuestions || [];
+    if (approved.length)
+      options.onValidated?.(approved.map((item) => item.question));
+    for (const { index, question } of approved)
+      questions[indexes[index]] = question;
     indexes.forEach((index, position) => {
-      questions[index] = repaired[position];
+      reasons.set(
+        index,
+        error.rejectedSlots?.get(position)?.message || error.message,
+      );
     });
+  }
+  retainReviewed(failure, allIndexes);
+  // Repair only open slots. A partially successful repair gets one final pass
+  // within the original deadline. Provider errors and wholly failed sets stop.
+  for (let round = 0; round < 2; round++) {
+    const pending = allIndexes.filter((index) => !questions[index]);
+    if (!pending.length) break;
+    const midpoint = Math.ceil(pending.length / 2);
+    const groups =
+      pending.length > 5
+        ? [pending.slice(0, midpoint), pending.slice(midpoint)]
+        : [pending];
+    for (const indexes of groups) {
+      try {
+        const repaired = await prepare({
+          ...options,
+          types: indexes.map((index) => types[index]),
+          skills: indexes.map((index) => skills[index]),
+          initialCorrection: indexes
+            .map((index, i) => `Slot ${i + 1}: ${reasons.get(index)}`)
+            .join("\n"),
+          practiceFocus: selectPracticeFocus(practiceFocus, indexes),
+        });
+        indexes.forEach((index, position) => {
+          questions[index] = repaired[position];
+        });
+      } catch (error) {
+        if (error.statusCode !== 422 || round === 1) throw error;
+        retainReviewed(error, indexes);
+        if (!questions.some(Boolean)) throw error;
+      }
+    }
   }
   return questions;
 }
@@ -304,6 +341,12 @@ export async function generatePracticeQuestions(
     lotsCount: QUESTION_COUNT - hotsCount,
   };
   const accepted = [...previousQuestions];
+  // The server checks the full available history. The model sees the recap and
+  // a recent sample so it can revisit a weak topic with a different question.
+  const promptPreviousQuestions = previousQuestions.slice(
+    0,
+    PROMPT_HISTORY_LIMIT,
+  );
   const spread = [0, Math.floor(chunks.length / 2)].flatMap((start) =>
     Array.from(
       { length: Math.min(chunks.length, 4) },
@@ -329,6 +372,7 @@ export async function generatePracticeQuestions(
         maxAttempts: 1,
       },
       previousQuestions: accepted,
+      promptPreviousQuestions,
       practiceFocus: misses.length
         ? {
             target_count: targets.length,
@@ -339,7 +383,9 @@ export async function generatePracticeQuestions(
         : undefined,
       onValidated: (batch) => {
         validateQuizUniqueness(batch, accepted);
-        accepted.push(...batch.map((question) => question.question));
+        const stems = batch.map((question) => question.question);
+        accepted.push(...stems);
+        promptPreviousQuestions.push(...stems);
       },
     },
     generateBatch,
@@ -525,10 +571,23 @@ export async function startModulePractice(
     } catch (error) {
       if (error.statusCode === 409) throw error;
       console.error("Module Practice generation failed:", error.message);
-      throw requestError(
-        `We couldn't prepare ${QUESTION_COUNT} practice questions. Please try again.`,
+      const reason =
+        generationMessages[error.code] ||
+        (error.statusCode === 422
+          ? "The generated questions did not pass validation for this lesson."
+          : error.statusCode === 503
+            ? "The question generator is temporarily unavailable."
+            : "");
+      const publicError = requestError(
+        reason
+          ? `${reason} Please try again.`
+          : `We couldn't prepare ${QUESTION_COUNT} practice questions. Please try again.`,
         error.statusCode || 500,
       );
+      if (error.statusCode === 422)
+        publicError.code = "PRACTICE_VALIDATION_FAILED";
+      publicError.cause = error;
+      throw publicError;
     }
 
     let attemptId;
