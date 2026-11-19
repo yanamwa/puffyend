@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
+import { EventEmitter, once } from "node:events";
+import { fork } from "node:child_process";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
+import express from "express";
+import jwt from "jsonwebtoken";
 import { PGlite } from "@electric-sql/pglite";
+import { JWT_SECRET } from "../../src/config/security.js";
 import { db } from "../../src/db.js";
 import { createDatabase } from "../../src/database/postgres.js";
 import { migrateApplication } from "../../src/migrations/applicationMigration.js";
+import { migrateModulePracticeJobs } from "../../src/migrations/modulePracticeJobs.js";
 import lessonRoutes from "../../src/routes/lessonRoutes.js";
 import courseRoutes from "../../src/routes/courseRoutes.js";
 import { getEnrolledPracticeModule } from "../../src/controllers/courseController.js";
@@ -107,6 +116,147 @@ async function enrolledPracticeCourse(context) {
   return { user, scope, module };
 }
 
+test("the queue migration upgrades existing rows and enforces only one active job per format", async (context) => {
+  const { user, scope } = await enrolledPracticeCourse(context);
+  const original = await queueModulePractice(user, scope);
+  await db.execute("ALTER TABLE module_practice_jobs DROP COLUMN started_at");
+  await db.execute("DROP INDEX module_practice_active_job");
+  await migrateModulePracticeJobs(db);
+  await migrateModulePracticeJobs(db);
+  const [[index]] = await db.execute(`SELECT indisunique, indisvalid, pg_get_indexdef(indexrelid) AS definition
+    FROM pg_index WHERE indexrelid='module_practice_active_job'::regclass`);
+  assert.equal(index.indisunique, true);
+  assert.equal(index.indisvalid, true);
+  assert.match(index.definition, /user_id, course_id, module_id, question_format.*WHERE.*queued.*running/i);
+  const jobs = await Promise.all(Array.from({ length: 5 }, () => queueModulePractice(user, scope)));
+  assert.ok(jobs.every((job) => job.id === original.id && job.status === "queued"));
+  const [[row]] = await db.execute("SELECT job_id, started_at FROM module_practice_jobs");
+  assert.equal(row.job_id, original.id);
+  assert.equal(row.started_at, null);
+  await db.execute("UPDATE module_practice_jobs SET created_at=CURRENT_TIMESTAMP - INTERVAL '16 minutes'");
+  const expired = await getModulePracticeJob(user, original.id);
+  assert.equal(expired.status, "failed");
+  assert.match(expired.error.message, /queue/);
+  const retry = await queueModulePractice(user, scope);
+  assert.notEqual(retry.id, original.id);
+  await db.execute(`UPDATE module_practice_jobs SET status='running', runs=3,
+    started_at=CURRENT_TIMESTAMP, lease_expires_at=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE job_id=?`, [retry.id]);
+  assert.equal(await runModulePracticeJob({ start: () => assert.fail("No fourth claim") }), false);
+  assert.match((await getModulePracticeJob(user, retry.id)).error.message, /interrupted/);
+  const stalled = await queueModulePractice(user, scope);
+  await db.execute(`UPDATE module_practice_jobs SET status='running', started_at=CURRENT_TIMESTAMP - INTERVAL '241 seconds',
+    lease_expires_at=CURRENT_TIMESTAMP + INTERVAL '60 seconds' WHERE job_id=?`, [stalled.id]);
+  const final = await getModulePracticeJob(user, stalled.id);
+  assert.equal(final.status, "failed");
+  assert.match(final.error.message, /timed out/);
+  const hung = await queueModulePractice(user, scope);
+  await db.execute(`UPDATE module_practice_jobs SET status='running', runs=1,
+    started_at=CURRENT_TIMESTAMP - INTERVAL '238 seconds', lease_expires_at=CURRENT_TIMESTAMP - INTERVAL '1 second'
+    WHERE job_id=?`, [hung.id]);
+  const aborted = Promise.withResolvers();
+  await runModulePracticeJob({ start: (_user, _body, _generate, { signal, deadlineAt }) => {
+    assert.ok(deadlineAt - Date.now() <= 2000);
+    signal.addEventListener("abort", () => aborted.resolve(signal.reason.code), { once: true });
+    return new Promise(() => {});
+  } });
+  assert.equal(await aborted.promise, "GENERATION_TIMEOUT");
+  const [[terminal]] = await db.execute("SELECT status FROM module_practice_jobs WHERE job_id=?", [hung.id]);
+  assert.equal(terminal.status, "failed");
+});
+
+test("a replacement process reclaims the original job only after its lease expires", { timeout: 90_000 }, async (context) => {
+  const { user, scope } = await enrolledPracticeCourse(context);
+  function launch() {
+    const child = fork(new URL("../helpers/practiceWorkerProcess.js", import.meta.url), [], {
+      stdio: ["ignore", "ignore", "inherit", "ipc"], windowsHide: true,
+    });
+    const events = new EventEmitter();
+    child.on("error", (error) => events.emit("error", error));
+    child.on("message", async (message) => {
+      if (message.event) return events.emit(message.event, message);
+      let reply;
+      try {
+        const [result] = await db.execute(message.sql, message.values);
+        reply = { id: message.id, result };
+      } catch (error) {
+        reply = { id: message.id, error: error.code || "Query failed" };
+      }
+      if (child.connected) child.send(reply);
+    });
+    context.after(() => { if (child.connected) child.kill(); });
+    return { child, events };
+  }
+  const original = await queueModulePractice(user, scope);
+  const first = launch();
+  await once(first.events, "claimed");
+  const [[initial]] = await db.execute("SELECT started_at FROM module_practice_jobs WHERE job_id=?", [original.id]);
+  const exited = once(first.child, "exit");
+  first.child.kill();
+  await exited;
+  assert.equal((await queueModulePractice(user, scope)).id, original.id);
+  const locked = launch();
+  assert.equal((await once(locked.events, "finished"))[0].claimed, false);
+  await db.execute("UPDATE module_practice_jobs SET lease_expires_at=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE job_id=?", [original.id]);
+  assert.equal((await getModulePracticeJob(user, original.id)).status, "queued");
+  const replacement = launch();
+  await once(replacement.events, "claimed");
+  const again = await queueModulePractice(user, scope);
+  assert.equal(again.id, original.id);
+  assert.equal(again.status, "running");
+  const other = await queueModulePractice(user, { ...scope, mode: "qna" });
+  const independent = launch();
+  assert.equal((await once(independent.events, "claimed"))[0].mode, "qna");
+  const [[reclaimed]] = await db.execute("SELECT started_at,runs FROM module_practice_jobs WHERE job_id=?", [original.id]);
+  assert.deepEqual(reclaimed.started_at, initial.started_at);
+  assert.equal(reclaimed.runs, 2);
+  const finished = [replacement, independent].map(({ child, events }) => {
+    const result = once(events, "finished");
+    child.send("finish");
+    return result;
+  });
+  await Promise.all(finished);
+  for (const [job, worker] of [[original, replacement], [other, independent]]) {
+    const ready = await getModulePracticeJob(user, job.id);
+    assert.equal(ready.status, "ready");
+    assert.equal(ready.attempt.id, worker.child.pid);
+  }
+});
+
+function practiceHttp(worker) {
+  const app = express();
+  app.use(express.json());
+  app.locals.practiceWorker = worker;
+  app.use("/api/lessons", lessonRoutes);
+  return async (student, action, body) => {
+    const request = new IncomingMessage(new Socket());
+    request.method = body === undefined ? "GET" : "POST";
+    request.url = `/api/lessons/practice/${action}`;
+    request.headers.authorization = `Bearer ${jwt.sign(student, JWT_SECRET, { expiresIn: "5m" })}`;
+    if (body !== undefined) {
+      const payload = Buffer.from(JSON.stringify(body));
+      request.headers["content-type"] = "application/json";
+      request.headers["content-length"] = String(payload.length);
+      request.push(payload);
+    }
+    request.push(null);
+    const response = new ServerResponse(request);
+    // Dispatch through the mounted router, including JSON parsing, auth and
+    // response serialization, without opening a network port in the test.
+    const serialized = await new Promise((resolve, reject) => {
+      response.end = resolve;
+      app.handle(request, response, (error) => reject(error || new Error("Missing practice route")));
+    });
+    assert.equal(response.statusCode, action === "start" ? 202 : 200);
+    const data = JSON.parse(serialized);
+    assert.equal(data.success, true);
+    if (action !== "submit") {
+      assert.ok(data.job.id);
+      assert.ok(["queued", "running", "ready", "failed"].includes(data.job.status));
+    }
+    return data;
+  };
+}
+
 test("five students complete five queued quizzes each with isolated retries and histories", async (context) => {
   const { user, scope } = await enrolledPracticeCourse(context);
   const students = [user];
@@ -141,9 +291,12 @@ test("five students complete five queued quizzes each with isolated retries and 
         const attempt = own.size / 10 + 1;
         const provider = async ({ data, schema }) => {
           if (schema.properties.verdicts) {
-            return { verdicts: data.questions.map(({ question_index }) => ({ question_index, supported: true, reason: "" })) };
+            return { verdicts: data.questions.map(({ question_index, question_number }) => ({ question_index, question_number, supported: true, reason: "" })) };
           }
+          if (attempt > 1) assert.equal(data.practice_focus.target_count, 1);
           return { questions: data.assigned_slots.map((slot, index) => ({
+            question_number: slot.question_number,
+            learning_objective: slot.learning_objective || data.learning_objectives[0] || "Identify how a database stores records.",
             question: `Storage check ${student.userId}-${attempt}-${index}?`,
             type: slot.type,
             options: slot.type === "multiple_choice" ? ["Database", "Mouse", "Display", "Keyboard"] :
@@ -164,38 +317,46 @@ test("five students complete five queued quizzes each with isolated retries and 
   };
   const worker = startModulePracticeWorker({ poll: false, runJob: () => runModulePracticeJob({ start }) });
   context.after(() => worker.stop());
+  const api = practiceHttp(worker);
+  const enqueue = async (student, body) => (await api(student, "start", body)).job;
+  async function waitForJob(student, id) {
+    for (let poll = 0; poll < 200; poll++) {
+      const { job } = await api(student, `jobs/${id}`);
+      assert.equal(job.id, id);
+      if (job.status === "ready" || job.status === "failed") return job;
+      await delay(20);
+    }
+    assert.fail("The test worker did not finish this quiz");
+  }
   const completedIds = new Set();
   for (let round = 1; round <= 5; round++) {
-    const jobs = await Promise.all(students.map((student) => queueModulePractice(student, scope)));
+    const jobs = await Promise.all(students.map((student) => enqueue(student, scope)));
     assert.equal(new Set(jobs.map((job) => job.id)).size, 5);
-    const draining = Promise.all(students.map(() => worker.wake()));
     if (round === 1) {
       await pairStarted;
       try {
         const [statuses] = await db.execute("SELECT status FROM module_practice_jobs");
         assert.equal(statuses.filter((row) => row.status === "queued").length, 3);
         assert.equal(statuses.filter((row) => row.status === "running").length, 2);
-        assert.equal((await queueModulePractice(user, { ...scope, mode: "timed" })).id, jobs[0].id);
+        assert.equal((await enqueue(user, { ...scope, mode: "timed" })).id, jobs[0].id);
       } finally {
         releasePair();
       }
     }
-    await draining;
     for (const [index, student] of students.entries()) {
-      let job = await getModulePracticeJob(student, jobs[index].id);
+      let job = await waitForJob(student, jobs[index].id);
       if (round === 1 && index === 2) {
         assert.equal(job.status, "failed");
         assert.equal(job.error.status, 503);
-        const retry = await queueModulePractice(student, scope);
+        const retry = await enqueue(student, scope);
         assert.notEqual(retry.id, job.id);
-        await worker.wake();
-        job = await getModulePracticeJob(student, retry.id);
+        job = await waitForJob(student, retry.id);
       }
       assert.equal(job.status, "ready", job.error?.message);
       const { id, questions } = job.attempt;
       assert.equal(questions.length, 10);
       completedIds.add(id);
-      const result = await submitModulePractice(student, {
+      const { result } = await api(student, "submit", {
         attemptId: id, mode: scope.mode,
         answers: questions.map((q, i) => ({
           questionId: q.id,
@@ -459,9 +620,12 @@ test("every practice mode can recover and submit a full module or course quiz", 
         async function provider({ schema, data }) {
           if (schema.properties.verdicts) {
             return {
-              verdicts: data.questions.map((_, index) => ({
+              verdicts: data.questions.map(({ question_number }, index) => ({
                 question_index: index,
-                supported: retry && (drafts.length > 1 || index !== 1),
+                question_number,
+                supported: retry
+                  ? drafts.length > 1 || index !== 1
+                  : drafts.length === 1 && index < 8,
                 reason: "Answer needs better lesson evidence.",
               })),
             };
@@ -469,6 +633,8 @@ test("every practice mode can recover and submit a full module or course quiz", 
           const draft = drafts.push(data.assigned_slots.length);
           const sampleName = `${mode}${moduleId === scope.moduleId ? "Module" : "Course"}Set${draft}`;
           const questions = data.assigned_slots.map((slot, index) => ({
+            question_number: slot.question_number,
+            learning_objective: slot.learning_objective || data.learning_objectives[0] || "Identify how a database stores records.",
             question: slot.type === "true_false"
               ? `Database ${sampleName}Case${index} stores organized data.`
               : `What stores records for ${sampleName}Case${index}?`,
@@ -499,7 +665,9 @@ test("every practice mode can recover and submit a full module or course quiz", 
         const failed = await getModulePracticeJob(user, first.id);
         assert.equal(failed.status, "failed");
         assert.equal(failed.error.status, 422);
+        assert.equal(failed.error.code, "PRACTICE_VALIDATION_FAILED");
         assert.match(failed.error.message, /lesson evidence check/);
+        assert.deepEqual(drafts, [10, 2, 2, 2]);
         const [[{ count }]] = await db.execute(
           "SELECT COUNT(*) AS count FROM module_practice_attempts WHERE user_id=? AND course_id=? AND module_id=? AND result_json IS NULL",
           [user.userId, scope.courseId, moduleId],

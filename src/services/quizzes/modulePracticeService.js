@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { getEnrolledPracticeModule } from "../../controllers/courseController.js";
 import { db } from "../../db.js";
 import { removeLessonPracticeActivities } from "../lessons/lessonPracticeContent.js";
 import { requestError } from "../rag/courseAccessService.js";
 import { createPracticeJsonGenerator } from "../rag/aiProviderService.js";
+import { remainingTime } from "../rag/jsonProviderRequest.js";
 import {
   generateQuizBatch,
   selectPracticeFocus,
@@ -27,6 +29,8 @@ import {
 } from "./quizValidation.js";
 
 const QUESTION_COUNT = 10;
+const MAX_STALLED_REPAIR_ROUNDS = 3;
+const MAX_OPENAI_VALIDATION_REPAIR_ROUNDS = 2;
 export const PRACTICE_GENERATION_TIMEOUT_MS = 240_000;
 const MASTERY_TARGET = PRACTICE_MASTERY_TARGET;
 const RECAP_LIMIT = 5;
@@ -144,92 +148,114 @@ function recapPerformance(questions, submitted) {
 }
 
 async function generatePracticeBatch(options, generateBatch) {
-  const checkDeadline = () => {
-    if (options.requestOptions.signal.aborted)
-      throw Object.assign(
-        requestError(
-          "Practice preparation took too long. Please try again.",
-          503,
-        ),
-        { code: "GENERATION_TIMEOUT" },
-      );
-  };
-  const prepare = async (batch) => {
-    checkDeadline();
-    const questions = await generateBatch({
-      ...batch,
-      maxAttempts: 1,
-      preserveValidated: true,
+  const { types, skills, practiceFocus } = options;
+  const provider = generateBatch ? undefined : createPracticeJsonGenerator();
+  const generate = generateBatch ?? ((batch) => generateQuizBatch(batch, provider));
+  const allIndexes = [...types.keys()];
+  const approved = new Map();
+  const rejected = new Map();
+  const generationId = randomUUID();
+  let round = 0;
+  let stalledRounds = 0;
+  let lastFailure;
+  const log = (details) => console.info("[Practice validation]", JSON.stringify({
+    generationId, round, passed: approved.size, total: types.length, ...details,
+  }));
+
+  async function prepare(indexes) {
+    remainingTime(options.requestOptions);
+    const retainedStems = [...approved.values()].map((item) => item.question);
+    const previousQuestions = [...options.previousQuestions, ...retainedStems];
+    const feedback = indexes.flatMap((index) => {
+      const failure = rejected.get(index);
+      return failure ? [{ question_number: index + 1, ...failure.feedback }] : [];
     });
-    checkDeadline();
-    if (!Array.isArray(questions) || questions.length !== batch.types.length)
-      throw requestError(
-        "The generator returned an incomplete question set.",
-        502,
-      );
-    return questions;
-  };
-  let failure;
-  try {
-    return await prepare(options);
-  } catch (error) {
-    const validationFailed =
-      error.statusCode === 422 || error.code === DUPLICATE_QUIZ_QUESTION;
-    if (!validationFailed || options.types.length <= 1) throw error;
-    failure = error;
+    try {
+      const batch = await generate({
+        ...options,
+        types: indexes.map((i) => types[i]),
+        skills: indexes.map((i) => skills[i]),
+        practiceSlotIndexes: indexes,
+        practiceTargets: indexes.map((i) => rejected.get(i)?.targets || {}),
+        practiceFocus: selectPracticeFocus(practiceFocus, indexes),
+        initialCorrection: feedback
+          .map(({ question_number, reason }) => `Slot ${question_number}: ${reason}`)
+          .join("\n"),
+        repairFeedback: feedback,
+        previousQuestions,
+        promptPreviousQuestions: [...options.promptPreviousQuestions, ...retainedStems],
+        onValidated: (questions) => validateQuizUniqueness(questions, previousQuestions, { compareSharedSetup: true }),
+        maxAttempts: 1,
+        preserveValidated: true,
+      });
+      remainingTime(options.requestOptions);
+      if (!Array.isArray(batch) || batch.length !== indexes.length)
+        throw requestError("The generator returned an incomplete question set.", 502);
+      indexes.forEach((index, position) => approved.set(index, batch[position]));
+    } catch (error) {
+      remainingTime(options.requestOptions);
+      if (error.statusCode !== 422 && error.code !== DUPLICATE_QUIZ_QUESTION) throw error;
+      lastFailure = error;
+      const passed = error.validatedQuestions || [];
+      for (const { index, question } of passed)
+        approved.set(indexes[index], question);
+      const slotsByReason = Object.create(null);
+      for (const [position, index] of indexes.entries()) {
+        if (approved.has(index)) continue;
+        const failure = error.rejectedSlots?.get(position) || error;
+        const previous = rejected.get(index);
+        rejected.set(index, {
+          targets: { ...previous?.targets, ...failure.targets },
+          feedback: { reason: failure.message, draft: failure.draft ?? previous?.feedback.draft },
+        });
+        // Free-text verdicts and drafts go only to the repair generator.
+        const safeReason = failure.safeReason ||
+          (Object.hasOwn(generationMessages, failure.code) ? failure.code : "QUIZ_QUESTION_FORMAT");
+        (slotsByReason[safeReason] ??= []).push(index + 1);
+      }
+      log({ attempted: indexes.length, batchPassed: passed.length, rejected: slotsByReason });
+      return;
+    }
+    log({
+      attempted: indexes.length, batchPassed: indexes.length,
+      ...(approved.size === types.length ? { stop: "all_slots_verified" } : {}),
+    });
   }
 
-  const { types, skills, practiceFocus } = options;
-  const questions = Array(types.length).fill(null);
-  const allIndexes = [...types.keys()];
-  const reasons = new Map();
-  function retainReviewed(error, indexes) {
-    const approved = error.validatedQuestions || [];
-    if (approved.length)
-      options.onValidated?.(approved.map((item) => item.question));
-    for (const { index, question } of approved)
-      questions[indexes[index]] = question;
-    indexes.forEach((index, position) => {
-      reasons.set(
-        index,
-        error.rejectedSlots?.get(position)?.message || error.message,
-      );
-    });
+  async function repairPending() {
+    round++;
+    const before = approved.size;
+    const pending = allIndexes.filter((index) => !approved.has(index));
+    for (let start = 0; start < pending.length; start += 5)
+      await prepare(pending.slice(start, start + 5));
+    stalledRounds = approved.size === before ? stalledRounds + 1 : 0;
   }
-  retainReviewed(failure, allIndexes);
-  // Repair only open slots. A partially successful repair gets one final pass
-  // within the original deadline. Provider errors and wholly failed sets stop.
-  for (let round = 0; round < 2; round++) {
-    const pending = allIndexes.filter((index) => !questions[index]);
-    if (!pending.length) break;
-    const midpoint = Math.ceil(pending.length / 2);
-    const groups =
-      pending.length > 5
-        ? [pending.slice(0, midpoint), pending.slice(midpoint)]
-        : [pending];
-    for (const indexes of groups) {
-      try {
-        const repaired = await prepare({
-          ...options,
-          types: indexes.map((index) => types[index]),
-          skills: indexes.map((index) => skills[index]),
-          practiceSlotIndexes: indexes,
-          initialCorrection: indexes
-            .map((index, i) => `Slot ${i + 1}: ${reasons.get(index)}`)
-            .join("\n"),
-          practiceFocus: selectPracticeFocus(practiceFocus, indexes),
-        });
-        indexes.forEach((index, position) => {
-          questions[index] = repaired[position];
-        });
-      } catch (error) {
-        if (error.statusCode !== 422 || round === 1) throw error;
-        retainReviewed(error, indexes);
-        if (!questions.some(Boolean)) throw error;
-      }
+
+  let validationStop = "no_progress";
+  try {
+    await prepare(allIndexes);
+    while (approved.size < types.length && stalledRounds < MAX_STALLED_REPAIR_ROUNDS)
+      await repairPending();
+
+    if (approved.size < types.length) {
+      if (!provider?.startOpenAIValidationRepair(options.requestOptions)) throw lastFailure;
+      log({ event: "openai_validation_repair", stalledRounds, maxRounds: MAX_OPENAI_VALIDATION_REPAIR_ROUNDS });
+      validationStop = "openai_repair_limit";
+      stalledRounds = 0;
+      for (let pass = 0; pass < MAX_OPENAI_VALIDATION_REPAIR_ROUNDS && approved.size < types.length; pass++)
+        await repairPending();
+      if (approved.size < types.length) throw lastFailure;
     }
+  } catch (error) {
+    let stop = "generation_error";
+    if (error.code === "GENERATION_TIMEOUT") stop = "deadline";
+    else if (error === lastFailure) stop = validationStop;
+    else if (error.statusCode === 503) stop = "provider_unavailable";
+    else if (error.statusCode === 502) stop = "invalid_provider_response";
+    log({ stop, stalledRounds });
+    throw error;
   }
-  return questions;
+  return allIndexes.map((index) => approved.get(index));
 }
 
 export async function generatePracticeQuestions(
@@ -242,7 +268,6 @@ export async function generatePracticeQuestions(
   const deadlineAt = Math.min(jobDeadline ?? Infinity, now + PRACTICE_GENERATION_TIMEOUT_MS);
   const timeout = AbortSignal.timeout(Math.max(0, deadlineAt - now));
   const signal = jobSignal ? AbortSignal.any([jobSignal, timeout]) : timeout;
-  const generateJson = createPracticeJsonGenerator();
   const shortAnswer = format === "qna";
   const types = shortAnswer
     ? Array(QUESTION_COUNT).fill("identification")
@@ -352,7 +377,6 @@ export async function generatePracticeQuestions(
     hotsCount,
     lotsCount: QUESTION_COUNT - hotsCount,
   };
-  const accepted = [...previousQuestions];
   // The server checks the full available history. The model sees the recap and
   // a recent sample so it can revisit a weak topic with a different question.
   const promptPreviousQuestions = previousQuestions.slice(
@@ -383,7 +407,7 @@ export async function generatePracticeQuestions(
         timeoutMs: 45000,
         maxAttempts: 3,
       },
-      previousQuestions: accepted,
+      previousQuestions,
       promptPreviousQuestions,
       practiceFocus: misses.length
         ? {
@@ -393,14 +417,8 @@ export async function generatePracticeQuestions(
             missed_concepts: misses,
           }
         : undefined,
-      onValidated: (batch) => {
-        validateQuizUniqueness(batch, accepted);
-        const stems = batch.map((question) => question.question);
-        accepted.push(...stems);
-        promptPreviousQuestions.push(...stems);
-      },
     },
-    generateBatch ?? ((batch) => generateQuizBatch(batch, generateJson)),
+    generateBatch,
   );
 
   if (questions.length !== QUESTION_COUNT)
@@ -408,7 +426,7 @@ export async function generatePracticeQuestions(
       `Practice did not generate ${QUESTION_COUNT} questions. Please try again.`,
       502,
     );
-  validateQuizUniqueness(questions, previousQuestions);
+  validateQuizUniqueness(questions, previousQuestions, { compareSharedSetup: true });
   return shuffleMainQuizQuestions(questions).map((question, index) => ({
     ...question,
     id: index + 1,

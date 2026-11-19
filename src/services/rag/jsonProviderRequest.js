@@ -45,8 +45,13 @@ function retryDelay(response) {
   return seconds ? Number(seconds[1]) * 1000 : 0;
 }
 
+function rejectedRequest() {
+  return failure("PROVIDER_REQUEST_REJECTED", "The provider could not process the structured request.", 502);
+}
+
 function classifyFailure(error) {
   const status = error.response?.status;
+  if (status === 422) return rejectedRequest();
   const body = error.response?.data?.error;
   // Inspect provider details only for known conditions. Raw messages can echo
   // credentials, prompts or lesson passages and must never enter logs or errors.
@@ -68,7 +73,7 @@ function classifyFailure(error) {
   if (!status && (error.isAxiosError || error.request ||
       ["ERR_NETWORK", "ECONNRESET", "EPIPE", "EAI_AGAIN", "ENOTFOUND", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH"].includes(error.code)))
     return failure("PROVIDER_NETWORK", "The provider could not be reached.", 503, true);
-  return failure("PROVIDER_REQUEST_REJECTED", "The provider could not process the structured request.", 502);
+  return rejectedRequest();
 }
 
 export async function requestProviderJson(

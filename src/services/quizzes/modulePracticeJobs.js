@@ -142,15 +142,23 @@ export async function runModulePracticeJob({
   try {
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => {
-        const error = Object.assign(requestError("Practice preparation timed out. Please try again.", 503), { code: "GENERATION_TIMEOUT" });
+        const error = Object.assign(
+          requestError("Practice preparation timed out. Please try again.", 503),
+          { code: "GENERATION_TIMEOUT" },
+        );
         controller.abort(error);
         reject(error);
       }, job.remaining_ms);
     });
-    const attempt = await Promise.race([timeout, start(
-      { userId: job.user_id, role: "student" }, JSON.parse(job.payload),
-      undefined, { signal: controller.signal, deadlineAt },
-    )]);
+    const attempt = await Promise.race([
+      timeout,
+      start(
+        { userId: job.user_id, role: "student" },
+        JSON.parse(job.payload),
+        undefined,
+        { signal: controller.signal, deadlineAt },
+      ),
+    ]);
     if (attempt.total !== 10 || attempt.questions?.length !== 10)
       throw requestError(
         "We couldn't prepare all 10 practice questions. Please try again.",
@@ -171,7 +179,7 @@ export async function runModulePracticeJob({
       error.code || error.statusCode || "GENERATION_ERROR",
       { ...timing(), reason: error.cause?.code || error.code || "GENERATION_ERROR" },
     );
-    await database.execute(
+    const [failed] = await database.execute(
       `UPDATE module_practice_jobs SET status = 'failed', error_json = ?,
        lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
        WHERE job_id = ? AND run_token = ? AND status = 'running' AND NOT ${leaseExpired}`,
@@ -191,6 +199,7 @@ export async function runModulePracticeJob({
         runToken,
       ],
     );
+    if (!failed.affectedRows) await expireJobs(database, "AND job_id = ?", [job.job_id]);
   } finally {
     clearTimeout(timer);
     clearInterval(heartbeat);

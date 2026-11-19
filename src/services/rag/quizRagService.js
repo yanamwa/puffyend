@@ -94,6 +94,52 @@ const reviewSchema = {
   },
   required: ["verdicts"],
 };
+// Only these categories may enter diagnostics. The reviewer's exact free-text
+// reason is sent back with the rejected draft and is never logged.
+const reviewRejections = [
+  "unsupported_question", "unsupported_answer", "incorrect_explanation",
+  "ambiguous_answer", "duplicate", "objective_mismatch", "cognitive_mismatch",
+  "focus_mismatch", "question_format", "other",
+];
+const practiceReviewSchema = structuredClone(reviewSchema);
+const practiceVerdict = practiceReviewSchema.properties.verdicts.items;
+practiceVerdict.properties.question_number = { type: "INTEGER" };
+practiceVerdict.properties.reason_code = {
+  type: "STRING", enum: ["supported", ...reviewRejections],
+};
+practiceVerdict.required.push("question_number", "reason_code");
+
+function practiceObjectives(objectives) {
+  const entries = Array.isArray(objectives) ? objectives : [objectives];
+  const lines = entries.filter((value) => typeof value === "string")
+    .join("\n").split(/[\n;]/);
+  const targets = lines.map((line) =>
+    line.trim().replace(/^(?:[-*\u2022]|\d+[.)])\s+/, ""),
+  );
+  return [...new Set(targets.filter(Boolean))];
+}
+
+// A reviewer may reject the explanation even when the draft chose a valid
+// target. Keep that choice on the slot. A missing draft has made no choice.
+function practiceTargetsForDraft(slot, item, objectives) {
+  const level = slot.allowed_cognitive_levels.find(
+    (value) => normalizeAnswer(value) === normalizeAnswer(item?.cognitive_level),
+  );
+  const selected = typeof item?.learning_objective === "string"
+    ? item.learning_objective.trim() : "";
+  const objective = objectives.length
+    ? objectives.find((value) => normalizeAnswer(value) === normalizeAnswer(selected))
+    : selected.length <= 500 && selected;
+  return {
+    cognitive_level: slot.cognitive_level || level,
+    learning_objective: slot.learning_objective || objective || undefined,
+  };
+}
+
+function slotError(message, safeReason, code = "QUIZ_QUESTION_FORMAT") {
+  return Object.assign(new Error(message), { code, safeReason });
+}
+
 export function validateQuizSettings(body) {
   const questionCount = Number(body.question_count ?? 5);
   const identificationCount = Number(body.identification_count ?? 0);
@@ -165,7 +211,7 @@ export function validateQuizBatch(
   chunks,
   skills = [],
   previousQuestions = [],
-  { practiceFocus, shortAnswer, rejectedSlots, passages } = {},
+  { practiceFocus, shortAnswer, rejectedSlots, passages, slots } = {},
 ) {
   if (
     !Array.isArray(draft?.questions) ||
@@ -176,8 +222,11 @@ export function validateQuizBatch(
     (passages || buildEvidence(chunks)).map((e) => [e.evidence_id, e]),
   );
   function validateQuestion(item, index) {
+    const slot = slots?.[index];
+    const number = slot?.question_number ?? index + 1;
+    const prefix = `Question ${number}`;
     if (!item || typeof item !== "object")
-      throw new Error(`Question ${index + 1} is missing from the draft.`);
+      throw slotError(`${prefix} is missing from the draft.`, "missing_question");
     validateKnownAnswerKey(item);
     if (skills.length) {
       const skill =
@@ -198,7 +247,7 @@ export function validateQuizBatch(
       };
     }
     if (item.type !== types[index])
-      throw new Error(`Question ${index} must be ${types[index]}.`);
+      throw slotError(`${prefix} must be ${types[index]}.`, "wrong_type");
     for (const field of ["question", "correct_answer", "explanation"]) {
       if (
         typeof item[field] !== "string" ||
@@ -206,11 +255,11 @@ export function validateQuizBatch(
         item[field].length > 500
       )
         throw new Error(
-          `Question ${index}: ${field} must contain 1-500 characters.`,
+          `${prefix}: ${field} must contain 1-500 characters.`,
         );
     }
     if (!Array.isArray(item.options))
-      throw new Error("Question options must be an array.");
+      throw slotError("Question options must be an array.", "invalid_options");
     if (item.type === "multiple_choice") {
       if (
         item.options.length !== 4 ||
@@ -218,34 +267,47 @@ export function validateQuizBatch(
           (o) => typeof o !== "string" || !o.trim() || o.length > 500,
         )
       )
-        throw new Error(
-          `Question ${index} needs four distinct nonempty options.`,
+        throw slotError(
+          `${prefix} needs four distinct nonempty options.`, "invalid_options",
         );
       if (!item.options.includes(item.correct_answer))
-        throw new Error(
-          `Question ${index}: correct answer must exactly match an option.`,
+        throw slotError(
+          `${prefix}: correct answer must exactly match an option.`, "invalid_option_key",
         );
     } else if (item.type === "true_false") {
       if (
         JSON.stringify(item.options) !== JSON.stringify(["True", "False"]) ||
         !item.options.includes(item.correct_answer)
       )
-        throw new Error(
-          "True/False requires exactly True and False options and answer.",
+        throw slotError(
+          "True/False requires exactly True and False options and answer.", "invalid_true_false",
         );
     } else if (item.options.length || item.correct_answer.length > 150)
-      throw new Error(
-        "Identification must have no options and a short answer.",
+      throw slotError(
+        "Identification must have no options and a short answer.", "invalid_identification",
       );
     if (skills.length) {
-      const prefix = `Question ${index + 1}`;
       if (item.thinking_skill !== skills[index])
-        throw new Error(
+        throw slotError(
           `${prefix}: assigned thinking_skill is ${skills[index]}, but received ${JSON.stringify(item.thinking_skill) ?? "missing"}. Rewrite this question for the assigned skill.`,
+          "wrong_thinking_skill",
         );
-      if (!cognitiveLevels[skills[index]]?.includes(item.cognitive_level))
-        throw new Error(
-          `${prefix}: cognitive_level must be ${cognitiveLevels[skills[index]].join(", ")} for ${skills[index]}, but received ${JSON.stringify(item.cognitive_level) ?? "missing"}. Rewrite the reasoning and classification together.`,
+      const allowedLevels = slot?.cognitive_level
+        ? [slot.cognitive_level] : cognitiveLevels[skills[index]];
+      if (!allowedLevels.includes(item.cognitive_level))
+        throw slotError(
+          `${prefix}: cognitive_level must be ${allowedLevels.join(", ")} for ${skills[index]}, but received ${JSON.stringify(item.cognitive_level) ?? "missing"}. Rewrite the reasoning and classification together.`,
+          "wrong_cognitive_level",
+        );
+      if (slot && (
+        !slot.learning_objective ||
+        normalizeAnswer(item.learning_objective) !== normalizeAnswer(slot.learning_objective)
+      ))
+        throw slotError(
+          slot.learning_objective
+            ? `${prefix} must assess its assigned learning objective: ${slot.learning_objective}`
+            : `${prefix} must select a valid learning objective for the lesson.`,
+          "wrong_learning_objective",
         );
       if (
         typeof item.topic !== "string" ||
@@ -257,16 +319,16 @@ export function validateQuizBatch(
         );
     }
     if (!Array.isArray(item.evidence_ids) || !item.evidence_ids.length)
-      throw Object.assign(new Error(`Question ${index + 1} needs evidence.`), {
-        code: "QUIZ_EVIDENCE_INVALID",
-      });
+      throw slotError(`${prefix} needs evidence.`, "missing_evidence", "QUIZ_EVIDENCE_INVALID");
     const citations = item.evidence_ids.map((id) => {
       const passage = evidence.get(id);
       if (!passage)
-        throw Object.assign(new Error(`Unknown quiz evidence ID: ${id}`), {
-          code: "QUIZ_EVIDENCE_INVALID",
-        });
-      return validateCitation(passage, chunks);
+        throw slotError(`Unknown quiz evidence ID: ${id}`, "unknown_evidence", "QUIZ_EVIDENCE_INVALID");
+      try {
+        return validateCitation(passage, chunks);
+      } catch (error) {
+        throw slotError(error.message, "invalid_citation", "QUIZ_EVIDENCE_INVALID");
+      }
     });
     const question = {
       ...(skills.length
@@ -278,6 +340,7 @@ export function validateQuizBatch(
                 : item.topic.trim(),
             cognitive_level: item.cognitive_level,
             thinking_skill: item.thinking_skill,
+            ...(slot ? { learning_objective: slot.learning_objective } : {}),
           }
         : {}),
       type: item.type,
@@ -288,7 +351,7 @@ export function validateQuizBatch(
       source_chunks: citations,
       grounding: {
         exact_quotes_verified: true,
-        model_review_passed: true,
+        model_review_passed: false,
         human_review_required: true,
       },
     };
@@ -300,7 +363,7 @@ export function validateQuizBatch(
       if (normalizeAnswer(question[field]) !== normalizeAnswer(assigned))
         throw Object.assign(
           new Error(
-            `Question ${index + 1} must assess assigned ${field === "topic" ? "weak topic" : "missed concept"} ${assigned}.`,
+            `${prefix} must assess assigned ${field === "topic" ? "weak topic" : "missed concept"} ${assigned}.`,
           ),
           { code: "QUIZ_FOCUS_MISMATCH" },
         );
@@ -330,9 +393,13 @@ export function validateQuizBatch(
   const questions = [];
   const stems = [...previousQuestions];
   for (const index of types.keys()) {
+    if (rejectedSlots.has(index)) continue;
     try {
       const question = validateQuestion(draft.questions[index], index);
-      validateQuizUniqueness([question], stems);
+      validateQuizUniqueness([question], stems, {
+        offset: (slots?.[index]?.question_number ?? index + 1) - 1,
+        compareSharedSetup: Boolean(slots),
+      });
       questions.push(question);
       stems.push(question.question);
     } catch (error) {
@@ -393,7 +460,73 @@ export function selectPracticeFocus(focus, indexes) {
   };
 }
 
-function partialPracticeError(rejectedSlots, validatedQuestions = []) {
+function alignPracticeDraft(draft, slots, rejectedSlots) {
+  const positions = new Map(slots.map((slot, i) => [slot.question_number, i]));
+  const questions = Array(slots.length);
+  for (const item of Array.isArray(draft?.questions) ? draft.questions : []) {
+    const i = positions.get(item?.question_number);
+    if (i === undefined || rejectedSlots.has(i)) continue;
+    if (questions[i]) {
+      rejectedSlots.set(i, slotError(
+        `Return exactly one draft for assigned question_number ${item.question_number}.`,
+        "duplicate_slot_number",
+      ));
+      questions[i] = undefined;
+    } else questions[i] = item;
+  }
+  return { questions };
+}
+
+function collectPracticeVerdicts(review, questions, reviewIndexes, rejectedSlots, slots) {
+  const byIndex = new Map();
+  const numbers = slots && reviewIndexes.map((i) => slots[i].question_number);
+  // The compact index and original slot must agree. A shifted or conflicting
+  // verdict cannot approve a sibling when some drafts are missing.
+  const verdicts = slots
+    ? (Array.isArray(review?.verdicts) ? review.verdicts : [])
+    : quizReviewVerdicts(review, questions);
+  for (const verdict of verdicts) {
+    const i = verdict?.question_index;
+    const validIndex = Number.isInteger(i) && i >= 0 && i < questions.length;
+    const position = numbers?.indexOf(verdict?.question_number);
+    if (numbers && position !== i) {
+      if (position >= 0) byIndex.set(position, null);
+      if (validIndex) byIndex.set(i, null);
+    } else if (validIndex) {
+      byIndex.set(i, byIndex.has(i) ? null : verdict);
+    }
+  }
+  const approved = [];
+  for (const [position, question] of questions.entries()) {
+    const index = reviewIndexes[position];
+    const verdict = byIndex.get(position);
+    if (verdict?.supported === true && (!verdict.reason_code || verdict.reason_code === "supported")) {
+      question.grounding.model_review_passed = true;
+      approved.push({ index, question });
+    } else if (verdict?.supported === false) {
+      rejectedSlots.set(index, slotError(
+        typeof verdict.reason === "string" && verdict.reason.trim() ? verdict.reason : "Unsupported answer.",
+        reviewRejections.includes(verdict.reason_code) ? verdict.reason_code : "QUIZ_REVIEW_REJECTED",
+        "QUIZ_REVIEW_REJECTED",
+      ));
+    } else {
+      rejectedSlots.set(index, slotError(
+        "The grounding review did not return one unambiguous verdict for this question.",
+        "incomplete_verdict", "QUIZ_REVIEW_INCOMPLETE",
+      ));
+    }
+  }
+  return approved;
+}
+
+function partialPracticeError(rejectedSlots, validatedQuestions, slots, draft) {
+  if (slots) {
+    for (const [index, failure] of rejectedSlots) {
+      const { learning_objective, cognitive_level } = slots[index];
+      failure.targets = { learning_objective, cognitive_level };
+      failure.draft = draft.questions[index];
+    }
+  }
   const first = rejectedSlots.values().next().value;
   return Object.assign(new Error(first.message), {
     code: first.code,
@@ -418,6 +551,8 @@ export async function generateQuizBatch(
     promptPreviousQuestions = previousQuestions,
     practiceFocus,
     practiceSlotIndexes,
+    practiceTargets,
+    repairFeedback = [],
     shortAnswer = false,
     onValidated,
     maxAttempts = 3,
@@ -428,11 +563,13 @@ export async function generateQuizBatch(
   generate = generateJson,
 ) {
   const isPractice = skills.length > 0 && !mainPrompt;
+  const numberedPractice = isPractice && preserveValidated && !!practiceTargets;
+  const objectiveChoices = numberedPractice ? practiceObjectives(objectives) : [];
   const reviewObjectives = (isPractice || preserveValidated) && objectives;
   const slots = mainPrompt
     ? assignedSlots
     : types.map((type, index) => ({
-        question_number: index + 1,
+        question_number: (numberedPractice ? practiceSlotIndexes?.[index] ?? index : index) + 1,
         type,
         ...(practiceFocus?.target_topics?.[index]
           ? { topic: practiceFocus.target_topics[index] }
@@ -443,7 +580,10 @@ export async function generateQuizBatch(
         ...(skills.length
           ? {
               thinking_skill: skills[index],
-              allowed_cognitive_levels: cognitiveLevels[skills[index]],
+              allowed_cognitive_levels: practiceTargets?.[index]?.cognitive_level
+                ? [practiceTargets[index].cognitive_level] : cognitiveLevels[skills[index]],
+              ...(objectiveChoices.length === 1 ? { learning_objective: objectiveChoices[0] } : {}),
+              ...practiceTargets?.[index],
               preferred_wording: preferredPracticeWording(
                 practiceSlotIndexes?.[index] ?? index,
               ),
@@ -452,6 +592,13 @@ export async function generateQuizBatch(
           : {}),
       }));
   const schema = structuredClone(skills.length ? practiceSchema : quizSchema);
+  if (numberedPractice) {
+    const item = schema.properties.questions.items;
+    item.properties.question_number = { type: "INTEGER" };
+    item.properties.learning_objective = objectiveChoices.length
+      ? { type: "STRING", enum: objectiveChoices } : stringSchema;
+    item.required.push("question_number", "learning_objective");
+  }
   schema.properties.questions.items.properties.type.enum = [...new Set(types)];
   const evidence = buildEvidence(chunks);
   if (preserveValidated && evidence.length) {
@@ -470,7 +617,9 @@ export async function generateQuizBatch(
       ...new Set(skills),
     ];
     schema.properties.questions.items.properties.cognitive_level.enum = [
-      ...new Set(skills.flatMap((skill) => cognitiveLevels[skill])),
+      ...new Set(numberedPractice
+        ? slots.flatMap((slot) => slot.allowed_cognitive_levels)
+        : skills.flatMap((skill) => cognitiveLevels[skill])),
     ];
   }
   let correction = initialCorrection,
@@ -518,6 +667,11 @@ export async function generateQuizBatch(
                 `Return question, type, options, correct_answer, explanation, topic, concept, cognitive_level, thinking_skill, evidence_ids in valid JSON.`,
                 `Keep fields under 500 characters and identification answers under 150.`,
                 `Repair rejected questions using reviewer reasons.`,
+                ...(numberedPractice ? [
+                  "Echo the original question_number of each assigned slot, including gaps in numbering. Write only these slots.",
+                  "Use the slot's assigned learning_objective and cognitive_level when present. Otherwise choose a relevant objective verbatim from learning_objectives and a level from the slot's allowed_cognitive_levels. If no objectives are supplied, state a concise learning objective drawn from the cited lesson.",
+                  "Use each slot's repair_feedback to fix the exact defect in its previous draft. Revisit a missed concept through a different inference, distinction or application. Never substitute a different learning target to bypass a rejection.",
+                ] : []),
                 ...(shortAnswer
                   ? [
                       "Students type an answer with no options on screen. Write each question as a standalone question ending in a question mark, with enough context to answer it on its own.",
@@ -534,8 +688,7 @@ export async function generateQuizBatch(
 "Revisit missed concepts with short, direct sentences and familiar examples supported by the evidence. Make these questions clearer and easier to understand; avoid trick wording and unnecessary complexity.",
 "If none of the missed concepts appear in the supplied evidence, cover other concepts supported by the supplied evidence.",
 "Use an example only if it contributes information the student must apply.",
-
-
+                      "For unassigned slots, cover other concepts supported by the supplied evidence.",
                       "Keep the remaining questions at the supplied baseline difficulty. Do not increase difficulty or reasoning depth merely because previous answers were correct.",
                       "Use concise explanations to clarify each missed concept and why the answer is correct.",
                       "Contrast the student's selected wrong answer with the source-supported correct answer when the evidence supports that distinction. Do not copy an incorrect answer as evidence.",
@@ -581,6 +734,8 @@ export async function generateQuizBatch(
             : {}),
           evidence,
           correction,
+          ...(numberedPractice ? { learning_objectives: objectiveChoices } : {}),
+          ...(repairFeedback.length ? { repair_feedback: repairFeedback } : {}),
           previous_draft: previousDraft,
           previous_review: previousReview,
         },
@@ -588,23 +743,27 @@ export async function generateQuizBatch(
       previousDraft = draft;
       previousReview = null;
       const rejectedSlots = preserveValidated ? new Map() : undefined;
+      const orderedDraft = numberedPractice ? alignPracticeDraft(draft, slots, rejectedSlots) : draft;
+      const boundSlots = numberedPractice ? slots.map((slot, index) => ({
+        ...slot, ...practiceTargetsForDraft(slot, orderedDraft.questions[index], objectiveChoices),
+      })) : undefined;
       const questions = validateQuizBatch(
-        draft,
+        orderedDraft,
         types,
         chunks,
         skills,
         previousQuestions,
-        { practiceFocus, shortAnswer, rejectedSlots, passages: evidence },
+        { practiceFocus, shortAnswer, rejectedSlots, passages: evidence, slots: boundSlots },
       );
       if (rejectedSlots?.size && !questions.length)
-        throw partialPracticeError(rejectedSlots);
+        throw partialPracticeError(rejectedSlots, [], boundSlots, orderedDraft);
       const reviewIndexes = types
         .map((_, i) => i)
         .filter((i) => !rejectedSlots?.has(i));
       const reviewSlots = preserveValidated
         ? reviewIndexes.map((index, question_index) => {
-            const { question_number, ...assignment } = slots[index];
-            return { question_index, ...assignment };
+            const { question_number, ...assignment } = (boundSlots || slots)[index];
+            return { question_index, ...(numberedPractice ? { question_number } : {}), ...assignment };
           })
         : slots;
       const reviewFocus = rejectedSlots?.size
@@ -614,7 +773,7 @@ export async function generateQuizBatch(
         validateAdaptiveQuestions(questions, assignedSlots, previousQuestions);
       const review = await generate({
         ...requestOptions,
-        schema: reviewSchema,
+        schema: numberedPractice ? practiceReviewSchema : reviewSchema,
         instruction: [
           "Independently audit every question against its exact source quotes.",
           "supported=true only if the question is answerable, the correct answer and ALL explanation claims follow from the quotes, and multiple choice has exactly one correct option (check every distractor for ambiguity).",
@@ -653,11 +812,16 @@ export async function generateQuizBatch(
             : []),
           "Do not rely on prior knowledge.",
           "Return one verdict per zero-based question_index with a specific reason for any rejection.",
+          ...(numberedPractice ? [
+            "Check the specific learning_objective and cognitive_level assigned to each question_index against the actual task. Reject objectives inferred without support from the cited lesson. For a duplicate pair, identify the redundant question and keep the independently correct original. For a duplicate of previous_questions, reject the new question.",
+            "Echo both the question_index and its original question_number exactly. Set reason_code to supported only for a passing verdict. For a rejection, choose the matching category and state the specific defect in one concise sentence.",
+          ] : []),
         ].join(" "),
         data: {
           questions: preserveValidated
             ? questions.map((question, question_index) => ({
                 question_index,
+                ...(numberedPractice ? { question_number: reviewSlots[question_index].question_number } : {}),
                 ...question,
               }))
             : questions,
@@ -669,23 +833,20 @@ export async function generateQuizBatch(
       });
       previousReview = review;
       if (preserveValidated) {
-        const approved = [];
-        for (const verdict of quizReviewVerdicts(review, questions)) {
-          const position = verdict.question_index;
-          const index = reviewIndexes[position];
-          if (verdict.supported === true)
-            approved.push({ index, question: questions[position] });
-          else rejectedSlots.set(index, rejectedVerdict(verdict));
-        }
+        const approved = collectPracticeVerdicts(review, questions, reviewIndexes, rejectedSlots, boundSlots);
         if (rejectedSlots.size)
-          throw partialPracticeError(rejectedSlots, approved);
-      } else validateQuizReview(review, questions);
+          throw partialPracticeError(rejectedSlots, approved, boundSlots, orderedDraft);
+      } else {
+        validateQuizReview(review, questions);
+        for (const question of questions) question.grounding.model_review_passed = true;
+      }
       onValidated?.(questions);
       return questions;
     } catch (error) {
       if (error.statusCode || error.retryable) throw error;
       correction = error.message;
       lastFailure = error;
+      if (preserveValidated) break; // The Practice caller owns the retained slots and retry budget.
     }
   }
   const error = requestError(

@@ -62,7 +62,10 @@ function mockProviders(t, respond) {
     calls.push({ provider, url, payload, options });
     return respond(provider, payload, options);
   });
-  return { waits, calls, logs, providers: () => calls.map((call) => call.provider) };
+  return {
+    waits, calls, logs, providers: () => calls.map((call) => call.provider),
+    advanceTime(ms) { elapsed += ms; },
+  };
 }
 
 test("a healthy Gemini response completes without a backup key or a second call", async (t) => {
@@ -166,7 +169,7 @@ test("a transient network error can recover on Gemini, and an upstream 422 is ne
     ++calls;
     if (calls === 1) throw Object.assign(new Error(), { code: "ECONNRESET" });
     if (calls === 2) return gemini();
-    throw http(422);
+    throw http(422, { message: "Invalid billing field in the structured request." });
   });
   const generate = createPracticeJsonGenerator();
   await generate(request);
@@ -233,18 +236,34 @@ test("the remaining deadline reserves time for OpenAI and bounds its in-flight r
   assert.deepEqual(mock.providers(), ["gemini", "openai", "gemini"]);
 });
 
+const statisticsLesson = {
+  id: "statistics", title: "Describing commute times",
+  learningObjectives: "Choose and interpret the median for a skewed set of travel times.",
+  lessonPages: [{ title: "Typical trips", content:
+    "The median is the middle of sorted observations. For an even count it is the mean of the two middle values. " +
+    "An extreme value pulls the mean toward it; the median resists that effect. Four trips took 10, 12, 13 and 65 minutes." }],
+};
+
+function statisticsQuestion(slot, data, stem) {
+  return {
+    question_number: slot.question_number,
+    learning_objective: slot.learning_objective || data.learning_objectives[slot.question_number % data.learning_objectives.length],
+    question: stem, type: slot.type,
+    options: slot.type === "multiple_choice" ? ["Median", "Mean", "Range", "Mode"] :
+      slot.type === "true_false" ? ["True", "False"] : [],
+    correct_answer: slot.type === "true_false" ? "True" : "Median",
+    explanation: "The median resists the effect of an extreme observation.",
+    topic: slot.topic || "Measures of center", concept: slot.concept || "Median",
+    thinking_skill: slot.thinking_skill, cognitive_level: slot.allowed_cognitive_levels[0],
+    evidence_ids: [data.evidence[0].evidence_id],
+  };
+}
+
 test("OpenAI drafts and reviews use the same evidence, history, and slot repair as Gemini", async (t) => {
   const old = "What is the middle value in a sorted list called?";
   const paraphrase = "Which term names the central value after the numbers are ordered?";
   const unsupported = "Which measure predicts tomorrow's journey time?";
   const revisit = "Four trips took 10, 12, 13 and 65 minutes. Which measure resists the effect of the longest trip?";
-  const lesson = {
-    id: "statistics", title: "Describing commute times",
-    learningObjectives: "Choose and interpret the median for a skewed set of travel times.",
-    lessonPages: [{ title: "Typical trips", content:
-      "The median is the middle of sorted observations. For an even count it is the mean of the two middle values. " +
-      "An extreme value pulls the mean toward it; the median resists that effect. Four trips took 10, 12, 13 and 65 minutes." }],
-  };
   const skills = [];
   const draftSizes = [], reviewSizes = [];
   const mock = mockProviders(t, (provider, payload) => {
@@ -253,8 +272,9 @@ test("OpenAI drafts and reviews use the same evidence, history, and slot repair 
     const data = JSON.parse(payload.messages[1].content);
     if (schema.properties.verdicts) {
       reviewSizes.push(data.questions.length);
-      return openai({ verdicts: data.questions.map(({ question, question_index }) => ({
+      return openai({ verdicts: data.questions.map(({ question, question_index, question_number }) => ({
         question_index,
+        question_number,
         supported: ![unsupported, paraphrase].includes(question),
         reason: question === paraphrase ? "Repeats the previous definition." : "Check the cited facts.",
       })) });
@@ -263,23 +283,12 @@ test("OpenAI drafts and reviews use the same evidence, history, and slot repair 
     const first = draftSizes.length === 1;
     const questions = data.assigned_slots.map((slot, index) => {
       const stem = first ? [old, paraphrase, unsupported, revisit][index] : undefined;
-      const type = slot.type;
-      return {
-        question: stem || `Statistics check ${first ? "original" : "replacement"} ${index}?`,
-        type,
-        options: type === "multiple_choice" ? ["Median", "Mean", "Range", "Mode"] :
-          type === "true_false" ? ["True", "False"] : [],
-        correct_answer: type === "true_false" ? "True" : "Median",
-        explanation: "The median resists the effect of an extreme observation.",
-        topic: slot.topic || "Measures of center", concept: slot.concept || "Median",
-        thinking_skill: slot.thinking_skill, cognitive_level: slot.allowed_cognitive_levels[0],
-        evidence_ids: [data.evidence[0].evidence_id],
-      };
+      return statisticsQuestion(slot, data, stem || `Statistics check ${first ? "original" : "replacement"} ${index}?`);
     });
     skills.push(schema.properties.questions.items);
     return openai({ questions });
   });
-  const result = await generatePracticeQuestions(lesson, [{
+  const result = await generatePracticeQuestions(statisticsLesson, [{
     question: old, topic: "Measures of center", concept: "Median",
     userAnswer: "Mean", correctAnswer: "Median", isCorrect: false,
   }], [old]);
@@ -302,4 +311,159 @@ test("OpenAI drafts and reviews use the same evidence, history, and slot repair 
   assert.match(correction.correction, /Duplicate quiz question/);
   assert.match(correction.correction, /Repeats the previous definition/);
   assert.ok(correction.previous_questions.includes(revisit));
+});
+
+// Both providers respond over the normal HTTP adapters. Gemini's first review
+// approves eight slots. Three subsequent Gemini drafts make no progress.
+const unsupportedExplanation = "The mean is unaffected by an extreme observation.";
+function mockStalledPractice(t, changeResponse) {
+  const exchanges = [];
+  const drafts = { gemini: 0, openai: 0 };
+  const mock = mockProviders(t, (provider, payload, options) => {
+    const data = JSON.parse(provider === "gemini" ? payload.contents[0].parts[0].text : payload.messages[1].content);
+    const phase = data.questions ? "review" : "draft";
+    if (phase === "draft") drafts[provider]++;
+    const turn = drafts[provider];
+    let response;
+    if (phase === "draft") {
+      const questions = data.assigned_slots.map((slot) => {
+        const q = statisticsQuestion(slot, data, `${provider} example ${turn}.${slot.question_number}?`);
+        if (provider === "gemini" && slot.question_number === 1) q.explanation = unsupportedExplanation;
+        if (provider === "gemini" && slot.question_number === 8) q.correct_answer = "Range";
+        return q;
+      });
+      response = { questions: provider === "gemini" && turn === 4
+        ? questions.filter((q) => q.question_number !== 8) : questions };
+    } else {
+      response = { verdicts: data.questions.map((q) => {
+        const reason = q.explanation === unsupportedExplanation ? "The explanation claims the mean is unaffected." :
+          q.correct_answer === "Range" ? "The answer is unsupported." : "";
+        return {
+          question_index: q.question_index, question_number: q.question_number, supported: !reason,
+          reason_code: q.explanation === unsupportedExplanation ? "incorrect_explanation" : reason ? "unsupported_answer" : "supported",
+          reason: reason ? `Draft ${turn}: ${reason}` : "",
+        };
+      }) };
+    }
+    exchanges.push({ provider, phase, data, options });
+    changeResponse?.({ provider, phase, turn, response, data });
+    return provider === "gemini" ? gemini(response) : openai(response);
+  });
+  const lesson = { ...statisticsLesson, learningObjectives: [
+    statisticsLesson.learningObjectives, "Identify the middle of an ordered set.",
+  ] };
+  const miss = { question: "Which statistic resists outliers?", topic: "Measures of center",
+    concept: "Median", isCorrect: false, userAnswer: "Mean", correctAnswer: "Median" };
+  return { ...mock, exchanges, generate: () => generatePracticeQuestions(lesson, [miss], [miss.question]) };
+}
+
+test("OpenAI repairs and independently reviews only two slots after Gemini exhausts validation with eight approved", async (t) => {
+  const fixture = mockStalledPractice(t);
+  const result = await fixture.generate();
+  const { exchanges } = fixture;
+  const numbers = (slots) => slots.map((s) => s.question_number);
+  const all = Array.from({ length: 10 }, (_, i) => i + 1);
+  const gaps = [1, 8];
+  assert.deepEqual(fixture.providers(), [...Array(8).fill("gemini"), "openai", "openai"]);
+  assert.deepEqual(exchanges.map(({ data }) => numbers(data.assigned_slots)),
+    [all, all, gaps, gaps, gaps, gaps, gaps, [1], gaps, gaps]);
+  const [draft, review] = exchanges.slice(-2).map((e) => e.data);
+  assert.deepEqual(numbers(review.questions), gaps);
+  assert.equal(exchanges.at(-1).phase, "review");
+  assert.deepEqual(draft.repair_feedback.map(({ question_number, reason }) => [question_number, reason]), [
+    [1, "Draft 4: The explanation claims the mean is unaffected."], [8, "Question 8 is missing from the draft."],
+  ]);
+  assert.deepEqual(draft.repair_feedback.map((f) => f.draft.question), ["gemini example 4.1?", "gemini example 3.8?"]);
+  assert.deepEqual(draft.evidence, exchanges[0].data.evidence);
+  const firstReview = exchanges[1].data;
+  const assignments = firstReview.assigned_slots.filter((s) => gaps.includes(s.question_number));
+  assert.deepEqual(draft.assigned_slots.map((s) => [s.type, s.thinking_skill, s.allowed_cognitive_levels,
+    s.learning_objective, s.topic, s.concept]), assignments.map((s) => [s.type, s.thinking_skill,
+    [s.cognitive_level], s.learning_objective, s.topic, s.concept]));
+  assert.deepEqual(draft.thinking_skills, ["HOTS", "LOTS"]);
+  const retained = firstReview.questions.filter((q) => !gaps.includes(q.question_number));
+  assert.deepEqual(draft.previous_questions, [...exchanges[0].data.previous_questions, ...retained.map((q) => q.question)]);
+  assert.deepEqual(review.previous_questions, draft.previous_questions);
+  assert.equal(result.length, 10);
+  for (const { question_number, question_index, ...q } of [...retained, ...review.questions]) {
+    const { id, source_question_index, ...saved } = result.find((item) => item.source_question_index === question_number - 1);
+    assert.equal(q.grounding.model_review_passed, false);
+    assert.ok(q.source_chunks[0].quote);
+    assert.deepEqual(saved, { ...q, grounding: { ...q.grounding, model_review_passed: true } });
+  }
+  assert.deepEqual(fixture.waits, []);
+});
+
+test("OpenAI validation repair keeps new approvals, rejects duplicates and stops on an unsupported final explanation", async (t) => {
+  const fixture = mockStalledPractice(t, ({ provider, phase, turn, response, data }) => {
+    if (provider !== "openai" || phase !== "draft") return;
+    if (turn === 1) response.questions[0].question = data.previous_questions.at(-1);
+    else response.questions[0].explanation = unsupportedExplanation;
+  });
+  await assert.rejects(fixture.generate(), { statusCode: 422, code: "QUIZ_REVIEW_REJECTED" });
+  const backup = fixture.exchanges.filter((e) => e.provider === "openai");
+  assert.deepEqual(backup.map(({ phase, data }) => [phase, data.assigned_slots.map((s) => s.question_number)]),
+    [["draft", [1, 8]], ["review", [8]], ["draft", [1]], ["review", [1]]]);
+  assert.match(backup[2].data.repair_feedback[0].reason, /Duplicate quiz question/);
+  assert.ok(backup[2].data.previous_questions.includes(backup[1].data.questions[0].question));
+  const events = fixture.logs.filter(([label]) => label === "[Practice validation]").map(([, line]) => JSON.parse(line));
+  assert.equal(events.at(-1).passed, 9);
+  assert.equal(events.at(-1).stop, "openai_repair_limit");
+  assert.doesNotMatch(JSON.stringify(fixture.logs), /mean is unaffected|gemini example|test-backup-secret/);
+});
+
+test("OpenAI repairs must pass the evidence, answer-key, type and LOTS/HOTS checks before review", async (t) => {
+  const fixture = mockStalledPractice(t, ({ provider, phase, turn, response }) => {
+    if (provider !== "openai" || phase !== "draft") return;
+    const [hots, lots] = response.questions;
+    if (turn === 1) {
+      hots.correct_answer = "A value outside the options";
+      lots.evidence_ids = ["unknown"];
+    } else {
+      hots.thinking_skill = "LOTS";
+      lots.type = "true_false";
+    }
+  });
+  await assert.rejects(fixture.generate(), { statusCode: 422 });
+  assert.deepEqual(fixture.exchanges.filter((e) => e.provider === "openai").map((e) => e.phase), ["draft", "draft"]);
+  const events = fixture.logs.filter(([label]) => label === "[Practice validation]").map(([, line]) => JSON.parse(line));
+  const [first, second, stop] = events.slice(-3);
+  assert.deepEqual(first.rejected, { invalid_option_key: [1], unknown_evidence: [8] });
+  assert.deepEqual(second.rejected, { wrong_thinking_skill: [1], wrong_type: [8] });
+  assert.equal(stop.passed, 8);
+});
+
+test("an OpenAI review that crosses the original 240-second deadline cannot complete a practice", async (t) => {
+  const fixture = mockStalledPractice(t, ({ provider, phase, turn }) => {
+    if (provider === "gemini") fixture.advanceTime(turn < 4 ? 30_000 : phase === "draft" ? 25_000 : 15_000);
+    if (provider === "openai") fixture.advanceTime(phase === "draft" ? 12_000 : 8_001);
+  });
+  await assert.rejects(fixture.generate(), { code: "GENERATION_TIMEOUT" });
+  const backup = fixture.exchanges.filter((e) => e.provider === "openai");
+  assert.deepEqual(backup.map((e) => [e.phase, e.options.timeout]), [["draft", 20_000], ["review", 8_000]]);
+  assert.ok(backup.every((e) => e.options.signal === fixture.exchanges[0].options.signal));
+});
+
+test("without an OpenAI key, exhausted Gemini validation remains a 422", async (t) => {
+  const fixture = mockStalledPractice(t);
+  delete process.env.OPENAI_API_KEY;
+  await assert.rejects(fixture.generate(), { statusCode: 422 });
+  assert.deepEqual(fixture.providers(), Array(8).fill("gemini"));
+});
+
+test("an OpenAI outage after Gemini validation exhaustion reports only the OpenAI failure", async (t) => {
+  const fixture = mockStalledPractice(t, ({ provider }) => {
+    if (provider === "openai") throw http(503);
+  });
+  await assert.rejects(fixture.generate(), { statusCode: 503, code: "PROVIDER_UNAVAILABLE" });
+  assert.deepEqual(fixture.providers(), [...Array(8).fill("gemini"), "openai"]);
+});
+
+test("a practice already using OpenAI after a Gemini outage cannot restart OpenAI's repair budget", async (t) => {
+  const fixture = mockStalledPractice(t, ({ provider, phase, response }) => {
+    if (provider === "gemini") throw http(403);
+    if (phase === "draft") response.questions[0].explanation = unsupportedExplanation;
+  });
+  await assert.rejects(fixture.generate(), { statusCode: 422, code: "QUIZ_REVIEW_REJECTED" });
+  assert.deepEqual(fixture.providers(), ["gemini", ...Array(8).fill("openai")]);
 });

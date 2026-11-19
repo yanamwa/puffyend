@@ -66,6 +66,8 @@ function question(id, title) {
 function practiceDraft(request, draft) {
   return {
     questions: request.data.assigned_slots.map((slot, index) => ({
+      question_number: slot.question_number,
+      learning_objective: slot.learning_objective || request.data.learning_objectives[0] || "Identify an example of social learning.",
       question: `Practice ${draft}-${index}?`,
       type: slot.type,
       options:
@@ -83,6 +85,11 @@ function practiceDraft(request, draft) {
       evidence_ids: [request.data.evidence[0].evidence_id],
     })),
   };
+}
+
+function validationEvents(logs) {
+  return logs.mock.calls.filter((call) => call.arguments[0] === "[Practice validation]")
+    .map((call) => JSON.parse(call.arguments[1]));
 }
 
 test("practice adapts to misses and creates 10 unique mixed questions from the saved lesson", async () => {
@@ -193,6 +200,48 @@ test("scores from 60% through 100% keep the same practice difficulty and focus o
   }
 });
 
+test("repeat practice reinforces a sole missed concept once and rejects a reused question", async () => {
+  const material = {
+    ...lesson,
+    title: "Data summaries",
+    learningObjectives: "Choose and interpret a summary for a dataset.",
+    lessonPages: [{ title: "Summaries", content:
+      "The median is the middle ordered value. Extreme values affect the mean. The range is the maximum minus the minimum. The mode is the most frequent value." }],
+  };
+  const prior = { question: "What is the middle ordered value called?", topic: "Summaries", concept: "Median",
+    correctAnswer: "Median", userAnswer: "Mean", isCorrect: false };
+  const misses = [prior, { ...prior, question: "Which measure uses the middle ranked observation?", concept: "median" }];
+  const previous = misses.map((miss) => miss.question);
+  const applied = "Which measure would resist a change to the largest value in 2, 5, and 90?";
+  const sizes = [];
+  const questions = await generatePracticeQuestions(material, [misses[1]], previous, {
+    isRepeatPractice: true,
+    history: [{ answers: [prior] }],
+    generateBatch: (batch) => generateQuizBatch(batch, async (request) => {
+      const { data, schema } = request;
+      if (schema.properties.verdicts) {
+        assert.ok(data.questions.every((item) => !previous.includes(item.question)));
+        return { verdicts: data.questions.map(({ question_index, question_number }) => ({ question_index, question_number, supported: true, reason: "" })) };
+      }
+      sizes.push(data.types.length);
+      assert.equal(data.practice_focus.target_count, 1);
+      assert.deepEqual(data.assigned_slots.filter((slot) => slot.concept).map((slot) => slot.concept.toLowerCase()), ["median"]);
+      const draft = practiceDraft(request, sizes.length);
+      Object.assign(draft.questions[0], {
+        question: sizes.length === 1 ? prior.question : applied,
+        topic: data.assigned_slots[0].topic, concept: data.assigned_slots[0].concept,
+        options: ["Mean", "Median", "Range", "Maximum"], correct_answer: "Median",
+        explanation: "The middle ordered observation remains the same.",
+      });
+      return draft;
+    }),
+  });
+  assert.deepEqual(sizes, [10, 1]);
+  assert.ok(questions.some((item) => item.question === applied));
+  assert.equal(questions.length, 10);
+  assert.ok(questions.every((item) => item.source_chunks.length && !previous.includes(item.question)));
+});
+
 test("missed-concept prompts ask for clearer questions without increasing difficulty", async () => {
   const practiceFocus = {
     target_count: 1,
@@ -240,6 +289,69 @@ test("missed-concept prompts ask for clearer questions without increasing diffic
     },
   );
   assert.equal(result.length, 1);
+});
+
+test("a shared dataset can test the same missed concept with a different inference", async () => {
+  const setup = "Trip times, sorted from shortest to longest, are 10, 12, 13 and 65 minutes. The longest trip was recorded incorrectly and must be replaced with 95 minutes.";
+  const old = setup + " What is the original median?";
+  const paraphrase = setup + " Which value is the original median?";
+  const application = setup + " Why is the original median unchanged?";
+  const rule = "For an even number of observations the median is the mean of the two middle values. The mean divides the sum by the count. The range is the maximum minus the minimum.";
+  const medianObjective = "Interpret how a correction affects the median.";
+  const summaryObjective = "Calculate and interpret summaries of travel-time data.";
+  const otherChecks = [
+    ["How many trips were recorded?", "Four", "Four times appear in the list."],
+    ["Which duration was entered in error?", "65 minutes", "The longest recorded time was 65 minutes."],
+    ["How much does the mean increase after the correction?", "7.5 minutes", "The total increases by 30 across four trips."],
+    ["What is the shortest recorded trip?", "10 minutes", "The ordered list starts at 10."],
+    ["How many trips took less than 15 minutes?", "Three", "10, 12 and 13 are below 15."],
+    ["Which two recorded times are one minute apart?", "12 and 13 minutes", "13 minus 12 is one."],
+    ["What is the range after the correction?", "85 minutes", "95 minus 10 is 85."],
+    ["What is the sum of the original times?", "100 minutes", "10 + 12 + 13 + 65 = 100."],
+    ["How many minutes were added to the longest trip?", "30 minutes", "95 minus 65 is 30."],
+  ];
+  const material = {
+    ...lesson, learningObjectives: [medianObjective, summaryObjective].join("\n"),
+    lessonPages: [{ title: "Median", content: setup + " " + rule }],
+  };
+  const missed = { question: old, topic: "Measures of center", concept: "Median", isCorrect: false };
+  const reviewed = [];
+  const questions = await generatePracticeQuestions(material, [missed], [old], {
+    format: "qna", isRepeatPractice: true,
+    generateBatch: (batch) => generateQuizBatch(batch, async ({ schema, data }) => {
+      if (schema.properties.questions) {
+        const draft = practiceDraft({ data }, reviewed.length + 1);
+        const repair = reviewed.length > 0;
+        assert.equal(data.assigned_slots[0].concept, "Median");
+        if (repair) {
+          assert.deepEqual(data.assigned_slots.map((s) => s.question_number), [1]);
+          assert.equal(data.repair_feedback[0].reason, "This still asks for the original median.");
+        }
+        Object.assign(draft.questions[0], {
+          question: repair ? application : paraphrase,
+          correct_answer: repair ? "The two middle values remain 12 and 13." : "12.5 minutes",
+          explanation: "Changing the largest observation leaves the two middle values unchanged.",
+          learning_objective: medianObjective,
+        });
+        for (const [i, item] of draft.questions.slice(1).entries()) {
+          const [question, correct_answer, explanation] = otherChecks[i];
+          Object.assign(item, { question, correct_answer, explanation,
+            topic: "Travel times", concept: "Data summaries", learning_objective: summaryObjective });
+        }
+        return draft;
+      }
+      reviewed.push(data.questions[0].question);
+      assert.ok(data.previous_questions.includes(old));
+      return { verdicts: data.questions.map(({ question, question_index, question_number }) => ({
+        question_index, question_number, supported: question !== paraphrase,
+        reason_code: question === paraphrase ? "duplicate" : "supported",
+        reason: question === paraphrase ? "This still asks for the original median." : "",
+      })) };
+    }),
+  });
+  assert.deepEqual(reviewed, [paraphrase, application]);
+  assert.ok(questions.some((q) => q.question === application && q.concept === "Median" && q.grounding.model_review_passed));
+  assert.ok(questions.every((q) => q.question !== old && q.question !== paraphrase));
 });
 
 test("Q&A practice requests 10 standalone identification questions", async () => {
@@ -362,8 +474,9 @@ test("a fully direct practice set can pass one draft and one independent review 
           assert.match(request.instruction, /Accept a fully direct quiz/);
           calls.push(["review", request.data.questions.length]);
           return {
-            verdicts: request.data.questions.map((_, question_index) => ({
+            verdicts: request.data.questions.map(({ question_index, question_number }) => ({
               question_index,
+              question_number,
               supported: true,
             })),
           };
@@ -382,7 +495,7 @@ test("a fully direct practice set can pass one draft and one independent review 
   );
 });
 
-test("practice repairs rejected batches once in smaller validated groups", async () => {
+test("a wholly rejected first repair group does not skip its siblings", async () => {
   let drafts = 0;
   const batchSizes = [];
   const reviewedSizes = [];
@@ -394,9 +507,10 @@ test("practice repairs rejected batches once in smaller validated groups", async
           const count = request.data.questions.length;
           reviewedSizes.push(count);
           return {
-            verdicts: request.data.questions.map((_, index) => ({
-              question_index: index,
-              supported: count <= 5,
+            verdicts: request.data.questions.map(({ question_index, question_number }) => ({
+              question_index,
+              question_number,
+              supported: count <= 5 && drafts > 2,
               reason: "Rewrite the ambiguous learning check.",
             })),
           };
@@ -405,8 +519,9 @@ test("practice repairs rejected batches once in smaller validated groups", async
       });
     },
   });
-  assert.deepEqual(batchSizes, [10, 5, 5]);
-  assert.deepEqual(reviewedSizes, [10, 5, 5]);
+  assert.deepEqual(batchSizes, [10, 5, 5, 5]);
+  assert.deepEqual(reviewedSizes, [10, 5, 5, 5]);
+  assert.equal(questions.filter((item) => item.question.startsWith("Practice 3-")).length, 5);
   assert.equal(questions.length, 10);
   assert.equal(new Set(questions.map(({ question }) => question)).size, 10);
   assert.equal(
@@ -427,7 +542,7 @@ test("practice repairs rejected batches once in smaller validated groups", async
   );
 });
 
-test("practice stops at rejected individual questions and provider failures", async () => {
+test("practice bounds consecutive stalled rounds and stops immediately on provider failures", async () => {
   for (const statusCode of [422, 503]) {
     const failure = Object.assign(new Error("Generation rejected"), {
       statusCode,
@@ -442,7 +557,7 @@ test("practice stops at rejected individual questions and provider failures", as
       }),
       (error) => error === failure,
     );
-    assert.deepEqual(batchSizes, statusCode === 422 ? [10, 5] : [10]);
+    assert.deepEqual(batchSizes, statusCode === 422 ? [10, 5, 5, 5, 5, 5, 5] : [10]);
   }
 });
 
@@ -507,8 +622,9 @@ for (const format of ["mixed", "qna"]) {
             /request a direct rewrite of that question/,
           );
           return {
-            verdicts: request.data.questions.map((item, index) => ({
-              question_index: index,
+            verdicts: request.data.questions.map((item) => ({
+              question_index: item.question_index,
+              question_number: item.question_number,
               supported: item.question !== paddedQuestion,
               reason: item.question === paddedQuestion
                 ? "Remove the unnecessary setup."
@@ -571,8 +687,9 @@ test("module practice reviews valid draft slots and repairs only the missing or 
         );
         return {
           verdicts: data.questions
-            .map((q, i) => ({
-              question_index: i,
+            .map((q) => ({
+              question_index: q.question_index,
+              question_number: q.question_number,
               supported: !["Practice 1-5?", "Practice 2-2?"].includes(
                 q.question,
               ),
@@ -633,8 +750,9 @@ test("eight approved questions survive a historical duplicate and a rejected ans
         assert.equal(data.objectives, lesson.learningObjectives);
         assert.match(instruction, /assesses a relevant lesson objective/);
         return {
-          verdicts: data.questions.map(({ question, question_index }) => ({
+          verdicts: data.questions.map(({ question, question_index, question_number }) => ({
             question_index,
+            question_number,
             supported: question !== "Practice 1-8?",
             reason: "The cited evidence does not support this answer.",
           })),
@@ -652,6 +770,167 @@ test("eight approved questions survive a historical duplicate and a rejected ans
       (q) => !history.includes(q.question) && q.question !== "Practice 1-8?",
     ),
   );
+});
+
+test("late partial repairs keep approved slots, their exact targets, and the latest rejection for each gap", async (t) => {
+  const logs = t.mock.method(console, "info", () => {});
+  const objectives = [
+    "Recognize examples of social learning.",
+    "Explain how observing a role model can influence identity.",
+  ];
+  const material = { ...lesson, learningObjectives: objectives.join("\n") };
+  const miss = { ...recap[0], topic: "Social learning", concept: "Role models", isCorrect: false };
+  const reason = "The cited passage does not support this conclusion. Private review detail.";
+  const requests = [];
+  const reviews = [];
+  const result = await generatePracticeQuestions(material, [miss], [], {
+    generateBatch: (batch) => generateQuizBatch(batch, async ({ data, schema }) => {
+      if (schema.properties.questions) {
+        const numbers = data.assigned_slots.map((slot) => slot.question_number);
+        const turn = requests.push(numbers);
+        const feedback = new Map(data.repair_feedback?.map((entry) => [entry.question_number, entry]));
+        const draft = practiceDraft({ data }, turn);
+        if (turn === 1) {
+          for (const item of draft.questions) {
+            item.learning_objective = objectives[item.question_number % 2];
+            if ([2, 5].includes(item.question_number)) item.cognitive_level = "Apply";
+          }
+          // Omit a middle slot and return the rest in a different order.
+          draft.questions = draft.questions.filter((item) => item.question_number !== 8).reverse();
+        } else {
+          for (const slot of data.assigned_slots.filter((item) => [2, 5].includes(item.question_number))) {
+            assert.equal(slot.type, "multiple_choice");
+            assert.equal(slot.topic, miss.topic);
+            assert.equal(slot.concept, miss.concept);
+            assert.equal(slot.cognitive_level, "Apply");
+            assert.equal(slot.learning_objective, objectives[slot.question_number % 2]);
+          }
+          assert.deepEqual([...feedback.keys()], numbers);
+          assert.ok(data.previous_questions.includes("Practice 1-9?"));
+          if (turn === 2) {
+            assert.equal(feedback.get(2).reason, reason);
+            assert.equal(feedback.get(2).draft.question, "Practice 1-1?");
+            assert.equal(feedback.get(5).reason, "The explanation contradicts the passage.");
+            assert.match(feedback.get(8).reason, /Question 8 is missing/);
+            assert.equal(feedback.get(8).draft, undefined);
+            draft.questions[0].learning_objective = objectives[1]; // Valid for the lesson, wrong for slot 2.
+            draft.questions[1].cognitive_level = "Understand"; // Still LOTS, wrong for slot 5.
+          }
+          if (turn === 3) {
+            assert.ok(feedback.get(2).reason.includes(objectives[0]));
+            assert.match(feedback.get(5).reason, /cognitive_level must be Apply/);
+            assert.equal(feedback.get(8).reason, reason);
+            draft.questions[0].question = "Practice 1-9?"; // An already approved sibling.
+          }
+          if (turn === 4) {
+            assert.match(feedback.get(2).reason, /Duplicate quiz question at position 2/);
+            assert.ok(data.previous_questions.includes("Practice 3-1?"));
+          }
+          if (turn === 5) assert.ok(data.previous_questions.includes("Practice 4-0?"));
+        }
+        return draft;
+      }
+
+      reviews.push(data.questions.length);
+      return { verdicts: data.questions.map((q, position) => {
+        assert.equal(q.learning_objective, data.assigned_slots[position].learning_objective);
+        assert.equal(q.cognitive_level, data.assigned_slots[position].cognitive_level);
+        assert.ok(q.source_chunks.length);
+        assert.equal(q.grounding.model_review_passed, false);
+        const badExplanation = q.question === "Practice 1-4?";
+        const rejected = badExplanation || ["Practice 1-1?", "Practice 2-2?", "Practice 3-2?", "Practice 4-1?"].includes(q.question);
+        return {
+          question_index: q.question_index,
+          question_number: q.question_number,
+          supported: !rejected,
+          reason_code: badExplanation ? "incorrect_explanation" : rejected ? "unsupported_answer" : "supported",
+          reason: badExplanation ? "The explanation contradicts the passage." : rejected ? reason : "",
+        };
+      }).reverse() };
+    }),
+  });
+  assert.deepEqual(requests, [
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [2, 5, 8], [2, 5, 8], [2, 8], [8],
+  ]);
+  assert.deepEqual(reviews, [9, 1, 2, 2, 1]);
+  const ordered = result.toSorted((a, b) => a.source_question_index - b.source_question_index);
+  assert.deepEqual(ordered.map((q) => q.question), [
+    "Practice 1-0?", "Practice 4-0?", "Practice 1-2?", "Practice 1-3?", "Practice 3-1?",
+    "Practice 1-5?", "Practice 1-6?", "Practice 5-0?", "Practice 1-8?", "Practice 1-9?",
+  ]);
+  assert.ok(ordered.every((q) => q.grounding.model_review_passed && q.source_chunks[0].quote === lesson.lessonPages[0].content));
+  const events = validationEvents(logs);
+  assert.deepEqual(events.filter((event) => event.attempted).map((event) => event.passed), [7, 7, 8, 9, 10]);
+  assert.deepEqual(events[0].rejected.incorrect_explanation, [5]);
+  assert.equal(events.at(-1).stop, "all_slots_verified");
+  assert.doesNotMatch(JSON.stringify(events), /Private review detail|Practice 1-|Role models/);
+});
+
+test("ambiguous slot numbers and incomplete verdicts cannot approve an unreviewed question", async () => {
+  const requested = [];
+  const result = await generatePracticeQuestions(lesson, [], [], {
+    generateBatch: (batch) => generateQuizBatch(batch, async ({ schema, data }) => {
+      if (schema.properties.questions) {
+        requested.push(data.assigned_slots.map((slot) => slot.question_number));
+        const draft = practiceDraft({ data }, requested.length);
+        if (requested.length === 1) {
+          draft.questions.push({ ...draft.questions[2], question: "Conflicting draft?" });
+          draft.questions.push({ ...draft.questions[0], question_number: 100 });
+        } else {
+          assert.match(data.repair_feedback[0].reason, /exactly one draft.*3/);
+          assert.ok(data.repair_feedback.slice(1).every((r) => /unambiguous verdict/.test(r.reason)));
+        }
+        return draft;
+      }
+      const verdicts = data.questions.map(({ question_index, question_number }) => ({ question_index, question_number, supported: true }));
+      if (requested.length === 1) {
+        verdicts.pop(); // No decision on slot 10.
+        verdicts[2].question_number = 7; // The index refers to slot 4. Neither slot can use this verdict.
+        verdicts.push({ ...verdicts[4], supported: false }); // Conflicting decisions on slot 6.
+        verdicts.push({ question_index: 99, supported: true });
+      }
+      return { verdicts: verdicts.reverse() };
+    }),
+  });
+  assert.deepEqual(requested[1], [3, 4, 6, 7, 10]);
+  assert.equal(requested.length, 2);
+  assert.equal(result.length, 10);
+  assert.equal(result.filter((q) => q.question.startsWith("Practice 1-")).length, 5);
+  assert.ok(result.every((q) => q.grounding.model_review_passed && q.question !== "Conflicting draft?"));
+});
+
+test("nine verified questions never become a quiz while the last explanation fails review", async (t) => {
+  const logs = t.mock.method(console, "info", () => {});
+  const sizes = [];
+  await assert.rejects(generatePracticeQuestions(lesson, [], [], {
+    generateBatch: (batch) => generateQuizBatch(batch, async ({ schema, data }) => {
+      if (schema.properties.questions) {
+        const turn = sizes.push(data.assigned_slots.length);
+        const draft = practiceDraft({ data }, turn);
+        draft.questions.at(-1).explanation = "Private unsupported claim.";
+        if (turn > 1) {
+          assert.equal(data.assigned_slots[0].question_number, 10);
+          assert.equal(data.repair_feedback[0].reason, "Private reviewer correction.");
+          assert.equal(data.repair_feedback[0].draft.explanation, "Private unsupported claim.");
+          assert.equal(data.previous_questions.length, 9);
+        }
+        return draft;
+      }
+      return { verdicts: data.questions.map((q) => ({
+        question_index: q.question_index,
+        question_number: q.question_number,
+        supported: q.explanation !== "Private unsupported claim.",
+        reason: "Private reviewer correction.",
+        reason_code: q.explanation === "Private unsupported claim." ? "private-unrecognized-code" : "supported",
+      })) };
+    }),
+  }), { statusCode: 422, code: "QUIZ_REVIEW_REJECTED" });
+  assert.deepEqual(sizes, [10, 1, 1, 1]);
+  const events = validationEvents(logs);
+  assert.equal(events.at(-1).passed, 9);
+  assert.equal(events.at(-1).stop, "no_progress");
+  assert.equal(events.at(-1).stalledRounds, 3);
+  assert.doesNotMatch(JSON.stringify(events), /private/i);
 });
 
 test("the shared practice deadline stops later batches and repairs", async (context) => {
@@ -682,6 +961,41 @@ test("the shared practice deadline stops later batches and repairs", async (cont
     assert.equal(calls, 1);
   }
   assert.deepEqual(timeouts, [240000, 240000]);
+});
+
+test("a late deadline or provider outage ends repair after nine approvals", async (t) => {
+  const started = Date.now();
+  let now = started;
+  t.mock.method(Date, "now", () => now);
+  const logs = t.mock.method(console, "info", () => {});
+  for (const stop of ["deadline", "provider_unavailable"]) {
+    now = started;
+    const sizes = [];
+    await assert.rejects(generatePracticeQuestions(lesson, [], [], {
+      generateBatch: (batch) => generateQuizBatch(batch, async ({ schema, data, deadlineAt }) => {
+        assert.equal(deadlineAt, started + 240_000);
+        if (schema.properties.questions) {
+          const turn = sizes.push(data.assigned_slots.length);
+          if (turn === 2) {
+            assert.equal(data.assigned_slots[0].question_number, 5);
+            if (stop === "deadline") now = deadlineAt;
+            throw Object.assign(new Error("Provider unavailable."), {
+              statusCode: 503, code: "PRACTICE_PROVIDERS_UNAVAILABLE",
+            });
+          }
+          return practiceDraft({ data }, turn);
+        }
+        return { verdicts: data.questions.map(({ question_index, question_number }) => ({
+          question_index, question_number, supported: question_number !== 5,
+          reason: "The explanation is unsupported.",
+        })) };
+      }),
+    }), { statusCode: 503, code: stop === "deadline" ? "GENERATION_TIMEOUT" : "PRACTICE_PROVIDERS_UNAVAILABLE" });
+    assert.deepEqual(sizes, [10, 1]);
+    const event = validationEvents(logs).at(-1);
+    assert.equal(event.stop, stop);
+    assert.equal(event.passed, 9);
+  }
 });
 
 test("students resume their own attempt, submit once, then retry with the latest result", async (t) => {
