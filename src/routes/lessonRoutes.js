@@ -48,12 +48,16 @@ const practiceHandler = (key, handler) => async (req, res) => {
 };
 router.post("/practice/start", authenticateUser, async (req, res, next) => {
   try {
-    res.status(202).json({ success: true, job: await queueModulePractice(req.user, req.body) });
+    const job = await queueModulePractice(req.user, req.body);
+    if (job.status === "queued") void req.app.locals.practiceWorker?.wake();
+    res.status(202).json({ success: true, job });
   } catch (error) { next(error); }
 });
 router.get("/practice/jobs/:jobId", authenticateUser, async (req, res, next) => {
   try {
-    res.set("Cache-Control", "no-store").json({ success: true, job: await getModulePracticeJob(req.user, req.params.jobId) });
+    const job = await getModulePracticeJob(req.user, req.params.jobId);
+    if (job.status === "queued") void req.app.locals.practiceWorker?.wake();
+    res.set("Cache-Control", "no-store").json({ success: true, job });
   } catch (error) { next(error); }
 });
 router.post("/practice/submit", authenticateUser, practiceHandler("result", submitModulePractice));

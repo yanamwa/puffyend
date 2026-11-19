@@ -33,10 +33,10 @@ const practiceModes = new Set([
   "timed",
   "mixed",
 ]);
-const mixedBatchTypes = [
-  "multiple_choice",
-  "multiple_choice",
-  "multiple_choice",
+const mixedPracticeTypes = [
+  ...Array(6).fill("multiple_choice"),
+  "true_false",
+  "identification",
   "true_false",
   "identification",
 ];
@@ -121,46 +121,75 @@ function recapPerformance(questions, submitted) {
 }
 
 async function generatePracticeBatch(options, generateBatch) {
+  const checkDeadline = () => {
+    if (options.requestOptions.signal.aborted)
+      throw requestError(
+        "Practice preparation took too long. Please try again.",
+        503,
+      );
+  };
+  const prepare = async (batch) => {
+    checkDeadline();
+    const questions = await generateBatch({
+      ...batch,
+      maxAttempts: 1,
+      preserveValidated: true,
+    });
+    checkDeadline();
+    return questions;
+  };
+  let failure;
   try {
-    return await generateBatch(options);
+    return await prepare(options);
   } catch (error) {
     const validationFailed =
       error.statusCode === 422 || error.code === DUPLICATE_QUIZ_QUESTION;
     if (!validationFailed || options.types.length <= 1) throw error;
+    failure = error;
   }
 
   const { types, skills, practiceFocus } = options;
-  const midpoint = Math.ceil(types.length / 2);
-  const generateRange = (start, end) =>
-    generatePracticeBatch(
-      {
-        ...options,
-        types: types.slice(start, end),
-        skills: skills.slice(start, end),
-        practiceFocus: practiceFocus && {
-          ...practiceFocus,
-          target_count:
-            Math.round((practiceFocus.target_count * end) / types.length) -
-            Math.round((practiceFocus.target_count * start) / types.length),
-          target_topics: practiceFocus.target_topics?.slice(
-            Math.round((practiceFocus.target_count * start) / types.length),
-            Math.round((practiceFocus.target_count * end) / types.length),
-          ),
-          target_concepts: practiceFocus.target_concepts?.slice(
-            Math.round((practiceFocus.target_count * start) / types.length),
-            Math.round((practiceFocus.target_count * end) / types.length),
-          ),
-        },
-      },
-      generateBatch,
-    );
+  const questions = Array(types.length).fill(null);
+  for (const { index, question } of failure.validatedQuestions || [])
+    questions[index] = question;
+  const retained = questions.filter(Boolean);
+  if (retained.length) options.onValidated?.(retained);
 
-  // Smaller groups retain every assigned slot and pass the same validation.
-  // Stop splitting at one question; rejected answers must never become practice.
-  // Each accepted group is visible to the following prompts for diversity.
-  const first = await generateRange(0, midpoint);
-  const second = await generateRange(midpoint, types.length);
-  return [...first, ...second];
+  const pending = types
+    .map((_, index) => index)
+    .filter((index) => !questions[index]);
+  const midpoint = Math.ceil(pending.length / 2);
+  const groups =
+    pending.length > 5
+      ? [pending.slice(0, midpoint), pending.slice(midpoint)]
+      : [pending];
+  // One repair round only: retain reviewed questions, regenerate rejected slots,
+  // and share accepted stems with the following group. Never split recursively.
+  for (const indexes of groups) {
+    const focusIndexes = indexes.filter(
+      (index) => index < practiceFocus?.target_count,
+    );
+    const repaired = await prepare({
+      ...options,
+      types: indexes.map((index) => types[index]),
+      skills: indexes.map((index) => skills[index]),
+      initialCorrection: failure.message,
+      practiceFocus: practiceFocus && {
+        ...practiceFocus,
+        target_count: focusIndexes.length,
+        target_topics:
+          practiceFocus.target_topics &&
+          focusIndexes.map((index) => practiceFocus.target_topics[index]),
+        target_concepts:
+          practiceFocus.target_concepts &&
+          focusIndexes.map((index) => practiceFocus.target_concepts[index]),
+      },
+    });
+    indexes.forEach((index, position) => {
+      questions[index] = repaired[position];
+    });
+  }
+  return questions;
 }
 
 export async function generatePracticeQuestions(
@@ -170,9 +199,9 @@ export async function generatePracticeQuestions(
   { format = "mixed", generateBatch = generateQuizBatch, history = [] } = {},
 ) {
   const shortAnswer = format === "qna";
-  const batchTypes = shortAnswer
-    ? mixedBatchTypes.map(() => "identification")
-    : mixedBatchTypes;
+  const types = shortAnswer
+    ? Array(QUESTION_COUNT).fill("identification")
+    : mixedPracticeTypes;
   const moduleId = String(module.id);
   const pages = module.lessonPages.map((page) => ({
     moduleId,
@@ -195,9 +224,6 @@ export async function generatePracticeQuestions(
     : 0.7;
   // Keep a steady baseline at 60% and above; adapt through missed concepts.
   const difficulty = accuracy < 0.6 ? "easy" : "medium";
-  const batchCount = QUESTION_COUNT / batchTypes.length;
-  const hotsPerBatch = difficulty === "easy" ? 1 : 2;
-  const hotsCount = hotsPerBatch * batchCount;
   const weakTopics = analyzePractice(performance, history, module.title).filter(
     (group) => group.needsReview,
   );
@@ -265,60 +291,59 @@ export async function generatePracticeQuestions(
         group.topic,
     ),
   );
-  const skills = batchTypes.map((_, index) =>
-    index < hotsPerBatch ? "HOTS" : "LOTS",
-  );
+  const focusSkills =
+    difficulty === "easy" ? ["HOTS", "LOTS", "LOTS"] : ["HOTS", "HOTS", "LOTS"];
+  const skills = [...focusSkills, ...focusSkills, ...Array(4).fill("LOTS")];
+  const hotsCount = skills.filter((skill) => skill === "HOTS").length;
   const distribution = {
     questionCount: QUESTION_COUNT,
-    multipleChoiceCount: shortAnswer ? 0 : 3 * batchCount,
-    trueFalseCount: shortAnswer ? 0 : batchCount,
-    identificationCount: shortAnswer ? QUESTION_COUNT : batchCount,
+    multipleChoiceCount: shortAnswer ? 0 : 6,
+    trueFalseCount: shortAnswer ? 0 : 2,
+    identificationCount: shortAnswer ? QUESTION_COUNT : 2,
     hotsCount,
     lotsCount: QUESTION_COUNT - hotsCount,
   };
-  const batches = Array.from({ length: batchCount }, (_, index) => index);
   const accepted = [...previousQuestions];
-
-  const questions = [];
-  // The second batch must see the first batch's accepted questions for diversity.
-  for (const index of batches) {
-    const start = Math.floor((index * chunks.length) / batchCount);
-    const spread = Array.from(
+  const spread = [0, Math.floor(chunks.length / 2)].flatMap((start) =>
+    Array.from(
       { length: Math.min(chunks.length, 4) },
       (_, offset) => chunks[(start + offset) % chunks.length],
-    );
-    const focus = targets
-      .slice(index * 3, index * 3 + 3)
-      .flatMap((topic) => related.get(topic) || []);
-    const context = [...new Set([...spread, ...focus])];
-    const batch = await generatePracticeBatch(
-      {
-        types: batchTypes,
-        chunks: context,
-        title: module.title,
-        objectives: module.learningObjectives,
-        difficulty,
-        skills,
-        distribution,
-        shortAnswer,
-        previousQuestions: accepted,
-        practiceFocus: misses.length
-          ? {
-              target_count: 3,
-              target_topics: targets.slice(index * 3, index * 3 + 3),
-              target_concepts: concepts.slice(index * 3, index * 3 + 3),
-              missed_concepts: misses,
-            }
-          : undefined,
-        onValidated: (batch) => {
-          validateQuizUniqueness(batch, accepted);
-          accepted.push(...batch.map((question) => question.question));
-        },
+    ),
+  );
+  const focusedChunks = targets.flatMap((topic) => related.get(topic) || []);
+  // Draft and independently review the whole set together so both calls can
+  // check for repeated concepts across all ten slots.
+  const questions = await generatePracticeBatch(
+    {
+      types,
+      chunks: [...new Set([...spread, ...focusedChunks])],
+      title: module.title,
+      objectives: module.learningObjectives,
+      difficulty,
+      skills,
+      distribution,
+      shortAnswer,
+      requestOptions: {
+        signal: AbortSignal.timeout(120000),
+        timeoutMs: 45000,
+        maxAttempts: 1,
       },
-      generateBatch,
-    );
-    questions.push(...batch);
-  }
+      previousQuestions: accepted,
+      practiceFocus: misses.length
+        ? {
+            target_count: targets.length,
+            target_topics: targets,
+            target_concepts: concepts,
+            missed_concepts: misses,
+          }
+        : undefined,
+      onValidated: (batch) => {
+        validateQuizUniqueness(batch, accepted);
+        accepted.push(...batch.map((question) => question.question));
+      },
+    },
+    generateBatch,
+  );
 
   if (questions.length !== QUESTION_COUNT)
     throw requestError(

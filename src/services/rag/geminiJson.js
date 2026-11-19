@@ -2,13 +2,21 @@ import axios from "axios";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function generateJson({ instruction, data, schema }) {
+export async function generateJson({
+  instruction,
+  data,
+  schema,
+  signal,
+  timeoutMs = 90000,
+  maxAttempts = 3,
+}) {
   if (!process.env.GEMINI_API_KEY)
     throw new Error("GEMINI_API_KEY is missing.");
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
   let response;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
+      signal?.throwIfAborted();
       response = await axios.post(
         `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
         {
@@ -30,17 +38,34 @@ export async function generateJson({ instruction, data, schema }) {
         },
         {
           headers: { "x-goog-api-key": process.env.GEMINI_API_KEY },
-          timeout: 90000,
+          timeout: timeoutMs,
+          signal,
         },
       );
       break;
     } catch (error) {
+      if (signal?.aborted)
+        throw Object.assign(
+          new Error("Content generation took too long. Please try again."),
+          {
+            statusCode: 503,
+            code: "GENERATION_TIMEOUT",
+            retryable: false,
+          },
+        );
       const status = error.response?.status;
-      const providerMessage = String(error.response?.data?.error?.message || "");
+      const providerMessage = String(
+        error.response?.data?.error?.message || "",
+      );
       if (status === 403 && /leaked/i.test(providerMessage))
-        throw Object.assign(new Error("The Gemini API key was rejected as leaked. An administrator must replace GEMINI_API_KEY and restart the backend, then retry lesson generation."), {statusCode: 503, retryable: false});
+        throw Object.assign(
+          new Error(
+            "The Gemini API key was rejected as leaked. An administrator must replace GEMINI_API_KEY and restart the backend, then retry lesson generation.",
+          ),
+          { statusCode: 503, retryable: false },
+        );
       const transient = !status || status === 429 || status >= 500;
-      if (!transient || attempt === 2)
+      if (!transient || attempt === maxAttempts - 1)
         throw Object.assign(
           new Error(
             "Gemini generation request failed. Check API configuration or retry later.",

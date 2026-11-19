@@ -231,8 +231,11 @@ export async function startApplication(app, availability) {
           ),
         );
         startCatalogLessonWorker(db);
-        startModulePracticeWorker();
       }
+      // A student's request can wake practice even on a host with idle polling disabled.
+      app.locals.practiceWorker = startModulePracticeWorker({
+        poll: process.env.ENABLE_BACKGROUND_JOBS === "true",
+      });
       console.log("PostgreSQL initialized successfully.");
       availability.stage = "ready";
       availability.ready = true;

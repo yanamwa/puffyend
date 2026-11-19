@@ -310,7 +310,7 @@ async function startServer() {
     await cleanupSyllabusUploads();
     setInterval(() => cleanupSyllabusUploads().catch(console.error), 3600000).unref();
     startLessonWorker();
-    startModulePracticeWorker();
+    app.locals.practiceWorker = startModulePracticeWorker();
     startCatalogLessonWorker(db);
 
     console.log("MySQL Connected Successfully.");
