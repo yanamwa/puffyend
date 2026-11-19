@@ -374,6 +374,9 @@ export async function generateQuizBatch(
                       "Use practice_focus.target_count questions to check the concepts described by practice_focus.missed_concepts. Use the remaining questions to review other concepts where the supplied evidence covers them.",
                       "If none of the missed concepts appear in the supplied evidence, cover other concepts supported by the supplied evidence.",
                       "Use different wording and contexts from the missed questions. Missed concepts are learning targets and never evidence.",
+                      "Revisit missed concepts with short, direct sentences and familiar examples supported by the evidence. Make these questions clearer and easier to understand; avoid trick wording and unnecessary complexity.",
+                      "Keep the remaining questions at the supplied baseline difficulty. Do not increase difficulty or reasoning depth merely because previous answers were correct.",
+                      "Use concise explanations to clarify each missed concept and why the answer is correct.",
                     ]
                   : []),
               ].join(" ")

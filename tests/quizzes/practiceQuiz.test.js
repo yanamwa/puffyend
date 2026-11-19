@@ -601,7 +601,7 @@ await test("saved quiz content is returned once in each course API representatio
     moduleIndex: 0,
   }));
   context.mock.method(db, "execute", async (sql) => {
-    if (sql.includes("INFORMATION_SCHEMA.COLUMNS"))
+    if (/information_schema\.columns/i.test(sql))
       return [[{ COLUMN_NAME: "course_id" }]];
     if (sql.includes("FROM users")) return [[{ userId: 1, role: "admin" }]];
     if (sql.includes("FROM courses"))

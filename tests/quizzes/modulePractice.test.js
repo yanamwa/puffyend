@@ -3,6 +3,7 @@ import { after, test } from "node:test";
 import { db } from "../../src/db.js";
 import { getQuizAttempts } from "../../src/controllers/monitoringController.js";
 import { DUPLICATE_QUIZ_QUESTION } from "../../src/services/quizzes/quizValidation.js";
+import { generateQuizBatch } from "../../src/services/rag/quizRagService.js";
 import {
   generatePracticeQuestions,
   startModulePractice,
@@ -62,7 +63,7 @@ function question(id, title) {
   };
 }
 
-test("practice adapts to misses and creates 20 unique mixed questions from the saved lesson", async () => {
+test("practice adapts to misses and creates 10 unique mixed questions from the saved lesson", async () => {
   let calls = 0;
   const missed = {
     question: recap[0].question,
@@ -76,6 +77,14 @@ test("practice adapts to misses and creates 20 unique mixed questions from the s
     {
       generateBatch: async (batch) => {
         assert.equal(batch.difficulty, "easy");
+        assert.deepEqual(batch.distribution, {
+          questionCount: 10,
+          multipleChoiceCount: 6,
+          trueFalseCount: 2,
+          identificationCount: 2,
+          hotsCount: 2,
+          lotsCount: 8,
+        });
         assert.equal(batch.chunks[0].source_filename, "Social Learning");
         assert.deepEqual(batch.practiceFocus, {
           target_count: 3,
@@ -96,21 +105,110 @@ test("practice adapts to misses and creates 20 unique mixed questions from the s
       },
     },
   );
-  assert.equal(questions.length, 20);
+  assert.equal(questions.length, 10);
   assert.equal(
     questions.filter((item) => item.type === "identification").length,
-    4,
+    2,
   );
-  assert.equal(new Set(questions.map((item) => item.id)).size, 20);
+  assert.equal(new Set(questions.map((item) => item.id)).size, 10);
 });
 
-test("Q&A practice requests 20 standalone identification questions", async () => {
+test("scores from 60% through 100% keep the same practice difficulty and focus on actual misses", async () => {
+  for (const [correct, total] of [
+    [3, 5],
+    [8, 10],
+    [17, 20],
+    [9, 10],
+    [10, 10],
+  ]) {
+    const performance = Array.from({ length: total }, (_, index) => ({
+      question: `Earlier concept ${index + 1}?`,
+      topic: index < correct ? "Learning" : "Identity",
+      isCorrect: index < correct,
+    }));
+    const misses = performance
+      .filter((item) => !item.isCorrect)
+      .map(({ question, topic }) => ({ question, topic }));
+    let generatedCount = 0;
+    const questions = await generatePracticeQuestions(lesson, performance, [], {
+      generateBatch: async (batch) => {
+        assert.equal(batch.difficulty, "medium", `${correct}/${total}`);
+        assert.equal(batch.distribution.hotsCount, 4);
+        assert.equal(batch.distribution.lotsCount, 6);
+        assert.deepEqual(
+          batch.practiceFocus,
+          misses.length
+            ? { target_count: 3, missed_concepts: misses }
+            : undefined,
+        );
+        return batch.types.map((type, index) => ({
+          ...question(++generatedCount, "Reinforcement"),
+          type,
+          options: type === "multiple_choice" ? ["A", "B", "C", "D"] : [],
+          thinking_skill: batch.skills[index],
+        }));
+      },
+    });
+    assert.equal(questions.length, 10);
+  }
+});
+
+test("missed-concept prompts ask for clearer questions without increasing difficulty", async () => {
+  const practiceFocus = {
+    target_count: 1,
+    missed_concepts: [{ question: recap[0].question, topic: "Identity" }],
+  };
+  const result = await generateQuizBatch(
+    {
+      types: ["true_false"],
+      skills: ["LOTS"],
+      difficulty: "medium",
+      chunks: [
+        {
+          chunk_id: 1,
+          chunk_text: lesson.lessonPages[0].content,
+          source_filename: "Social Learning",
+        },
+      ],
+      practiceFocus,
+    },
+    async (request) => {
+      if (!request.schema.properties.questions)
+        return { verdicts: [{ question_index: 0, supported: true }] };
+      assert.deepEqual(request.data.practice_focus, practiceFocus);
+      assert.match(
+        request.instruction,
+        /short, direct sentences and familiar examples/,
+      );
+      assert.match(request.instruction, /clearer and easier to understand/);
+      assert.match(
+        request.instruction,
+        /Do not increase difficulty or reasoning depth/,
+      );
+      assert.match(
+        request.instruction,
+        /Missed concepts are learning targets and never evidence/,
+      );
+      return {
+        questions: [
+          {
+            ...question(1, "Role models give students examples to observe"),
+            evidence_ids: ["c1-e0"],
+          },
+        ],
+      };
+    },
+  );
+  assert.equal(result.length, 1);
+});
+
+test("Q&A practice requests 10 standalone identification questions", async () => {
   let count = 0;
   const questions = await generatePracticeQuestions(lesson, [], [], {
     format: "qna",
     generateBatch: async (batch) => {
       assert.equal(batch.shortAnswer, true);
-      assert.equal(batch.distribution.identificationCount, 20);
+      assert.equal(batch.distribution.identificationCount, 10);
       assert.equal(batch.distribution.multipleChoiceCount, 0);
       assert.equal(batch.distribution.trueFalseCount, 0);
       assert.ok(batch.types.every((type) => type === "identification"));
@@ -122,7 +220,7 @@ test("Q&A practice requests 20 standalone identification questions", async () =>
       }));
     },
   });
-  assert.equal(questions.length, 20);
+  assert.equal(questions.length, 10);
   assert.ok(
     questions.every(
       (item) => item.type === "identification" && !item.options.length,
@@ -130,7 +228,7 @@ test("Q&A practice requests 20 standalone identification questions", async () =>
   );
 });
 
-test("practice splits only the exhausted duplicate batch and keeps all 20 slots", async () => {
+test("practice splits only the exhausted duplicate batch and keeps all 10 slots", async () => {
   let stems = 0;
   let failedFirstBatch = false;
   const recovery = [];
@@ -183,19 +281,19 @@ test("practice splits only the exhausted duplicate batch and keeps all 20 slots"
       [2, 1],
     ],
   );
-  assert.equal(questions.length, 20);
-  assert.equal(new Set(questions.map(({ question }) => question)).size, 20);
+  assert.equal(questions.length, 10);
+  assert.equal(new Set(questions.map(({ question }) => question)).size, 10);
   assert.equal(
     questions.filter(({ type }) => type === "multiple_choice").length,
-    12,
+    6,
   );
   assert.equal(
     questions.filter(({ type }) => type === "identification").length,
-    4,
+    2,
   );
   assert.equal(
     questions.filter(({ thinking_skill }) => thinking_skill === "HOTS").length,
-    4,
+    2,
   );
 });
 
@@ -217,7 +315,7 @@ test("students resume their own attempt, submit once, then retry with the latest
   const detailRecords = [];
   let submissionOrder = 0;
   async function execute(sql, values) {
-    if (sql.includes("INFORMATION_SCHEMA"))
+    if (/information_schema/i.test(sql))
       return [[{ COLUMN_NAME: "course_id" }]];
     if (sql.includes("JOIN course_enrollments"))
       return [values[1] === student.userId ? [course] : []];
@@ -311,7 +409,7 @@ test("students resume their own attempt, submit once, then retry with the latest
   async function generate(module, performance, previous, { format }) {
     assert.equal(module.id, scope.moduleId);
     inputs.push({ performance, previous, format });
-    return Array.from({ length: 20 }, (_, i) => ({
+    return Array.from({ length: 10 }, (_, i) => ({
       ...question(i + 1, `Set ${inputs.length}, item`),
       ...(format === "qna"
         ? { type: "identification", options: [], correct_answer: "Role model" }
@@ -357,7 +455,7 @@ test("students resume their own attempt, submit once, then retry with the latest
     }),
     {
       statusCode: 422,
-      message: "We couldn't prepare 20 practice questions. Please try again.",
+      message: "We couldn't prepare 10 practice questions. Please try again.",
     },
   );
   assert.equal(rows.length, 0);
@@ -372,7 +470,8 @@ test("students resume their own attempt, submit once, then retry with the latest
   ]);
   assert.deepEqual(simultaneous, first);
   assert.equal(inputs.length, 1);
-  assert.equal(first.total, 20);
+  assert.equal(first.total, 10);
+  assert.equal(first.questions.length, 10);
   assert.equal(first.questions[0].correct_answer, undefined);
   assert.equal(first.questions[0].explanation, undefined);
   assert.equal(forPlayer.id, first.id);
@@ -383,9 +482,17 @@ test("students resume their own attempt, submit once, then retry with the latest
   );
   assert.deepEqual(await startModulePractice(student, scope, generate), first);
 
+  // An unfinished 20-question attempt from before the limit changed resumes at 10.
+  const legacyQuestions = [
+    ...JSON.parse(rows[0].questions_json),
+    ...Array.from({ length: 10 }, (_, i) => question(i + 11, "Older practice")),
+  ];
+  rows[0].questions_json = JSON.stringify(legacyQuestions);
+  assert.deepEqual(await startModulePractice(student, scope, generate), first);
+
   const answers = first.questions.map(({ id }) => ({
     questionId: id,
-    answer: id <= 3 ? "False" : "True",
+    answer: id <= 2 ? "False" : "True",
   }));
   await assert.rejects(
     submitModulePractice(
@@ -397,7 +504,7 @@ test("students resume their own attempt, submit once, then retry with the latest
   await assert.rejects(
     submitModulePractice(student, {
       attemptId: first.id,
-      answers: answers.slice(0, 19),
+      answers: answers.slice(0, 9),
     }),
     { statusCode: 400 },
   );
@@ -405,7 +512,10 @@ test("students resume their own attempt, submit once, then retry with the latest
     attemptId: first.id,
     answers,
   });
-  assert.equal(firstResult.score, 17);
+  assert.equal(firstResult.score, 8);
+  assert.equal(firstResult.total, 10);
+  assert.equal(firstResult.percentage, 80);
+  assert.equal(firstResult.answers.length, 10);
   assert.equal(firstResult.mastered, false);
   assert.deepEqual(
     await submitModulePractice(student, { attemptId: first.id }),
@@ -435,7 +545,7 @@ test("students resume their own attempt, submit once, then retry with the latest
           : answer,
     ),
   });
-  assert.equal(result.score, 18);
+  assert.equal(result.score, 9);
   assert.equal(result.percentage, 90);
   assert.equal(result.mastered, true);
   assert.equal(result.answers[1].userAnswer, "");
@@ -450,10 +560,10 @@ test("students resume their own attempt, submit once, then retry with the latest
     mode: "flashcard",
     answers: flashcards.questions.map(({ id }) => ({
       questionId: id,
-      answer: id < 19 ? "good" : "hard",
+      answer: id < 10 ? "good" : "hard",
     })),
   });
-  assert.equal(flashcardResult.score, 18);
+  assert.equal(flashcardResult.score, 9);
 
   const mixed = await startModulePractice(student, scope, generate);
   const qnaScope = { ...scope, mode: "qna" };
@@ -470,10 +580,10 @@ test("students resume their own attempt, submit once, then retry with the latest
     mode: "flashcard",
     answers: qna.questions.map(({ id }) => ({
       questionId: id,
-      answer: id < 19 ? "role model" : "good",
+      answer: id < 10 ? "role model" : "good",
     })),
   });
-  assert.equal(qnaResult.score, 18);
+  assert.equal(qnaResult.score, 9);
   const mixedResult = await submitModulePractice(student, {
     attemptId: mixed.id,
     answers,

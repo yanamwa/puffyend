@@ -163,7 +163,9 @@ export async function sendCatalogCourseStatusEmail({
 }) {
   const course = `${code} - ${title}`;
   const greeting = name ? `Hi ${name},` : "Hello,";
-  const message = `The catalog course ${course} is now ${status}.`;
+  const message = status === "active"
+    ? `The catalog course ${course} is now active and available in catalog selection for new classes.`
+    : `The catalog course ${course} is now inactive and hidden from catalog selection for new classes.`;
   const syllabus = `Syllabus you uploaded: ${syllabusFilename}`;
   await sendEmail({
     to: { address: email },

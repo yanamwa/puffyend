@@ -53,7 +53,7 @@ const programs = (value) =>
   Array.isArray(value) ? value : JSON.parse(value || "[]");
 const present = (row) => {
   const { normalized_code, available_normalized_code, ...rest } = row;
-  return { ...rest, programs: programs(row.programs) };
+  return { ...rest, status: row.status === "active" ? "active" : "inactive", programs: programs(row.programs) };
 };
 const windowFor = (req) => ({
   page: Math.max(1, parseInt(req.query.page) || 1),
@@ -163,7 +163,7 @@ router.get(
     });
   }),
 );
-// Syllabus Management shares the catalog's upload and approval workflow.
+// Syllabus activation controls availability in the course catalog.
 const syllabusAccess = requireRole("professor", "admin", "super_admin");
 const syllabusRecordsSql = `
   SELECT v.version_id,v.catalog_id,v.filename,v.academic_year,v.semester,
@@ -194,8 +194,7 @@ router.get(
     const [[summary]] = await db.execute(
       `SELECT COUNT(DISTINCT c.catalog_id) FILTER (WHERE c.archived_at IS NULL) AS total,
               COUNT(DISTINCT c.catalog_id) FILTER (WHERE c.archived_at IS NULL AND c.status='active') AS active,
-              COUNT(DISTINCT c.catalog_id) FILTER (WHERE c.archived_at IS NULL AND c.status='draft') AS pending,
-              COUNT(DISTINCT c.catalog_id) FILTER (WHERE c.archived_at IS NULL AND c.status='inactive') AS inactive
+              COUNT(DISTINCT c.catalog_id) FILTER (WHERE c.archived_at IS NULL AND c.status<>'active') AS inactive
        FROM syllabus_versions v
        JOIN course_catalog c ON c.catalog_id=v.catalog_id ${visibleWhere}`,
       values,
@@ -204,10 +203,8 @@ router.get(
       conditions.push("c.archived_at IS NULL");
       conditions.push(latestSubmission);
     }
-    if (req.query.view === "approval") conditions.push("c.status='draft'");
-    else if (["active", "inactive", "pending"].includes(req.query.status)) {
-      conditions.push("c.status=? AND c.archived_at IS NULL");
-      values.push(req.query.status === "pending" ? "draft" : req.query.status);
+    if (["active", "inactive"].includes(req.query.status)) {
+      conditions.push((req.query.status === "active" ? "c.status='active'" : "c.status<>'active'") + " AND c.archived_at IS NULL");
     } else if (history && req.query.status === "archived") {
       conditions.push("c.archived_at IS NOT NULL");
     }
@@ -289,7 +286,7 @@ router.get(
   admin,
   run(async (_req, res) => {
     const [[summary]] = await db.query(
-      `SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE status='active' AND archived_at IS NULL) AS active,COUNT(*) FILTER (WHERE status='draft' AND archived_at IS NULL) AS draft,COUNT(*) FILTER (WHERE status IN ('draft', 'inactive') AND archived_at IS NULL) AS inactive,(SELECT COUNT(*) FROM courses WHERE professor_id IS NOT NULL OR COALESCE(professor_email,'') <> '') AS classes FROM course_catalog`,
+      `SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE status='active' AND archived_at IS NULL) AS active,COUNT(*) FILTER (WHERE status<>'active' AND archived_at IS NULL) AS inactive,(SELECT COUNT(*) FROM courses WHERE professor_id IS NOT NULL OR COALESCE(professor_email,'') <> '') AS classes FROM course_catalog`,
     );
     res.json({ success: true, summary });
   }),
@@ -499,11 +496,8 @@ router.get(
         ...Array(2).fill("%" + String(req.query.q).slice(0, 255) + "%"),
       );
     }
-    if (req.query.status === "inactive") {
-      conditions.push("status IN ('draft', 'inactive')");
-    } else if (["active", "draft"].includes(req.query.status)) {
-      conditions.push("status=?");
-      values.push(req.query.status);
+    if (["active", "inactive"].includes(req.query.status)) {
+      conditions.push(req.query.status === "active" ? "status='active'" : "status<>'active'");
     }
     if (["BSIT", "BSCS"].includes(req.query.program)) {
       conditions.push("programs::jsonb @> ?::jsonb");
@@ -586,7 +580,7 @@ router.post(
           throw error;
         }
         const [insert] = await connection.execute(
-          "INSERT INTO course_catalog (code,normalized_code,title,description,units,programs) VALUES (?,?,?,?,?,?)",
+          "INSERT INTO course_catalog (code,normalized_code,title,description,units,programs,status) VALUES (?,?,?,?,?,?,'inactive')",
           [
             details.code,
             details.normalizedCode,
@@ -599,7 +593,7 @@ router.post(
         course = {
           catalog_id: insert.insertId,
           ...details,
-          status: "draft",
+          status: "inactive",
           archived_at: null,
         };
         await audit(
@@ -658,12 +652,12 @@ router.post(
       );
       if (!creating) {
         await connection.execute(
-          "UPDATE course_catalog SET status='draft',reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE catalog_id=?",
+          "UPDATE course_catalog SET status='inactive',reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE catalog_id=?",
           [course.catalog_id],
         );
-        await audit(connection, req, "Submitted syllabus for approval", course.catalog_id, {
+        await audit(connection, req, "Uploaded syllabus awaiting activation", course.catalog_id, {
           versionId: version.insertId,
-          status: { before: course.status, after: "draft" },
+          status: { before: course.status, after: "inactive" },
         });
       }
       return { catalogId: course.catalog_id, versionId: version.insertId, generationQueued: false };
@@ -675,7 +669,7 @@ router.patch(
   "/:id",
   manageCatalogStatus,
   run(async (req, res) => {
-    const { action, reviewed } = req.body;
+    const { action } = req.body;
     if (action !== "activate" && action !== "deactivate")
       fail("Choose Activate or Deactivate.");
     const activating = action === "activate";
@@ -688,8 +682,6 @@ router.patch(
       );
       if (!course) fail("Course not found.", 404);
       if (course.archived_at) fail("This catalog course is archived.", 409);
-      if (activating && reviewed !== true)
-        fail("Explicit review confirmation is required.");
 
       const [[version]] = await connection.execute(
         `SELECT v.version_id,v.filename,v.uploaded_by,u.email,
@@ -706,25 +698,20 @@ router.patch(
         fail("A newer syllabus was submitted. Refresh and review the latest upload.", 409);
       if (course.status === status) return null;
 
+      await connection.execute(
+        "UPDATE course_catalog SET status=?,reviewed_by=?,reviewed_at=NOW(),updated_at=NOW() WHERE catalog_id=?",
+        [status, actor(req), course.catalog_id],
+      );
       if (activating) {
-        await connection.execute(
-          "UPDATE course_catalog SET status='active',reviewed_by=?,reviewed_at=NOW(),updated_at=NOW() WHERE catalog_id=?",
-          [actor(req), course.catalog_id],
-        );
         await connection.execute(
           `INSERT INTO catalog_lesson_jobs (version_id)
            SELECT version_id FROM syllabus_versions
            WHERE catalog_id=? AND coverage_modules IS NOT NULL
-             AND coverage_modules <> '[]'::jsonb
+             AND coverage_modules <> '[]'
            ON CONFLICT (version_id) DO UPDATE
              SET status='queued',error_message=NULL,updated_at=NOW()
              WHERE catalog_lesson_jobs.status='failed'`,
           [course.catalog_id],
-        );
-      } else {
-        await connection.execute(
-          "UPDATE course_catalog SET status='inactive',reviewed_by=?,reviewed_at=NOW(),updated_at=NOW() WHERE catalog_id=?",
-          [actor(req), course.catalog_id],
         );
       }
       await audit(
