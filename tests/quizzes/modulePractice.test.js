@@ -63,6 +63,28 @@ function question(id, title) {
   };
 }
 
+function practiceDraft(request, draft) {
+  return {
+    questions: request.data.assigned_slots.map((slot, index) => ({
+      question: `Practice ${draft}-${index}?`,
+      type: slot.type,
+      options:
+        slot.type === "multiple_choice"
+          ? ["Role model", "Identity", "Algorithm", "Database"]
+          : slot.type === "true_false"
+            ? ["True", "False"]
+            : [],
+      correct_answer: slot.type === "true_false" ? "True" : "Role model",
+      explanation: "Role models give students examples to observe.",
+      topic: slot.topic || "Learning",
+      concept: slot.concept || "Role models",
+      thinking_skill: slot.thinking_skill,
+      cognitive_level: slot.allowed_cognitive_levels[0],
+      evidence_ids: [request.data.evidence[0].evidence_id],
+    })),
+  };
+}
+
 test("practice adapts to misses and creates 10 unique mixed questions from the saved lesson", async () => {
   let calls = 0;
   const missed = {
@@ -86,12 +108,12 @@ test("practice adapts to misses and creates 10 unique mixed questions from the s
           lotsCount: 8,
         });
         assert.equal(batch.chunks[0].source_filename, "Social Learning");
-        assert.equal(batch.practiceFocus.target_count, 3);
-        assert.deepEqual(batch.practiceFocus.target_topics, [
-          "Identity",
-          "Identity",
-          "Identity",
-        ]);
+        assert.equal(batch.types.length, 10);
+        assert.equal(batch.practiceFocus.target_count, 6);
+        assert.deepEqual(
+          batch.practiceFocus.target_topics,
+          Array(6).fill("Identity"),
+        );
         assert.equal(
           batch.practiceFocus.missed_concepts[0].question,
           missed.question,
@@ -102,7 +124,7 @@ test("practice adapts to misses and creates 10 unique mixed questions from the s
         );
         assert.equal(
           batch.skills.filter((skill) => skill === "HOTS").length,
-          1,
+          2,
         );
         const generated = batch.types.map((type, index) => ({
           ...question(++calls, "Practice"),
@@ -146,12 +168,11 @@ test("scores from 60% through 100% keep the same practice difficulty and focus o
         assert.equal(batch.distribution.hotsCount, 4);
         assert.equal(batch.distribution.lotsCount, 6);
         if (misses.length) {
-          assert.equal(batch.practiceFocus.target_count, 3);
-          assert.deepEqual(batch.practiceFocus.target_topics, [
-            "Identity",
-            "Identity",
-            "Identity",
-          ]);
+          assert.equal(batch.practiceFocus.target_count, 6);
+          assert.deepEqual(
+            batch.practiceFocus.target_topics,
+            Array(6).fill("Identity"),
+          );
           assert.deepEqual(
             batch.practiceFocus.missed_concepts.map(({ question, topic }) => ({
               question,
@@ -268,7 +289,7 @@ test("practice splits only the exhausted duplicate batch and keeps all 10 slots"
             },
           );
         }
-        if (batch.types.length < 5) {
+        if (batch.types.length < 10) {
           assert.ok(batch.previousQuestions.includes(missed.question));
           assert.equal(batch.chunks[0].source_filename, "Social Learning");
           if (recovery.length)
@@ -282,7 +303,7 @@ test("practice splits only the exhausted duplicate batch and keeps all 10 slots"
           options: type === "multiple_choice" ? ["A", "B", "C", "D"] : [],
           thinking_skill: batch.skills[index],
         }));
-        if (batch.types.length < 5)
+        if (batch.types.length < 10)
           recovery.push({
             count: batch.types.length,
             focus: batch.practiceFocus.target_count,
@@ -296,8 +317,8 @@ test("practice splits only the exhausted duplicate batch and keeps all 10 slots"
   assert.deepEqual(
     recovery.map(({ count, focus }) => [count, focus]),
     [
-      [3, 2],
-      [2, 1],
+      [5, 5],
+      [5, 1],
     ],
   );
   assert.equal(questions.length, 10);
@@ -316,7 +337,45 @@ test("practice splits only the exhausted duplicate batch and keeps all 10 slots"
   );
 });
 
-test("practice recovers from exhausted grounding reviews in smaller validated batches", async () => {
+test("an accepted practice set uses one draft and one independent review for all ten questions", async () => {
+  const calls = [];
+  const questions = await generatePracticeQuestions(
+    lesson,
+    [],
+    ["Earlier practice?"],
+    {
+      generateBatch: (batch) =>
+        generateQuizBatch(batch, async (request) => {
+          assert.deepEqual(request.data.previous_questions, [
+            "Earlier practice?",
+          ]);
+          if (request.schema.properties.questions) {
+            calls.push(["draft", request.data.assigned_slots.length]);
+            return practiceDraft(request, 1);
+          }
+          calls.push(["review", request.data.questions.length]);
+          return {
+            verdicts: request.data.questions.map((_, question_index) => ({
+              question_index,
+              supported: true,
+            })),
+          };
+        }),
+    },
+  );
+  assert.deepEqual(calls, [
+    ["draft", 10],
+    ["review", 10],
+  ]);
+  assert.equal(questions.length, 10);
+  assert.ok(
+    questions.every(
+      (item) => item.grounding.model_review_passed && item.source_chunks.length,
+    ),
+  );
+});
+
+test("practice repairs rejected batches once in smaller validated groups", async () => {
   let drafts = 0;
   const batchSizes = [];
   const reviewedSizes = [];
@@ -330,37 +389,17 @@ test("practice recovers from exhausted grounding reviews in smaller validated ba
           return {
             verdicts: request.data.questions.map((_, index) => ({
               question_index: index,
-              supported: count <= 2,
+              supported: count <= 5,
               reason: "Rewrite the ambiguous learning check.",
             })),
           };
         }
-        drafts++;
-        return {
-          questions: request.data.assigned_slots.map((slot, index) => ({
-            question: `Practice ${drafts}-${index}?`,
-            type: slot.type,
-            options:
-              slot.type === "multiple_choice"
-                ? ["Role model", "Identity", "Algorithm", "Database"]
-                : slot.type === "true_false"
-                  ? ["True", "False"]
-                  : [],
-            correct_answer: slot.type === "true_false" ? "True" : "Role model",
-            explanation: "Role models give students examples to observe.",
-            topic: "Learning",
-            concept: "Role models",
-            thinking_skill: slot.thinking_skill,
-            cognitive_level: slot.allowed_cognitive_levels[0],
-            evidence_ids: [request.data.evidence[0].evidence_id],
-          })),
-        };
+        return practiceDraft(request, ++drafts);
       });
     },
   });
-  assert.deepEqual(batchSizes, [5, 3, 2, 1, 2, 5, 3, 2, 1, 2]);
-  assert.ok(reviewedSizes.includes(5));
-  assert.ok(reviewedSizes.includes(1));
+  assert.deepEqual(batchSizes, [10, 5, 5]);
+  assert.deepEqual(reviewedSizes, [10, 5, 5]);
   assert.equal(questions.length, 10);
   assert.equal(new Set(questions.map(({ question }) => question)).size, 10);
   assert.equal(
@@ -396,8 +435,107 @@ test("practice stops at rejected individual questions and provider failures", as
       }),
       (error) => error === failure,
     );
-    assert.deepEqual(batchSizes, statusCode === 422 ? [5, 3, 2, 1] : [5]);
+    assert.deepEqual(batchSizes, statusCode === 422 ? [10, 5] : [10]);
   }
+});
+
+for (const format of ["mixed", "qna"]) {
+  test(`${format} practice retains approved questions and repairs only rejected slots`, async () => {
+    let drafts = 0;
+    let reviews = 0;
+    let signal;
+    const batchSizes = [];
+    const missed = {
+      question: "Who gives students examples to observe?",
+      topic: "Learning",
+      concept: "Role models",
+      userAnswer: "Algorithm",
+      correctAnswer: "Role model",
+      isCorrect: false,
+    };
+    const questions = await generatePracticeQuestions(lesson, [missed], [], {
+      format,
+      generateBatch: (batch) => {
+        batchSizes.push(batch.types.length);
+        assert.equal(batch.maxAttempts, 1);
+        return generateQuizBatch(batch, async (request) => {
+          signal ||= request.signal;
+          assert.equal(request.signal, signal);
+          assert.equal(request.timeoutMs, 45000);
+          assert.equal(request.maxAttempts, 1);
+          if (request.schema.properties.questions) {
+            if (drafts === 1) {
+              assert.deepEqual(request.data.types, [
+                format === "qna" ? "identification" : "multiple_choice",
+              ]);
+              assert.ok(
+                request.data.previous_questions.includes("Practice 1-0?"),
+              );
+              assert.equal(request.data.practice_focus.target_count, 1);
+              assert.deepEqual(request.data.practice_focus.target_topics, [
+                "Learning",
+              ]);
+              assert.deepEqual(request.data.practice_focus.target_concepts, [
+                "Role models",
+              ]);
+              assert.match(request.data.correction, /ambiguous/);
+            }
+            return practiceDraft(request, ++drafts);
+          }
+          reviews++;
+          return {
+            verdicts: request.data.questions.map((_, index) => ({
+              question_index: index,
+              supported: reviews !== 1 || index !== 1,
+              reason: "Rewrite this ambiguous question.",
+            })),
+          };
+        });
+      },
+    });
+    assert.deepEqual(batchSizes, [10, 1]);
+    assert.equal(drafts, 2);
+    assert.equal(reviews, 2);
+    assert.equal(questions.length, 10);
+    const stems = questions.map(({ question }) => question);
+    assert.ok(stems.includes("Practice 1-0?"));
+    assert.ok(stems.includes("Practice 1-4?"));
+    assert.ok(stems.includes("Practice 2-0?"));
+    assert.ok(!stems.includes("Practice 1-1?"));
+    assert.ok(
+      questions.every((question) => question.grounding.model_review_passed),
+    );
+  });
+}
+
+test("the shared practice deadline stops later batches and repairs", async (context) => {
+  let controller;
+  const timeouts = [];
+  context.mock.method(AbortSignal, "timeout", (milliseconds) => {
+    timeouts.push(milliseconds);
+    return controller.signal;
+  });
+  for (const rejected of [false, true]) {
+    controller = new AbortController();
+    let calls = 0;
+    await assert.rejects(
+      generatePracticeQuestions(lesson, [], [], {
+        generateBatch: async () => {
+          calls++;
+          controller.abort();
+          if (rejected)
+            throw Object.assign(new Error("Rejected"), { statusCode: 422 });
+          return Array.from({ length: 5 }, (_, index) =>
+            question(index, "Approved"),
+          );
+        },
+      }),
+      (error) =>
+        error.statusCode === 503 && /took too long/.test(error.message),
+    );
+    assert.equal(calls, 1);
+  }
+  assert.deepEqual(timeouts, [120000, 120000]);
 });
 
 test("students resume their own attempt, submit once, then retry with the latest result", async (t) => {

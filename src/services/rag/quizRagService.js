@@ -275,7 +275,7 @@ export function validateQuizBatch(
   return validateQuizUniqueness(questions, previousQuestions);
 }
 
-export function validateQuizReview(review, questions) {
+function quizReviewVerdicts(review, questions) {
   if (
     !Array.isArray(review?.verdicts) ||
     review.verdicts.length !== questions.length
@@ -287,9 +287,15 @@ export function validateQuizReview(review, questions) {
     if (!Number.isInteger(i) || !questions[i] || seen.has(i))
       throw new Error("Invalid quiz review index.");
     seen.add(i);
+  }
+  return review.verdicts;
+}
+
+export function validateQuizReview(review, questions) {
+  for (const verdict of quizReviewVerdicts(review, questions)) {
     if (verdict.supported !== true)
       throw new Error(
-        `Question ${i} failed grounding: ${String(verdict.reason || "Unsupported answer.").slice(0, 1000)}`,
+        `Question ${verdict.question_index} failed grounding: ${String(verdict.reason || "Unsupported answer.").slice(0, 1000)}`,
       );
   }
 }
@@ -310,6 +316,10 @@ export async function generateQuizBatch(
     practiceFocus,
     shortAnswer = false,
     onValidated,
+    maxAttempts = 3,
+    preserveValidated = false,
+    initialCorrection = "",
+    requestOptions,
   },
   generate = generateJson,
 ) {
@@ -342,13 +352,16 @@ export async function generateQuizBatch(
       ...new Set(skills.flatMap((skill) => cognitiveLevels[skill])),
     ];
   }
-  let correction = "",
+  let correction = initialCorrection,
     duplicateStem = false,
     previousDraft = null,
-    previousReview = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+    previousReview = null,
+    reviewedQuestions = [];
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    reviewedQuestions = [];
     try {
       const draft = await generate({
+        ...requestOptions,
         schema,
         instruction: mainPrompt
           ? mainPrompt +
@@ -486,7 +499,9 @@ export async function generateQuizBatch(
       }
       if (mainPrompt)
         validateAdaptiveQuestions(questions, assignedSlots, previousQuestions);
+      reviewedQuestions = questions;
       const review = await generate({
+        ...requestOptions,
         schema: reviewSchema,
         instruction: [
           "Independently audit every question against its exact source quotes.",
@@ -524,10 +539,27 @@ export async function generateQuizBatch(
     }
   }
   const error = requestError(
-    `Generated quiz did not pass validation after two repair attempts: ${correction}`,
+    `Generated quiz did not pass validation${maxAttempts === 3 ? " after two repair attempts" : ""}: ${correction}`,
     422,
   );
   if (duplicateStem) error.code = DUPLICATE_QUIZ_QUESTION;
+  if (preserveValidated && !duplicateStem) {
+    try {
+      // Retain only structurally valid, source-checked questions that received
+      // an explicit approval in a complete, correctly indexed independent review.
+      error.validatedQuestions = quizReviewVerdicts(
+        previousReview,
+        reviewedQuestions,
+      )
+        .filter((verdict) => verdict.supported === true)
+        .map(({ question_index }) => ({
+          index: question_index,
+          question: reviewedQuestions[question_index],
+        }));
+    } catch {
+      // Malformed or incomplete reviews do not approve any questions.
+    }
+  }
   throw error;
 }
 

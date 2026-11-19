@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import axios from "axios";
 import { db } from "../../src/db.js";
+import { generateJson } from "../../src/services/rag/geminiJson.js";
 import { generateLessonQuiz } from "../../src/controllers/lessonController.js";
 import { getCourseById } from "../../src/controllers/courseController.js";
 import {
@@ -242,22 +243,29 @@ await test("short-answer generation repairs questions that require options", asy
         return { verdicts: [{ question_index: 0, supported: true }] };
       draftCount++;
       assert.match(request.instruction, /standalone question/);
-      if (draftCount === 2) assert.match(request.data.correction, /Remove references to choices/);
+      if (draftCount === 2)
+        assert.match(request.data.correction, /Remove references to choices/);
       return {
-        questions: [{
-          ...question,
-          type: "identification",
-          options: [],
-          correct_answer: "Photosynthesis",
-          question: draftCount === 1
-            ? "Which of the following processes uses sunlight to produce food?"
-            : "What process do plants use to produce food with sunlight?",
-        }],
+        questions: [
+          {
+            ...question,
+            type: "identification",
+            options: [],
+            correct_answer: "Photosynthesis",
+            question:
+              draftCount === 1
+                ? "Which of the following processes uses sunlight to produce food?"
+                : "What process do plants use to produce food with sunlight?",
+          },
+        ],
       };
     },
   );
   assert.equal(draftCount, 2);
-  assert.equal(result[0].question, "What process do plants use to produce food with sunlight?");
+  assert.equal(
+    result[0].question,
+    "What process do plants use to produce food with sunlight?",
+  );
 });
 
 await test("duplicate batches repair within the existing three-draft limit", async () => {
@@ -638,6 +646,106 @@ await test("saved quiz content is returned once in each course API representatio
   assert.equal(course.contentModules.length, 1);
   assert.deepEqual(course.contentModules[0].quizItems, quizItems);
   assert.deepEqual(course.contentModules[0].quiz_items, quizItems);
+});
+
+await test("partial quiz repair never retains answers from incomplete or invalid reviews", async () => {
+  for (const verdicts of [
+    [{ question_index: 0, supported: true }],
+    [
+      { question_index: 0, supported: true },
+      { question_index: 0, supported: true },
+    ],
+    [
+      { question_index: 0, supported: true },
+      { question_index: 5, supported: true },
+    ],
+  ]) {
+    await assert.rejects(
+      generateQuizBatch(
+        {
+          types: ["true_false", "true_false"],
+          skills: ["LOTS", "LOTS"],
+          chunks,
+          maxAttempts: 1,
+          preserveValidated: true,
+        },
+        async (request) =>
+          request.schema.properties.questions
+            ? {
+                questions: [
+                  question,
+                  {
+                    ...question,
+                    question: "Plants produce food using sunlight.",
+                  },
+                ],
+              }
+            : { verdicts },
+      ),
+      (error) => error.statusCode === 422 && !error.validatedQuestions?.length,
+    );
+  }
+});
+
+await test("practice AI calls cap provider retries and cancel at the shared deadline", async (context) => {
+  const previousKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-key";
+  context.after(() => {
+    if (previousKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previousKey;
+  });
+  let mode = "failure";
+  let calls = 0;
+  const controller = new AbortController();
+  context.mock.method(axios, "post", async (_, payload, options) => {
+    calls++;
+    if (mode === "default") {
+      assert.equal(options.timeout, 90000);
+      return {
+        data: {
+          candidates: [
+            {
+              finishReason: "STOP",
+              content: { parts: [{ text: '{"ready":true}' }] },
+            },
+          ],
+        },
+      };
+    }
+    assert.equal(options.timeout, 30000);
+    assert.equal(options.signal, controller.signal);
+    if (mode === "failure")
+      throw Object.assign(new Error("Provider unavailable"), {
+        response: { status: 503 },
+      });
+    return new Promise((_, reject) =>
+      options.signal.addEventListener(
+        "abort",
+        () => reject(new Error("Cancelled")),
+        { once: true },
+      ),
+    );
+  });
+  const request = { instruction: "Test", data: {}, schema: { type: "OBJECT" } };
+  const practice = {
+    ...request,
+    signal: controller.signal,
+    timeoutMs: 30000,
+    maxAttempts: 1,
+  };
+  await assert.rejects(generateJson(practice), { statusCode: 503 });
+  assert.equal(calls, 1);
+  mode = "cancelled";
+  const pending = generateJson(practice);
+  controller.abort();
+  await assert.rejects(pending, {
+    code: "GENERATION_TIMEOUT",
+    statusCode: 503,
+  });
+  assert.equal(calls, 2);
+  mode = "default";
+  assert.deepEqual(await generateJson(request), { ready: true });
+  assert.equal(calls, 3);
 });
 
 await db.end();

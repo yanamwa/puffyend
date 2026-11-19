@@ -15,9 +15,35 @@ import {
   queueModulePractice,
   getModulePracticeJob,
   runModulePracticeJob,
+  startModulePracticeWorker,
 } from "../../src/services/quizzes/modulePracticeJobs.js";
 
 after(() => db.end());
+
+test("a request wakes an idle worker and two students can prepare practice concurrently", async () => {
+  let claims = 0;
+  const releases = [];
+  const worker = startModulePracticeWorker({
+    poll: false,
+    runJob: async () => {
+      if (claims >= 3) return false;
+      claims++;
+      return new Promise((resolve) => releases.push(() => resolve(true)));
+    },
+  });
+  assert.equal(claims, 0);
+  const first = worker.wake();
+  const second = worker.wake();
+  await worker.wake();
+  assert.equal(claims, 2);
+  releases[0]();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(claims, 3);
+  releases[1]();
+  releases[2]();
+  await Promise.all([first, second]);
+  worker.stop();
+});
 
 test("background practice survives retries, rejects partial sets, and uses Node quiz routes with legacy course IDs", async (context) => {
   const engine = await PGlite.create();
@@ -77,6 +103,12 @@ test("background practice survives retries, rejects partial sets, and uses Node 
     [scope.courseId, user.userId],
   );
   // Invoke the registered Express handlers in-process; no listening port or AI API is needed.
+  let wakeCalls = 0;
+  const practiceWorker = {
+    wake: () => {
+      wakeCalls++;
+    },
+  };
   const invoke = async (path, method, body, anonymous = false) => {
     const url = new URL(path, "http://test");
     const lesson = url.pathname.startsWith("/lessons/");
@@ -108,6 +140,7 @@ test("background practice survives retries, rejects partial sets, and uses Node 
       },
     };
     const req = {
+      app: { locals: { practiceWorker } },
       user,
       body,
       params: { jobId },
@@ -139,6 +172,7 @@ test("background practice survives retries, rejects partial sets, and uses Node 
   assert.equal(response.status, 202);
   const { job } = await response.json();
   assert.equal(job.status, "queued");
+  assert.equal(wakeCalls, 1);
   assert.equal((await queueModulePractice(user, scope)).id, job.id);
   assert.equal(
     (await queueModulePractice(user, { ...scope, mode: "timed" })).id,
@@ -202,6 +236,12 @@ test("background practice survives retries, rejects partial sets, and uses Node 
     "UPDATE module_practice_jobs SET status='running', lease_expires_at=CURRENT_TIMESTAMP - INTERVAL '1 minute' WHERE job_id=?",
     [retry.id],
   );
+  const beforeWake = wakeCalls;
+  assert.equal(
+    (await (await get(`/lessons/practice/jobs/${retry.id}`)).json()).job.status,
+    "queued",
+  );
+  assert.equal(wakeCalls, beforeWake + 1);
   await runModulePracticeJob({
     start: async () => ({ id: 101, total: 10, questions }),
   });

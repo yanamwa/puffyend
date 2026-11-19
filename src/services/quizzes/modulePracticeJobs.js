@@ -6,6 +6,12 @@ import {
   startModulePractice,
 } from "./modulePracticeService.js";
 
+// Use the same clock as the claim query to recognize an interrupted job.
+const readJobStatus = `SELECT job_id, payload, result_json, error_json,
+  CASE WHEN status = 'running' AND lease_expires_at < CURRENT_TIMESTAMP
+       THEN 'queued' ELSE status END AS status
+  FROM module_practice_jobs WHERE job_id = ? AND user_id = ?`;
+
 function publicJob(row) {
   return {
     id: row.job_id,
@@ -45,20 +51,17 @@ export async function queueModulePractice(user, body, database = db) {
       JSON.stringify(payload),
     ],
   );
-  const [[row]] = await database.execute(
-    "SELECT * FROM module_practice_jobs WHERE job_id = ? AND user_id = ?",
-    [insert.insertId, user.userId],
-  );
+  const [[row]] = await database.execute(readJobStatus, [
+    insert.insertId,
+    user.userId,
+  ]);
   return publicJob(row);
 }
 
 export async function getModulePracticeJob(user, jobId, database = db) {
   if (!/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(String(jobId)))
     throw requestError("Practice preparation not found.", 404);
-  const [[row]] = await database.execute(
-    "SELECT * FROM module_practice_jobs WHERE job_id = ? AND user_id = ?",
-    [jobId, user.userId],
-  );
+  const [[row]] = await database.execute(readJobStatus, [jobId, user.userId]);
   if (!row) throw requestError("Practice preparation not found.", 404);
   await modulePracticeScope(user, JSON.parse(row.payload));
   return publicJob(row);
@@ -84,6 +87,14 @@ export async function runModulePracticeJob({
     [runToken],
   );
   if (!job) return false;
+  const startedAt = performance.now();
+  const timing = () => ({
+    jobId: job.job_id,
+    ...(job.runs === 1
+      ? { queueMs: new Date(job.updated_at) - new Date(job.created_at) }
+      : {}),
+    runMs: Math.round(performance.now() - startedAt),
+  });
   const heartbeat = setInterval(() => {
     database
       .execute(
@@ -120,10 +131,12 @@ export async function runModulePracticeJob({
        WHERE job_id = ? AND run_token = ? AND status = 'running'`,
       [JSON.stringify(attempt), job.job_id, runToken],
     );
+    console.info("Practice preparation ready:", timing());
   } catch (error) {
     console.error(
       "Practice preparation failed:",
       error.code || error.statusCode || "GENERATION_ERROR",
+      timing(),
     );
     await database.execute(
       `UPDATE module_practice_jobs SET status = 'failed', error_json = ?,
@@ -147,21 +160,36 @@ export async function runModulePracticeJob({
   return true;
 }
 
-export function startModulePracticeWorker() {
-  let busy = false;
-  const tick = async () => {
-    if (busy) return;
-    busy = true;
+export function startModulePracticeWorker({
+  poll = true,
+  runJob = runModulePracticeJob,
+} = {}) {
+  let active = 0;
+  let stopped = false;
+  const wake = async () => {
+    if (stopped || active >= 2) return;
+    active++;
     try {
-      await runModulePracticeJob();
+      // Each claim holds its own database lease. Drain waiting jobs as soon
+      // as a slot opens, including jobs queued while both slots were busy.
+      let claimed;
+      do {
+        claimed = await runJob();
+      } while (claimed && !stopped);
     } catch (error) {
       console.error("Practice worker:", error.code || "DATABASE_ERROR");
     } finally {
-      busy = false;
+      active--;
     }
   };
-  const timer = setInterval(tick, 1500);
-  timer.unref();
-  void tick();
-  return () => clearInterval(timer);
+  const timer = poll ? setInterval(wake, 1500) : null;
+  timer?.unref();
+  if (poll) void wake();
+  return {
+    wake,
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
 }
