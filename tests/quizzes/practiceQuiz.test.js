@@ -96,6 +96,60 @@ const generated = await generateQuizBatch(
 );
 assert.equal(calls, 2);
 assert.equal(generated[0].thinking_skill, "LOTS");
+
+await test("a statistics objective can use a necessary case in a direct-preferred slot", async () => {
+  const objectives =
+    "Choose a representative measure of center when a value is extreme.";
+  const quote =
+    "An extreme value can pull the mean toward it. The median resists that effect. Recorded commute times are 10, 12, 13 and 65 minutes.";
+  const stem =
+    "Four commutes take 10, 12, 13 and 65 minutes. Which measure of center best represents a typical trip?";
+  const result = await generateQuizBatch(
+    {
+      types: ["identification"],
+      skills: ["HOTS"],
+      chunks: [
+        { chunk_id: 1, chunk_text: quote, source_filename: "Statistics" },
+      ],
+      objectives,
+    },
+    async ({ data, instruction, schema }) => {
+      assert.equal(data.objectives, objectives);
+      assert.equal(data.assigned_slots[0].preferred_wording, "direct");
+      assert.doesNotMatch(instruction, /ANSI-SPARC/i);
+      if (schema.properties.questions) {
+        assert.equal(data.evidence[0].quote, quote);
+        return {
+          questions: [
+            {
+              type: "identification",
+              question: stem,
+              options: [],
+              correct_answer: "Median",
+              explanation: "The longest trip pulls the mean upward.",
+              topic: "Measures of center",
+              cognitive_level: "Evaluate",
+              thinking_skill: "HOTS",
+              evidence_ids: [data.evidence[0].evidence_id],
+            },
+          ],
+        };
+      }
+      assert.match(
+        instruction,
+        /Never reject a question solely because of the suggested wording mix/,
+      );
+      return {
+        verdicts: [
+          { question_index: 0, supported: true, reason: "The extreme value informs the choice." },
+        ],
+      };
+    },
+  );
+  assert.equal(result[0].question, stem);
+  assert.equal(result[0].correct_answer, "Median");
+});
+
 const normalized = validateQuizBatch(
   {
     questions: [
@@ -517,6 +571,10 @@ for (const exhaust of [false, true]) {
           firstDrafts++;
           return { questions: firstBatch };
         }
+        assert.deepEqual(
+          request.data.assigned_slots.map((slot) => slot.preferred_wording),
+          ["direct", "direct"],
+        );
         secondDrafts++;
         if (secondDrafts > 1) {
           assert.match(request.data.correction, /Duplicate quiz question/);
@@ -537,6 +595,7 @@ for (const exhaust of [false, true]) {
                   ...question,
                   question: "Chlorophyll gives leaves their green color.",
                 },
+            { ...question, question: "Stomata allow leaves to exchange gases." },
           ],
         };
       }
@@ -558,10 +617,10 @@ for (const exhaust of [false, true]) {
         body: {
           assessment_type: "practice",
           course_id: 1,
-          question_count: 6,
+          question_count: 7,
           multiple_choice_count: 0,
-          true_false_count: 6,
-          lots_count: 6,
+          true_false_count: 7,
+          lots_count: 7,
           hots_count: 0,
         },
       },
@@ -580,13 +639,13 @@ for (const exhaust of [false, true]) {
     } else {
       assert.equal(response.statusCode, 200);
       assert.equal(response.body.success, true);
-      assert.equal(response.body.generated_count, 6);
-      assert.equal(response.body.question_count, 6);
-      assert.equal(response.body.true_false_count, 6);
-      assert.equal(response.body.lots_count, 6);
+      assert.equal(response.body.generated_count, 7);
+      assert.equal(response.body.question_count, 7);
+      assert.equal(response.body.true_false_count, 7);
+      assert.equal(response.body.lots_count, 7);
       assert.equal(
         new Set(response.body.quiz.questions.map((item) => item.question)).size,
-        6,
+        7,
       );
       assert.deepEqual(
         response.body.quiz.questions.slice(0, 5).map((item) => item.question),

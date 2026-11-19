@@ -20,6 +20,16 @@ const cognitiveLevels = {
   LOTS: ["Remember", "Understand", "Apply"],
   HOTS: ["Analyze", "Evaluate", "Create"],
 };
+const ansiSparcTopic = /\b(?:ANSI\W+(?:X3\W+)?SPARC|three[- ]schema architecture)\b/i;
+
+function preferredPracticeWording(index) {
+  // Spread the roughly three optional cases per ten across the full quiz.
+  const scenarioShare = 0.3;
+  const casesBefore = Math.round(index * scenarioShare);
+  const casesThroughSlot = Math.round((index + 1) * scenarioShare);
+  return casesThroughSlot > casesBefore ? "scenario_if_useful" : "direct";
+}
+
 const quizSchema = {
   type: "OBJECT",
   properties: {
@@ -407,6 +417,7 @@ export async function generateQuizBatch(
     previousQuestions = [],
     promptPreviousQuestions = previousQuestions,
     practiceFocus,
+    practiceSlotIndexes,
     shortAnswer = false,
     onValidated,
     maxAttempts = 3,
@@ -416,6 +427,8 @@ export async function generateQuizBatch(
   },
   generate = generateJson,
 ) {
+  const isPractice = skills.length > 0 && !mainPrompt;
+  const reviewObjectives = (isPractice || preserveValidated) && objectives;
   const slots = mainPrompt
     ? assignedSlots
     : types.map((type, index) => ({
@@ -431,6 +444,9 @@ export async function generateQuizBatch(
           ? {
               thinking_skill: skills[index],
               allowed_cognitive_levels: cognitiveLevels[skills[index]],
+              preferred_wording: preferredPracticeWording(
+                practiceSlotIndexes?.[index] ?? index,
+              ),
               topic_max_characters: 100,
             }
           : {}),
@@ -476,7 +492,7 @@ export async function generateQuizBatch(
               "Keep fields under 500 characters.",
               "Repair rejected questions using correction and reviewer reasons.",
             ].join(" ")
-          : skills.length
+          : isPractice
             ? [
                 `You are an educational practice quiz generator.`,
                 `Generate exactly ${types.length} questions in the assigned types and thinking_skills order for this batch; the quiz-wide distribution is supplied separately.`,
@@ -484,14 +500,17 @@ export async function generateQuizBatch(
                 `Objectives are learning targets, never evidence.`,
                 `When lesson content contains Practice Activity prompts, use those activities to guide source-supported practice questions. Convert reflections into objectively answerable questions; never grade personal opinions as facts.`,
                 `Every question must be directly supported by cited evidence_ids.`,
-                `Avoid duplicate or nearly identical questions, including previous_questions.`,
+                "Choose wording that tests the current lesson objective. When objectives are absent, use the skill taught by the cited passage.",
+                "Ask directly by default. Include essential values, conditions or excerpts in the question. For HOTS, a direct comparison, prediction or judgment can test the required reasoning.",
+                "preferred_wording is a flexible guide across the whole quiz. In a scenario_if_useful slot, use a brief scenario only if its details are needed to answer the question. Every slot may be direct. If an objective specifically requires interpreting a case, give just the details needed in any slot.",
+                "Omit a story if removing it leaves the same reasoning and answer. Avoid duplicate or nearly identical questions, including previous_questions. Avoid recycling a setup just to ask for a different label.",
                 `Keep grammar clear and explanations concise and educational.`,
                 `Do not refer to the text above or the provided lesson.`,
                 `LOTS assesses Remember, Understand, Apply; HOTS assesses Analyze, Evaluate, Create.`,
                 `Each question needs exactly one matching cognitive_level and thinking_skill.`,
                 `Assign a short consistent topic supported by the source; use the same topic name for the same concept. Include concept: a specific sub-concept tested, not just the module title.`,
                 `If assigned_slots specifies a topic, use that exact topic and test it meaningfully. Do not merely relabel a question about another topic.`,
-                `If assigned_slots specifies a concept, assess that exact missed concept and use its exact concept label. Use different applications or sub-skills when a concept occurs in more than one slot.`,
+                `If assigned_slots specifies a concept, assess that exact missed concept and use its exact concept label. When it recurs, test a different distinction, relationship, step or application supported by the lesson.`,
                 `Multiple choice: exactly four distinct plain options without letter prefixes, one correct answer, believable but clearly incorrect distractors.`,
                 `Identification: options=[], one unique short expected answer, do not reveal it in the question.`,
                 `True/False: options exactly ["True", "False"], correct_answer exactly True or False.`,
@@ -508,9 +527,14 @@ export async function generateQuizBatch(
                 ...(practiceFocus
                   ? [
                       "Use practice_focus.target_count questions to check the concepts described by practice_focus.missed_concepts. Use the remaining questions to review other concepts where the supplied evidence covers them.",
-                      "Assigned slots are mandatory. Use the exact assigned topic and concept labels, and ensure each question genuinely assesses its assigned concept using the supplied evidence. Never substitute an unrelated concept or merely relabel an unrelated question.",
-                      "Use different wording and contexts from the missed questions. Missed concepts are learning targets and never evidence.",
-                      "Revisit missed concepts with short, direct sentences and familiar examples supported by the evidence. Make these questions clearer and easier to understand; avoid trick wording and unnecessary complexity.",
+
+"Assigned slots are mandatory. Use the exact assigned topic and concept labels, and ensure each question genuinely assesses its assigned concept using the supplied evidence. Never substitute an unrelated concept or merely relabel an unrelated question.",
+"Use different wording and contexts from the missed questions. Missed concepts are learning targets and never evidence.",
+"Revisit missed concepts with short, direct sentences and familiar examples supported by the evidence. Make these questions clearer and easier to understand; avoid trick wording and unnecessary complexity.",
+"If none of the missed concepts appear in the supplied evidence, cover other concepts supported by the supplied evidence.",
+"Use an example only if it contributes information the student must apply.",
+
+
                       "Keep the remaining questions at the supplied baseline difficulty. Do not increase difficulty or reasoning depth merely because previous answers were correct.",
                       "Use concise explanations to clarify each missed concept and why the answer is correct.",
                       "Contrast the student's selected wrong answer with the source-supported correct answer when the evidence supports that distinction. Do not copy an incorrect answer as evidence.",
@@ -601,11 +625,26 @@ export async function generateQuizBatch(
             : []),
           "For True/False, check the truth value from evidence.",
           "Check for contradictions between the keyed answer and explanation, and check every answer option independently. Never accept an answer merely because the generator selected it.",
-          "For ANSI-SPARC questions, distinguish the internal physical-storage level from external user views; verify the level against the quotes. Reject swapped labels or conflicting explanations.",
+          "Verify the lesson's labels for concepts, roles and levels against their definitions in the quotes. Reject swapped labels or conflicting explanations.",
+          ...(questions.some(
+            (item) =>
+              ansiSparcTopic.test(item.question) ||
+              item.source_chunks.some(({ quote }) => ansiSparcTopic.test(quote)),
+          )
+            ? [
+                "For ANSI-SPARC questions, distinguish the internal physical-storage level from external user views and verify the level against the quotes.",
+              ]
+            : []),
           "Reject duplicate learning checks within the batch or previous_questions, including semantic paraphrases of the same fact. A weak topic may recur only with a distinct sub-concept or a meaningfully different application, not a cosmetic scenario change.",
           "For each assigned topic and concept, verify the question actually assesses the specific missed concept using practice_focus, rather than just using its label or testing another part of the general topic.",
           "For practice questions also verify that the topic is supported and the cognitive level reflects the actual reasoning required, with LOTS=Remember/Understand/Apply and HOTS=Analyze/Evaluate/Create.",
-          ...(preserveValidated && objectives
+          ...(isPractice
+            ? [
+                "For a practice scenario, identify the detail the student must use for the objective. If removing the story leaves the same task, request a direct rewrite of that question.",
+                "Flag a repeated setup that only asks for a new label. A shared passage or dataset is fine when different reasoning is required. Accept a fully direct quiz. Never reject a question solely because of the suggested wording mix.",
+              ]
+            : []),
+          ...(reviewObjectives
             ? [
                 "Check that each question assesses a relevant lesson objective. Objectives describe what to assess; only the cited lesson passages support the answer.",
               ]
@@ -621,7 +660,7 @@ export async function generateQuizBatch(
               }))
             : questions,
           previous_questions: [...promptPreviousQuestions],
-          ...(preserveValidated && objectives ? { objectives } : {}),
+          ...(reviewObjectives ? { objectives: reviewObjectives } : {}),
           assigned_slots: reviewSlots,
           ...(reviewFocus ? { practice_focus: reviewFocus } : {}),
         },
@@ -728,12 +767,14 @@ export async function generateQuizWithRag({ user, body }) {
             : "LOTS",
         )
       : [];
-  const batches = Array.from({ length: Math.ceil(types.length / 5) }, (_, i) =>
-    types.slice(i * 5, i * 5 + 5),
+  const batchSize = 5;
+  const batches = Array.from({ length: Math.ceil(types.length / batchSize) }, (_, i) =>
+    types.slice(i * batchSize, (i + 1) * batchSize),
   );
   const acceptedQuestions = [];
   const questions = (
     await parallelMap(batches, 3, async (types, index) => {
+      const firstSlot = index * batchSize;
       const start = Math.floor((index * chunks.length) / batches.length);
       const spread = chunks.slice(start, Math.min(chunks.length, start + 6));
       const context = [
@@ -747,7 +788,8 @@ export async function generateQuizWithRag({ user, body }) {
         difficulty: settings.difficulty,
         title,
         objectives,
-        skills: skills.slice(index * 5, index * 5 + types.length),
+        skills: skills.slice(firstSlot, firstSlot + types.length),
+        practiceSlotIndexes: types.map((_, position) => firstSlot + position),
         lessonContent: String(body.lesson_content || "").slice(0, 30000),
         distribution: settings,
         previousQuestions: acceptedQuestions,
