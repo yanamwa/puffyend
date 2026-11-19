@@ -107,6 +107,114 @@ async function enrolledPracticeCourse(context) {
   return { user, scope, module };
 }
 
+test("five students complete five queued quizzes each with isolated retries and histories", async (context) => {
+  const { user, scope } = await enrolledPracticeCourse(context);
+  const students = [user];
+  const histories = new Map();
+  for (let n = 2; n <= 5; n++) {
+    const [row] = await db.execute(
+      "INSERT INTO users(name,email,password,role,onboarding_completed,is_verified) VALUES(?,?,'hash','student',1,1)",
+      [`Practice student ${n}`, `queue-${n}@example.test`],
+    );
+    students.push({ userId: row.insertId, role: "student" });
+    await db.execute("INSERT INTO course_enrollments(course_id,user_id,status) VALUES(?,?,'approved')", [scope.courseId, row.insertId]);
+  }
+  for (const student of students) histories.set(student.userId, new Set());
+
+  let active = 0, peak = 0, interruptOnce = true;
+  let notifyPair, releasePair;
+  const pairStarted = new Promise((resolve) => { notifyPair = resolve; });
+  const firstJobs = new Promise((resolve) => { releasePair = resolve; });
+  const start = async (student, body) => {
+    active++;
+    peak = Math.max(peak, active);
+    if (active === 2) notifyPair();
+    try {
+      await firstJobs;
+      if (student.userId === students[2].userId && interruptOnce) {
+        interruptOnce = false;
+        throw Object.assign(new Error("Practice could not be prepared. Please try again."), { statusCode: 503 });
+      }
+      return await startModulePractice(student, body, async (module, performance, previous, options) => {
+        const own = histories.get(student.userId);
+        assert.deepEqual(new Set(previous), own);
+        const attempt = own.size / 10 + 1;
+        const provider = async ({ data, schema }) => {
+          if (schema.properties.verdicts) {
+            return { verdicts: data.questions.map(({ question_index }) => ({ question_index, supported: true, reason: "" })) };
+          }
+          return { questions: data.assigned_slots.map((slot, index) => ({
+            question: `Storage check ${student.userId}-${attempt}-${index}?`,
+            type: slot.type,
+            options: slot.type === "multiple_choice" ? ["Database", "Mouse", "Display", "Keyboard"] :
+              slot.type === "true_false" ? ["True", "False"] : [],
+            correct_answer: slot.type === "true_false" ? "True" : "Database",
+            explanation: "A database stores organized data.", topic: slot.topic || "Storage",
+            concept: slot.concept || "Organized data", thinking_skill: slot.thinking_skill,
+            cognitive_level: slot.allowed_cognitive_levels[0], evidence_ids: [data.evidence[0].evidence_id],
+          })) };
+        };
+        return generatePracticeQuestions(module, performance, previous, {
+          ...options, generateBatch: (batch) => generateQuizBatch(batch, provider),
+        });
+      });
+    } finally {
+      active--;
+    }
+  };
+  const worker = startModulePracticeWorker({ poll: false, runJob: () => runModulePracticeJob({ start }) });
+  context.after(() => worker.stop());
+  const completedIds = new Set();
+  for (let round = 1; round <= 5; round++) {
+    const jobs = await Promise.all(students.map((student) => queueModulePractice(student, scope)));
+    assert.equal(new Set(jobs.map((job) => job.id)).size, 5);
+    const draining = Promise.all(students.map(() => worker.wake()));
+    if (round === 1) {
+      await pairStarted;
+      try {
+        const [statuses] = await db.execute("SELECT status FROM module_practice_jobs");
+        assert.equal(statuses.filter((row) => row.status === "queued").length, 3);
+        assert.equal(statuses.filter((row) => row.status === "running").length, 2);
+        assert.equal((await queueModulePractice(user, { ...scope, mode: "timed" })).id, jobs[0].id);
+      } finally {
+        releasePair();
+      }
+    }
+    await draining;
+    for (const [index, student] of students.entries()) {
+      let job = await getModulePracticeJob(student, jobs[index].id);
+      if (round === 1 && index === 2) {
+        assert.equal(job.status, "failed");
+        assert.equal(job.error.status, 503);
+        const retry = await queueModulePractice(student, scope);
+        assert.notEqual(retry.id, job.id);
+        await worker.wake();
+        job = await getModulePracticeJob(student, retry.id);
+      }
+      assert.equal(job.status, "ready", job.error?.message);
+      const { id, questions } = job.attempt;
+      assert.equal(questions.length, 10);
+      completedIds.add(id);
+      const result = await submitModulePractice(student, {
+        attemptId: id, mode: scope.mode,
+        answers: questions.map((q, i) => ({
+          questionId: q.id,
+          answer: i ? q.correct_answer : (q.options.find((option) => option !== q.correct_answer) || "Incorrect"),
+        })),
+      });
+      assert.equal(result.total, 10);
+      assert.equal(result.attempts, round);
+      const own = histories.get(student.userId);
+      questions.forEach((q) => own.add(q.question));
+      assert.equal(own.size, round * 10);
+    }
+  }
+  assert.equal(completedIds.size, 25);
+  assert.equal(peak, 2);
+  const [counts] = await db.execute("SELECT user_id, COUNT(*) AS total FROM module_practice_attempts WHERE result_json IS NOT NULL GROUP BY user_id");
+  assert.deepEqual(counts.map((row) => Number(row.total)), [5, 5, 5, 5, 5]);
+});
+
 test("background practice survives retries, rejects partial sets, and uses Node quiz routes with legacy course IDs", async (context) => {
   const { user, scope, module } = await enrolledPracticeCourse(context);
   // Invoke the registered Express handlers in-process; no listening port or AI API is needed.

@@ -473,7 +473,7 @@ for (const format of ["mixed", "qna"]) {
           signal ||= request.signal;
           assert.equal(request.signal, signal);
           assert.equal(request.timeoutMs, 45000);
-          assert.equal(request.maxAttempts, 1);
+          assert.equal(request.maxAttempts, 3);
           if (request.schema.properties.questions) {
             const slots = request.data.assigned_slots;
             if (drafts === 1) {
@@ -616,8 +616,8 @@ test("eight approved questions survive a historical duplicate and a rejected ans
   const result = await generatePracticeQuestions(lesson, [], history, {
     generateBatch: (batch) =>
       generateQuizBatch(batch, async ({ data, schema, instruction }) => {
-        assert.ok(!data.previous_questions.includes(history.at(-1)));
         if (schema.properties.questions) {
+          assert.ok(!data.previous_questions.includes(history.at(-1)));
           draftSizes.push(data.types.length);
           const draft = practiceDraft({ data }, draftSizes.length);
           if (draftSizes.length === 1) {
@@ -629,6 +629,7 @@ test("eight approved questions survive a historical duplicate and a rejected ans
           }
           return draft;
         }
+        assert.ok(data.previous_questions.includes(history.at(-1)));
         assert.equal(data.objectives, lesson.learningObjectives);
         assert.match(instruction, /assesses a relevant lesson objective/);
         return {
@@ -680,7 +681,7 @@ test("the shared practice deadline stops later batches and repairs", async (cont
     );
     assert.equal(calls, 1);
   }
-  assert.deepEqual(timeouts, [120000, 120000]);
+  assert.deepEqual(timeouts, [240000, 240000]);
 });
 
 test("students resume their own attempt, submit once, then retry with the latest result", async (t) => {
@@ -853,7 +854,7 @@ test("students resume their own attempt, submit once, then retry with the latest
   assert.equal(rows.length, 0);
   assert.deepEqual(logGenerationError.mock.calls[0].arguments, [
     "Module Practice generation failed:",
-    generationFailure.message,
+    generationFailure.statusCode,
   ]);
   const [first, simultaneous, forPlayer] = await Promise.all([
     startModulePractice(student, startBody, generate),
