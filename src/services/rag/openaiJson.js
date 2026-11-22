@@ -25,7 +25,7 @@ function strictSchema(schema) {
   return schema.enum ? { type, enum: schema.enum } : { type };
 }
 
-export async function generateOpenAIJson({ instruction, data, schema, signal, deadlineAt, timeoutMs = 45000 }) {
+export async function generateOpenAIJson({ instruction, data, schema, signal, deadlineAt, timeoutMs = 45000, schemaName = "practice_response" }) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   const model = process.env.OPENAI_MODEL?.trim() || "gpt-4.1-mini";
   return requestProviderJson(
@@ -41,7 +41,7 @@ export async function generateOpenAIJson({ instruction, data, schema, signal, de
         ],
         response_format: {
           type: "json_schema",
-          json_schema: { name: "practice_response", strict: true, schema: strictSchema(schema) },
+          json_schema: { name: schemaName, strict: true, schema: strictSchema(schema) },
         },
       },
       { ...options, headers: { Authorization: `Bearer ${apiKey}` } },
@@ -52,7 +52,8 @@ export async function generateOpenAIJson({ instruction, data, schema, signal, de
       const result = parseProviderJson(choice.message?.content);
       // Individual slots still go through the common validator so reviewed
       // siblings can survive a bad question or a missing slot.
-      if (!schema.required.every((key) => Array.isArray(result?.[key]))) throw invalidOutput();
+      if (!schema.required.every((key) => schema.properties[key].type === "ARRAY"
+        ? Array.isArray(result?.[key]) : result?.[key] != null)) throw invalidOutput();
       return result;
     },
   );

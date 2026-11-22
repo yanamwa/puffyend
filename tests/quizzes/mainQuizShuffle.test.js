@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
-import { createMainQuizPrompt } from "../../src/services/quizzes/mainQuizPrompt.js";
+import { savedLessonChunks } from "../../src/services/quizzes/mainQuizService.js";
 import {
   gradeMainQuiz,
-  mainQuizBlueprint,
+  mainQuizFromHistory,
   normalizeAnswer,
   shuffleMainQuizQuestions,
-  validateAdaptiveQuestions,
 } from "../../src/services/quizzes/mainQuizAdaptive.js";
 
 const questions = [
@@ -101,6 +100,7 @@ function fixture(mode) {
       return [
         [
           {
+            lesson_pages: [{ moduleId: "module-1", content: "Plants use sunlight for photosynthesis." }],
             lesson_contents: JSON.stringify([
               {
                 moduleId: "module-1",
@@ -116,7 +116,7 @@ function fixture(mode) {
           },
         ],
       ];
-    if (sql.includes("FROM main_quiz_configs")) return [[stored]];
+    if (sql.trimStart().startsWith("SELECT") && sql.includes("FROM main_quiz_configs")) return [[stored]];
     if (sql.includes("JOIN main_quiz_results")) {
       return [[...records.values()].filter((row) =>
         row.course_id === parameters[0] &&
@@ -206,9 +206,6 @@ function fixture(mode) {
     }
     throw new Error(`Unexpected SQL: ${sql}`);
   }
-  const chunks = [
-    { chunk_id: 1, document_id: 1, chunk_text: "Plants use sunlight." },
-  ];
   const context = vm.createContext({
     parse: (value) => (typeof value === "string" ? JSON.parse(value) : value),
     requestError: (message, statusCode) =>
@@ -224,21 +221,19 @@ function fixture(mode) {
       }),
     },
     gradeMainQuiz,
-    mainQuizBlueprint,
+    mainQuizFromHistory,
     normalizeAnswer,
-    createMainQuizPrompt,
-    validateAdaptiveQuestions,
+    savedLessonChunks,
     shuffleMainQuizQuestions: (items) => {
       const rotate = shuffleCalls++ % 2 === 0;
       return shuffleMainQuizQuestions(items, (maximum) =>
         rotate ? 0 : maximum - 1,
       );
     },
-    loadChunks: async () => chunks,
-    retrieveContexts: async () => chunks,
-    generateQuizBatch: async ({ assignedSlots }) => {
+    generateReviewedMainQuiz: async (_config, blueprint, chunks) => {
+      assert.ok(chunks.every(c => c.chunk_text.includes("Plants use sunlight")));
       generatedBatches++;
-      return assignedSlots.map((slot) => ({
+      return blueprint.slots.map((slot) => ({
         ...questions.find((question) => question.type === slot.type),
         ...slot,
       }));

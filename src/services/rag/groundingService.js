@@ -199,6 +199,7 @@ export async function generateGroundedPage(
   topic,
   context,
   generate = generateJson,
+  session = null,
 ) {
   let feedback = "",
     previousDraft = null,
@@ -209,7 +210,8 @@ export async function generateGroundedPage(
       const coveredIds = new Set(approvedStatements.flatMap(s => s.point_ids));
       const remainingPoints = topic.key_points.filter(p => !coveredIds.has(p.id));
       const repairTopic = { title: topic.title, key_points: remainingPoints };
-      const generatedDraft = await generate({
+      const ask = (phase, request) => session ? session.call(phase, request, { fallback: attempt === 2 }) : generate(request);
+      const generatedDraft = await ask(attempt ? "repair" : "generation", {
         schema: pageSchema,
         instruction: [
           "Write one readable lesson page.",
@@ -220,12 +222,13 @@ export async function generateGroundedPage(
           "The key-point text is a coverage target, not evidence: if it overstates the quote, use only the supported meaning.",
           "Prefer one short factual statement per point; avoid extra explanations, implications, and absolute claims.",
           "During repair, write ONLY replacements for the remaining key points. Approved statements are retained by the server; do not repeat them. Correct rejected claims using reviewer reasons. Remove unsupported counts, examples, or absolute claims; state the supported definition instead.",
-          "Use concise paragraphs.",
+          "Use clear explanatory paragraphs. Preserve supported procedures, formulas, code and subject terminology. Use examples or scenarios only when they advance the assigned objective and the instructional evidence supports them.",
           "Title max 100 characters; total text max 6000 characters.",
           "Do not invent examples or facts.",
         ].join(" "),
         data: {
           topic: repairTopic,
+          syllabus_topic: topic.syllabus_topic, learning_objective: topic.learning_objective,
           evidence: buildEvidence(context),
           correction: feedback,
           previous_draft: previousDraft,
@@ -243,17 +246,25 @@ export async function generateGroundedPage(
         topic,
         context,
       );
-      const review = await generate({
+      const retained = session ? approvedStatements.length : 0;
+      const review = await ask("review", {
         schema: reviewSchema,
         instruction: [
           "Audit every statement independently.",
           "supported is true only when ALL factual claims follow from the exact cited quotes, without relying on prior knowledge.",
           "A point is covered only when its essential meaning is stated accurately.",
+          "Check topic and learning objective alignment, terminology, explanations and examples. Reject repetition and claims relying on an unconsulted publication. An outline label is not evidence.",
           "Return one verdict per zero-based statement index.",
           "Be conservative.",
         ].join(" "),
-        data: { key_points: topic.key_points, statements: page.statements },
+        data: { key_points: topic.key_points, statements: page.statements.slice(retained), syllabus_topic: topic.syllabus_topic, learning_objective: topic.learning_objective },
       });
+      if (retained && Array.isArray(review.verdicts)) {
+        review.verdicts = [
+          ...approvedStatements.map((s,i) => ({ statement_index: i, supported: true, covered_point_ids: s.point_ids })),
+          ...review.verdicts.map(v => ({ ...v, statement_index: Number.isInteger(v.statement_index) && v.statement_index >= 0 ? v.statement_index + retained : -1 })),
+        ];
+      }
       previousReview = review;
       // Lock only complete, unambiguously supported statements. Rejected or
       // partially covered statements are regenerated without changing good ones.
@@ -280,16 +291,17 @@ export async function generateGroundedPage(
         grounding: {
           exact_quotes_verified: true,
           model_review_passed: true,
-          reviewer_model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+          reviewer_model: session?.reviewedBy(review) || process.env.GEMINI_MODEL || "gemini-2.5-flash",
           human_review_required: true,
         },
       };
     } catch (error) {
       if (error.retryable || error.statusCode) throw error;
       feedback = error.message;
+      session?.record(0, 1, "page_validation");
     }
   }
-  console.warn("Lesson grounding repair exhausted", { topic: topic.title, reason: feedback });
+  console.warn("Lesson grounding repair exhausted", { category: "page_validation" });
   throw Object.assign(
     new Error(`We couldn't verify all the source details for "${topic.title}". Your uploaded files are still available. Try generating again, or upload a clearer source that explains this topic.`),
     { statusCode: 422, code: "LESSON_GROUNDING_FAILED", cause: new Error(feedback) },

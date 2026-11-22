@@ -3,6 +3,7 @@ import { migrateCourseCatalog } from "./courseCatalogMigration.js";
 import { migrateAcademicCalendar } from "./academicCalendarMigration.js";
 import { migrateLessonTables, finalizeDatabase } from "../database/postgres.js";
 import { migrateModulePracticeJobs } from "./modulePracticeJobs.js";
+import { migrateAcademicWorkflows } from "./academicWorkflows.js";
 
 export async function migrateApplication() {
   // Deployments may overlap. Serialize schema changes on a dedicated session.
@@ -20,6 +21,7 @@ export async function migrateApplication() {
     await migrateCourseCatalog(db);
     await migrateAcademicCalendar(db);
     await migrateLessonTables(db);
+    await migrateAcademicWorkflows(db);
     await finalizeDatabase(db);
     // Existing catalog records are preserved; reconciliation is not a migration.
   } finally {
