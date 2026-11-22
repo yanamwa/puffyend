@@ -45,6 +45,13 @@ export function isPracticeCorrect(answer) {
 const isVerified = (answer) =>
   !answer.isSelfAssessed && answer.answerKeyValid !== false;
 
+export function isLegacyRecallRating(answer) {
+  return (
+    /^(easy|good|hard|again)$/i.test(clean(answer.userAnswer)) &&
+    normalizeAnswer(answer.userAnswer) !== normalizeAnswer(answer.correctAnswer)
+  );
+}
+
 // Saved answers, rather than client supplied scores, are the evidence for history.
 export async function loadPracticeHistory(
   scope,
@@ -65,11 +72,10 @@ export async function loadPracticeHistory(
       const result = JSON.parse(row.result_json);
       const questions = JSON.parse(row.questions_json);
       const answers = (result.answers || []).map((answer, index) => {
-        const legacyRating =
-          /^(easy|good|hard|again)$/i.test(clean(answer.userAnswer)) &&
-          normalizeAnswer(answer.userAnswer) !==
-            normalizeAnswer(answer.correctAnswer);
-        if (result.assessmentBasis === "self_assessment" || legacyRating)
+        if (
+          result.assessmentBasis === "self_assessment" ||
+          isLegacyRecallRating(answer)
+        )
           answer = { ...answer, isSelfAssessed: true };
         try {
           validateKnownAnswerKey(questions[index] || {});
@@ -120,13 +126,10 @@ export function analyzePractice(
   history.slice(0, PRACTICE_HISTORY_LIMIT - 1).forEach((attempt, index) => {
     for (const answer of attempt.answers || []) {
       // Flashcard ratings from older versions are not graded answers either.
-      const rating = /^(easy|good|hard|again)$/i.test(clean(answer.userAnswer));
       if (
         !isVerified(answer) ||
         attempt.assessmentBasis === "self_assessment" ||
-        (rating &&
-          normalizeAnswer(answer.userAnswer) !==
-            normalizeAnswer(answer.correctAnswer))
+        isLegacyRecallRating(answer)
       )
         continue;
       const group = get(answer);
