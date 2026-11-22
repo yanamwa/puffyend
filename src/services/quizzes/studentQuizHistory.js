@@ -1,6 +1,9 @@
 import { getCourseModuleLabels } from "../../controllers/courseController.js";
 import { db } from "../../db.js";
 import { requestError } from "../rag/courseAccessService.js";
+import { normalizeAnswer } from "./mainQuizAdaptive.js";
+import { isLegacyRecallRating, practiceTopic } from "./practiceAnalysis.js";
+
 export async function studentMainQuizHistory(user, query = {}, database = db) {
   if (user.role !== "student") throw Object.assign(new Error("Student quiz history is only available to students."), { statusCode: 403 });
   const page = Math.max(1, Math.floor(Number(query.page) || 1));
@@ -16,6 +19,33 @@ export async function studentMainQuizHistory(user, query = {}, database = db) {
   }) };
 }
 
+function savedBoolean(value) {
+  if ([true, 1, "true", "1"].includes(value)) return true;
+  if ([false, 0, "false", "0"].includes(value)) return false;
+  return null;
+}
+
+function addPracticeTopicResults(topics, answers, assessmentBasis) {
+  if (!Array.isArray(answers) || assessmentBasis === "self_assessment") return;
+
+  for (const answer of answers) {
+    const correct = savedBoolean(answer?.isCorrect ?? answer?.is_correct);
+    if (correct == null) continue;
+    const selfAssessed = savedBoolean(answer.isSelfAssessed);
+    if (selfAssessed || savedBoolean(answer.answerKeyValid) === false) continue;
+    if (!assessmentBasis && selfAssessed == null && isLegacyRecallRating(answer)) continue;
+
+    const topic = practiceTopic(answer, "");
+    const key = normalizeAnswer(topic);
+    if (!key || key === "unclassified" || key === "not specified") continue;
+
+    if (!topics.has(key)) topics.set(key, { topic, correct: 0, total: 0 });
+    const result = topics.get(key);
+    result.total++;
+    if (correct) result.correct++;
+  }
+}
+
 export async function studentPracticeHistory(user) {
   if (user.role !== "student")
     throw requestError("Practice history is only available to students.", 403);
@@ -23,7 +53,9 @@ export async function studentPracticeHistory(user) {
   const [rows] = await db.execute(
     `SELECT attempt_id, course_id, module_id, completed_at,
             result_json::jsonb ->> 'score' AS score,
-            result_json::jsonb ->> 'total' AS total
+            result_json::jsonb ->> 'total' AS total,
+            result_json::jsonb ->> 'assessmentBasis' AS assessment_basis,
+            result_json::jsonb -> 'answers' AS answers
      FROM module_practice_attempts
      WHERE user_id = ? AND result_json IS NOT NULL
      ORDER BY completed_at DESC NULLS LAST, attempt_id DESC`,
@@ -55,14 +87,22 @@ export async function studentPracticeHistory(user) {
         courseTitle: course?.title || "Course",
         moduleTitle: row.module_id === "all-modules" ? "Practice All" : course?.moduleTitles.get(row.module_id) || "Module Practice",
         attempts: [],
+        topicMastery: new Map(),
       });
     }
-    modules.get(key).attempts.push({
+    const record = modules.get(key);
+    record.attempts.push({
       id: row.attempt_id,
       score,
       total,
       completedAt: row.completed_at,
     });
+    addPracticeTopicResults(record.topicMastery, row.answers, row.assessment_basis);
   }
-  return [...modules.values()];
+  return Array.from(modules.values(), (record) => ({
+    ...record,
+    topicMastery: [...record.topicMastery.values()].sort((a, b) =>
+      a.correct / a.total - b.correct / b.total || a.topic.localeCompare(b.topic),
+    ),
+  }));
 }

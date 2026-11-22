@@ -147,7 +147,9 @@ test("PostgreSQL saves six practices, resumes once, and repairs a five-question 
     assert.equal(await readCount(), count);
   }
   assert.equal(generations, 6);
-  assert.equal((await studentPracticeHistory(user))[0].attempts.length, 6);
+  const [history] = await studentPracticeHistory(user);
+  assert.equal(history.attempts.length, 6);
+  assert.deepEqual(history.topicMastery, [{ topic: "Databases", correct: 60, total: 60 }]);
 
   const unfinished = await startModulePractice(
     user,
@@ -212,4 +214,52 @@ test("PostgreSQL saves six practices, resumes once, and repairs a five-question 
   assert.equal(refreshed.id, unfinished.id);
   assert.notEqual(refreshed.questions[0].correct_answer, "External Level");
   assert.equal(await readCount(), 6);
+
+  await context.test("student topic results count graded answers across attempts in the selected module", async () => {
+    const [peer] = await db.execute(
+      "INSERT INTO users(name,email,password,role) VALUES('Second student','second@example.test','hash','student')",
+    );
+    const fixtures = [
+      [module.id, { score: 1, total: 2, answers: [
+        { topic: " keys ", isCorrect: true }, { topic: "Roles", isCorrect: false },
+      ] }],
+      [module.id, { score: 1, total: 3, answers: [
+        { topic: "Keys", is_correct: "false" }, { topic: "Roles", isCorrect: true },
+        { topic: "Indexes", isCorrect: false },
+      ] }],
+      [module.id, { score: 1, total: 1, assessmentBasis: "self_assessment", answers: [
+        { topic: "Keys", isCorrect: true },
+      ] }],
+      [module.id, { score: 4, total: 5, answers: [
+        { topic: "Keys", isCorrect: true, userAnswer: "good", correctAnswer: "Primary key" },
+        { topic: "Keys", isCorrect: true, answerKeyValid: false },
+        { topic: "Roles", isCorrect: true, isSelfAssessed: true },
+        { topic: "Unclassified", isCorrect: true }, { topic: "No grade" },
+      ] }],
+      ["other-module", { score: 1, total: 1, answers: [{ topic: "Indexes", isCorrect: true }] }],
+      ["score-only", { score: 2, total: 5 }],
+    ];
+    for (const [index, [moduleId, result]] of fixtures.entries()) {
+      await db.execute(
+        `INSERT INTO module_practice_attempts
+         (user_id, course_id, module_id, previous_attempt_id, questions_json, result_json, completed_at)
+         VALUES (?, ?, ?, ?, '[]', ?, CURRENT_TIMESTAMP)`,
+        [peer.insertId, scope.courseId, moduleId, index, JSON.stringify(result)],
+      );
+    }
+    const records = await studentPracticeHistory({ userId: peer.insertId, role: "student" });
+    const selected = records.find((record) => record.moduleId === module.id);
+    assert.equal(selected.attempts.length, 4);
+    assert.deepEqual(selected.topicMastery, [
+      { topic: "Indexes", correct: 0, total: 1 },
+      { topic: "Keys", correct: 1, total: 2 },
+      { topic: "Roles", correct: 1, total: 2 },
+    ]);
+    assert.deepEqual(records.find((record) => record.moduleId === "other-module").topicMastery,
+      [{ topic: "Indexes", correct: 1, total: 1 }]);
+    const scoreOnly = records.find((record) => record.moduleId === "score-only");
+    assert.equal(scoreOnly.attempts.length, 1);
+    assert.deepEqual(scoreOnly.topicMastery, []);
+    assert.doesNotMatch(JSON.stringify(records), /userAnswer|correctAnswer|Primary key/);
+  });
 });
