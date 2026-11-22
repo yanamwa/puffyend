@@ -594,8 +594,8 @@ test("background practice survives retries, rejects partial sets, and uses Node 
   assert.equal(rejectedJob.status, "failed");
   assert.equal(rejectedJob.error.status, 422);
   assert.equal(rejectedJob.error.code, "PRACTICE_VALIDATION_FAILED");
-  assert.match(rejectedJob.error.message, /lesson evidence check/);
-  assert.doesNotMatch(rejectedJob.error.message, /Private text/);
+  assert.match(rejectedJob.error.message, /did not pass review/);
+  assert.doesNotMatch(rejectedJob.error.message, /lesson evidence|Private text/);
   const retried = (await (await post("/lessons/practice/start", scope)).json())
     .job;
   assert.notEqual(retried.id, rejected.id);
@@ -614,21 +614,27 @@ test("every practice mode can recover and submit a full module or course quiz", 
   const { user, scope } = await enrolledPracticeCourse(context);
   for (const moduleId of [scope.moduleId, "all-modules"]) {
     for (const mode of ["flashcard", "qna", "multiple", "matching", "timed", "mixed"]) {
-      await context.test(`${moduleId} / ${mode}`, async () => {
+      await context.test(`${moduleId} / ${mode}`, async (t) => {
         const body = { ...scope, moduleId, mode };
+        const duplicateRun = mode === "qna" && moduleId === scope.moduleId;
+        const errors = t.mock.method(console, "error", () => {});
         let retry = false;
         const drafts = [];
         async function provider({ schema, data }) {
           if (schema.properties.verdicts) {
             return {
-              verdicts: data.questions.map(({ question_number }, index) => ({
-                question_index: index,
-                question_number,
-                supported: retry
+              verdicts: data.questions.map(({ question_number }, index) => {
+                const supported = retry
                   ? drafts.length > 1 || index !== 1
-                  : drafts.length === 1 && index < 8,
-                reason: "Answer needs better lesson evidence.",
-              })),
+                  : drafts.length === 1 && index < (duplicateRun ? 9 : 8);
+                const duplicate = !supported && !retry && duplicateRun;
+                return {
+                  question_index: index, question_number, supported,
+                  reason_code: supported ? "supported" : duplicate ? "duplicate" : "unsupported_answer",
+                  reason: duplicate ? "This tests the same database fact." : "Answer needs better lesson evidence.",
+                  matched_question: duplicate ? data.previous_questions.at(-1) || data.questions[0].question : "",
+                };
+              }),
             };
           }
           const draft = drafts.push(data.assigned_slots.length);
@@ -667,8 +673,10 @@ test("every practice mode can recover and submit a full module or course quiz", 
         assert.equal(failed.status, "failed");
         assert.equal(failed.error.status, 422);
         assert.equal(failed.error.code, "PRACTICE_VALIDATION_FAILED");
-        assert.match(failed.error.message, /lesson evidence check/);
-        assert.deepEqual(drafts, [10, 2, 2, 2]);
+        assert.match(failed.error.message, duplicateRun ? /too similar/ : /lesson passage did not support a generated answer/);
+        const workerError = errors.mock.calls.find(({ arguments: args }) => args[0] === "Practice preparation failed:");
+        assert.equal(workerError.arguments[2].reason, duplicateRun ? "duplicate" : "unsupported_answer");
+        assert.deepEqual(drafts, duplicateRun ? [10, 1, 1, 1, 1, 1] : [10, 2, 2, 2]);
         const [[{ count }]] = await db.execute(
           "SELECT COUNT(*) AS count FROM module_practice_attempts WHERE user_id=? AND course_id=? AND module_id=? AND result_json IS NULL",
           [user.userId, scope.courseId, moduleId],

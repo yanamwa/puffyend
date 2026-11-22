@@ -31,6 +31,8 @@ import {
 const QUESTION_COUNT = 10;
 const MAX_STALLED_REPAIR_ROUNDS = 3;
 const MAX_OPENAI_VALIDATION_REPAIR_ROUNDS = 2;
+const MAX_FINAL_DUPLICATE_REPAIRS = 2;
+const MIN_REPAIR_WINDOW_MS = 2 * MIN_OPENAI_REQUEST_MS;
 export const PRACTICE_GENERATION_TIMEOUT_MS = 240_000;
 const MASTERY_TARGET = PRACTICE_MASTERY_TARGET;
 const RECAP_LIMIT = 5;
@@ -54,10 +56,20 @@ const starting = new Map();
 const generationMessages = {
   [DUPLICATE_QUIZ_QUESTION]:
     "A generated question repeated an earlier question.",
+  duplicate: "One practice question was too similar to another question.",
+  duplicate_options: "A generated question had repeated answer choices.",
+  unsupported_question: "One practice question could not be answered from its lesson passage.",
+  unsupported_answer: "The lesson passage did not support a generated answer.",
+  incorrect_explanation: "A generated explanation did not match its lesson passage.",
+  ambiguous_answer: "A generated question did not have one clear answer.",
+  objective_mismatch: "A generated question missed its assigned learning objective.",
+  cognitive_mismatch: "A generated question missed its assigned cognitive level.",
+  focus_mismatch: "A generated question missed its assigned review topic.",
+  multiple_validation_failures: "Some generated practice questions did not pass validation.",
   QUIZ_EVIDENCE_INVALID:
     "A generated question could not be linked to a passage in this lesson.",
   QUIZ_REVIEW_REJECTED:
-    "A generated question or its answer did not pass the lesson evidence check.",
+    "A generated practice question did not pass review.",
   QUIZ_REVIEW_INCOMPLETE: "The review did not verify every generated answer.",
   QUIZ_FOCUS_MISMATCH:
     "A generated question missed the review topic assigned from your earlier answers.",
@@ -155,10 +167,14 @@ async function generatePracticeBatch(options, generateBatch) {
   const allIndexes = [...types.keys()];
   const approved = new Map();
   const rejected = new Map();
+  // Keep duplicate variants for this job, even after their original slot is filled.
+  // Other rejections can legitimately be repaired using the same stem and a corrected key or explanation.
+  const duplicateStems = new Set();
   const generationId = randomUUID();
   let round = 0;
   let stalledRounds = 0;
   let lastFailure;
+  let validationStop = "no_progress";
   const timings = { initialGenerationMs: 0, reviewMs: 0, repairMs: 0 };
   const log = (details) => console.info("[Practice validation]", JSON.stringify({
     generationId, jobId: options.jobId, round, passed: approved.size, total: types.length, ...details,
@@ -189,17 +205,27 @@ async function generatePracticeBatch(options, generateBatch) {
     rejected.delete(index);
   }
 
-  async function prepare(indexes) {
+  async function prepare(indexes, duplicateRepairAttempt = 0) {
     remainingTime(requestOptions);
     const retainedStems = [...approved.values()].map((item) => item.question);
     const previousQuestions = [...options.previousQuestions, ...retainedStems];
+    const rejectedDuplicateQuestions = [...duplicateStems];
     const feedback = indexes.flatMap((index) => {
       const failure = rejected.get(index);
       return failure ? [{ question_number: index + 1, ...failure.feedback }] : [];
     });
+    // A stem such as "Which statement is correct?" does not identify the fact already tested.
+    const approvedQuestions = feedback.some((item) => item.reason_code === "duplicate")
+      ? [...approved].map(([index, { question, correct_answer, concept }]) => ({
+          question_number: index + 1, question, correct_answer, concept,
+        }))
+      : [];
     try {
       const batch = await generate({
         ...options,
+        chunks: duplicateRepairAttempt
+          ? [...options.chunks, ...options.additionalChunks.slice(0, duplicateRepairAttempt)]
+          : options.chunks,
         types: indexes.map((i) => types[i]),
         skills: indexes.map((i) => skills[i]),
         practiceSlotIndexes: indexes,
@@ -209,9 +235,15 @@ async function generatePracticeBatch(options, generateBatch) {
           .map(({ question_number, reason }) => `Slot ${question_number}: ${reason}`)
           .join("\n"),
         repairFeedback: feedback,
+        approvedQuestions,
+        rejectedDuplicateQuestions,
+        duplicateRepairAttempt,
         previousQuestions,
         promptPreviousQuestions: [...options.promptPreviousQuestions, ...retainedStems],
-        onValidated: (questions) => validateQuizUniqueness(questions, previousQuestions, { compareSharedSetup: true }),
+        onValidated: (questions, reviewedStems = [], number = 1) => validateQuizUniqueness(
+          questions, [...previousQuestions, ...rejectedDuplicateQuestions, ...reviewedStems],
+          { compareSharedSetup: true, offset: number - 1 },
+        ),
         maxAttempts: 1,
         preserveValidated: true,
         runRequest,
@@ -232,13 +264,18 @@ async function generatePracticeBatch(options, generateBatch) {
         if (approved.has(index)) continue;
         const failure = error.rejectedSlots?.get(position) || error;
         const previous = rejected.get(index);
+        const safeReason = failure.safeReason || (failure.code === DUPLICATE_QUIZ_QUESTION ? "duplicate" :
+          Object.hasOwn(generationMessages, failure.code) ? failure.code : "QUIZ_QUESTION_FORMAT");
+        if (safeReason === "duplicate" && typeof failure.draft?.question === "string")
+          duplicateStems.add(failure.draft.question.trim());
         rejected.set(index, {
           targets: { ...previous?.targets, ...failure.targets },
-          feedback: { reason: failure.message, draft: failure.draft ?? previous?.feedback.draft },
+          feedback: {
+            reason_code: safeReason, reason: failure.message, draft: failure.draft ?? previous?.feedback.draft,
+            ...(failure.matchedQuestion ? { matched_question: failure.matchedQuestion } : {}),
+          },
         });
         // Free-text verdicts and drafts go only to the repair generator.
-        const safeReason = failure.safeReason ||
-          (Object.hasOwn(generationMessages, failure.code) ? failure.code : "QUIZ_QUESTION_FORMAT");
         (slotsByReason[safeReason] ??= []).push(index + 1);
       }
       log({ attempted: indexes.length, batchPassed: passed.length, rejected: slotsByReason });
@@ -249,12 +286,27 @@ async function generatePracticeBatch(options, generateBatch) {
 
   const pendingSlots = () => allIndexes.filter((index) => !approved.has(index));
 
+  function finalDuplicateSlot() {
+    if (approved.size !== types.length - 1) return;
+    const [index] = pendingSlots();
+    if (rejected.get(index)?.feedback.reason_code === "duplicate") return index;
+  }
+
+  function remainingRepairTime() {
+    const remainingMs = remainingTime(requestOptions);
+    if (remainingMs < MIN_REPAIR_WINDOW_MS) {
+      validationStop = "insufficient_repair_time";
+      throw lastFailure;
+    }
+    return remainingMs;
+  }
+
   async function repairInGroups() {
     while (approved.size < types.length && stalledRounds < MAX_STALLED_REPAIR_ROUNDS) {
       const before = approved.size;
       const pending = pendingSlots();
       for (let start = 0; start < pending.length; start += 5) {
-        const remainingMs = remainingTime(requestOptions);
+        const remainingMs = finalDuplicateSlot() === undefined ? remainingTime(requestOptions) : remainingRepairTime();
         if (provider?.canStartOpenAIValidationRepair()) {
           // Admit another Gemini batch only if both providers could still
           // finish a draft and review. Recheck even between sibling batches.
@@ -273,7 +325,6 @@ async function generatePracticeBatch(options, generateBatch) {
     }
   }
 
-  let validationStop = "no_progress";
   let stop = "all_slots_verified";
   try {
     await prepare(allIndexes);
@@ -281,11 +332,7 @@ async function generatePracticeBatch(options, generateBatch) {
     if (handoff) {
       validationStop = "openai_repair_limit";
       for (let pass = 0; pass < MAX_OPENAI_VALIDATION_REPAIR_ROUNDS && approved.size < types.length; pass++) {
-        const remainingMs = remainingTime(requestOptions);
-        if (remainingMs < 2 * MIN_OPENAI_REQUEST_MS) {
-          validationStop = "insufficient_repair_time";
-          throw lastFailure;
-        }
+        const remainingMs = remainingRepairTime();
         if (pass === 0) {
           if (!provider.startOpenAIValidationRepair(requestOptions)) throw lastFailure;
           log({
@@ -296,22 +343,43 @@ async function generatePracticeBatch(options, generateBatch) {
         }
         round++;
         // The reservation covers one pair of calls for all remaining gaps.
+        const before = approved.size;
         await prepare(pendingSlots());
+        stalledRounds = approved.size === before ? stalledRounds + 1 : 0;
       }
     }
+    // Availability fallback may already have selected OpenAI. Use the current
+    // provider and original deadline for a bounded, single-slot recovery.
+    for (let attempt = 1; attempt <= MAX_FINAL_DUPLICATE_REPAIRS; attempt++) {
+      const index = finalDuplicateSlot();
+      if (index === undefined) break;
+      const remainingMs = remainingRepairTime();
+      round++;
+      log({ event: "targeted_duplicate_repair", slot: index + 1, attempt,
+        maxAttempts: MAX_FINAL_DUPLICATE_REPAIRS, remainingMs });
+      await prepare([index], attempt);
+      stalledRounds = approved.has(index) ? 0 : stalledRounds + 1;
+    }
+    if (finalDuplicateSlot() !== undefined) validationStop = "duplicate_repair_limit";
     if (approved.size < types.length) throw lastFailure;
   } catch (error) {
     stop = "generation_error";
     if (error.code === "GENERATION_TIMEOUT") {
       if (Date.now() >= requestOptions.deadlineAt) stop = "deadline";
       else stop = requestOptions.signal.aborted ? "cancelled" : "insufficient_request_time";
-    } else if (error === lastFailure) stop = validationStop;
-    else if (error.statusCode === 503) stop = "provider_unavailable";
+    } else if (error === lastFailure) {
+      stop = validationStop;
+      const reasons = new Set([...rejected.values()].map(({ feedback }) => feedback.reason_code));
+      error.safeReason = reasons.size === 1 ? [...reasons][0] : "multiple_validation_failures";
+    } else if (error.statusCode === 503) stop = "provider_unavailable";
     else if (error.statusCode === 502) stop = "invalid_provider_response";
     throw error;
   } finally {
+    const rejectedByReason = Object.create(null);
+    for (const [index, { feedback }] of rejected)
+      (rejectedByReason[feedback.reason_code] ??= []).push(index + 1);
     log({ event: "summary", ...timings, approvedCount: approved.size, rejectedCount: rejected.size,
-      remainingMs: Math.max(0, requestOptions.deadlineAt - Date.now()), stop, stalledRounds });
+      remainingMs: Math.max(0, requestOptions.deadlineAt - Date.now()), stop, stalledRounds, rejectedByReason });
   }
   return allIndexes.map((index) => approved.get(index));
 }
@@ -448,11 +516,13 @@ export async function generatePracticeQuestions(
     ),
   );
   const focusedChunks = targets.flatMap((topic) => related.get(topic) || []);
+  const initialChunks = new Set([...spread, ...focusedChunks]);
   // Draft and independently review all ten slots before repairing any gaps.
   const questions = await generatePracticeBatch(
     {
       types,
-      chunks: [...new Set([...spread, ...focusedChunks])],
+      chunks: [...initialChunks],
+      additionalChunks: chunks.filter((chunk) => !initialChunks.has(chunk)).slice(0, MAX_FINAL_DUPLICATE_REPAIRS),
       title: module.title,
       objectives: module.learningObjectives,
       difficulty,
@@ -664,8 +734,9 @@ export async function startModulePractice(
         );
     } catch (error) {
       if (error.statusCode === 409) throw error;
-      console.error("Module Practice generation failed:", error.code || error.statusCode || "GENERATION_ERROR");
+      console.error("Module Practice generation failed:", error.safeReason || error.code || error.statusCode || "GENERATION_ERROR");
       const reason =
+        generationMessages[error.safeReason] ||
         generationMessages[error.code] ||
         (error.statusCode === 422
           ? "The generated questions did not pass validation for this lesson."

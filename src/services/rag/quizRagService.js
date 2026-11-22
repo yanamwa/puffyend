@@ -107,7 +107,8 @@ practiceVerdict.properties.question_number = { type: "INTEGER" };
 practiceVerdict.properties.reason_code = {
   type: "STRING", enum: ["supported", ...reviewRejections],
 };
-practiceVerdict.required.push("question_number", "reason_code");
+practiceVerdict.properties.matched_question = stringSchema;
+practiceVerdict.required.push("question_number", "reason_code", "matched_question");
 
 function practiceObjectives(objectives) {
   const entries = Array.isArray(objectives) ? objectives : [objectives];
@@ -477,7 +478,7 @@ function alignPracticeDraft(draft, slots, rejectedSlots) {
   return { questions };
 }
 
-function collectPracticeVerdicts(review, questions, reviewIndexes, rejectedSlots, slots) {
+function collectPracticeVerdicts(review, questions, reviewIndexes, rejectedSlots, { slots, comparisonStems, onValidated }) {
   const byIndex = new Map();
   const numbers = slots && reviewIndexes.map((i) => slots[i].question_number);
   // The compact index and original slot must agree. A shifted or conflicting
@@ -497,18 +498,36 @@ function collectPracticeVerdicts(review, questions, reviewIndexes, rejectedSlots
     }
   }
   const approved = [];
+  const reviewedStems = [];
   for (const [position, question] of questions.entries()) {
     const index = reviewIndexes[position];
     const verdict = byIndex.get(position);
     if (verdict?.supported === true && (!verdict.reason_code || verdict.reason_code === "supported")) {
+      if (slots && onValidated) {
+        try {
+          onValidated([question], reviewedStems, slots[index].question_number);
+        } catch (error) {
+          if (error.code !== DUPLICATE_QUIZ_QUESTION && error.safeReason !== "duplicate_options") throw error;
+          rejectedSlots.set(index, error);
+          continue;
+        }
+        reviewedStems.push(question.question);
+      }
       question.grounding.model_review_passed = true;
       approved.push({ index, question });
     } else if (verdict?.supported === false) {
-      rejectedSlots.set(index, slotError(
-        typeof verdict.reason === "string" && verdict.reason.trim() ? verdict.reason : "Unsupported answer.",
+      const duplicate = slots && verdict.reason_code === "duplicate";
+      const reason = typeof verdict.reason === "string" && verdict.reason.trim() ? verdict.reason :
+        duplicate ? "This question repeats another learning check." : "This question did not pass review.";
+      const failure = slotError(reason,
         reviewRejections.includes(verdict.reason_code) ? verdict.reason_code : "QUIZ_REVIEW_REJECTED",
-        "QUIZ_REVIEW_REJECTED",
-      ));
+        duplicate ? DUPLICATE_QUIZ_QUESTION : "QUIZ_REVIEW_REJECTED",
+      );
+      const match = verdict.matched_question;
+      if (duplicate && typeof match === "string" && match && (
+        comparisonStems.includes(match) || questions.some((other) => other !== question && other.question === match)
+      )) failure.matchedQuestion = match;
+      rejectedSlots.set(index, failure);
     } else {
       rejectedSlots.set(index, slotError(
         "The grounding review did not return one unambiguous verdict for this question.",
@@ -553,6 +572,9 @@ export async function generateQuizBatch(
     practiceSlotIndexes,
     practiceTargets,
     repairFeedback = [],
+    approvedQuestions = [],
+    rejectedDuplicateQuestions = [],
+    duplicateRepairAttempt = 0,
     shortAnswer = false,
     onValidated,
     maxAttempts = 3,
@@ -569,6 +591,12 @@ export async function generateQuizBatch(
     return runRequest ? runRequest(phase, generate, request) : generate(request);
   }
   const numberedPractice = isPractice && preserveValidated && !!practiceTargets;
+  const comparisonStems = rejectedDuplicateQuestions.length
+    ? [...previousQuestions, ...rejectedDuplicateQuestions] : previousQuestions;
+  const duplicateContext = {
+    ...(rejectedDuplicateQuestions.length ? { rejected_duplicate_questions: rejectedDuplicateQuestions } : {}),
+    ...(approvedQuestions.length ? { approved_questions: approvedQuestions } : {}),
+  };
   const objectiveChoices = numberedPractice ? practiceObjectives(objectives) : [];
   const reviewObjectives = (isPractice || preserveValidated) && objectives;
   const slots = mainPrompt
@@ -675,6 +703,14 @@ export async function generateQuizBatch(
                   "Echo the original question_number of each assigned slot, including gaps in numbering. Write only these slots.",
                   "Use the slot's assigned learning_objective and cognitive_level when present. Otherwise choose a relevant objective verbatim from learning_objectives and a level from the slot's allowed_cognitive_levels. If no objectives are supplied, state a concise learning objective drawn from the cited lesson.",
                   "Use each slot's repair_feedback to fix the exact defect in its previous draft. Revisit a missed concept through a different inference, distinction or application. Never substitute a different learning target to bypass a rejection.",
+                  ...(repairFeedback.some((item) => item.reason_code === "duplicate") ? [
+                    "For a duplicate, compare the rejected draft with matched_question, previous_questions and rejected_duplicate_questions. Use the keys and concepts in approved_questions to identify what each retained question already tests. Choose a different fact, inference, step or application supported by the module evidence under the same objective, type and cognitive level. Changing names, numbers or wording alone is insufficient.",
+                  ] : []),
+                  ...(duplicateRepairAttempt === 1 ? [
+                    "For this remaining slot, start from a different detail in the supplied passages and use it to test an as-yet unasked part of the assigned objective.",
+                  ] : duplicateRepairAttempt > 1 ? [
+                    "For this remaining slot, work back from a different conclusion supported by the passages. Check that answering requires a different distinction or operation from the rejected drafts.",
+                  ] : []),
                 ] : []),
                 ...(shortAnswer
                   ? [
@@ -736,6 +772,7 @@ export async function generateQuizBatch(
           correction,
           ...(numberedPractice ? { learning_objectives: objectiveChoices } : {}),
           ...(repairFeedback.length ? { repair_feedback: repairFeedback } : {}),
+          ...duplicateContext,
           previous_draft: previousDraft,
           previous_review: previousReview,
         },
@@ -752,7 +789,7 @@ export async function generateQuizBatch(
         types,
         chunks,
         skills,
-        previousQuestions,
+        comparisonStems,
         { practiceFocus, shortAnswer, rejectedSlots, passages: evidence, slots: boundSlots },
       );
       if (rejectedSlots?.size && !questions.length)
@@ -814,6 +851,8 @@ export async function generateQuizBatch(
           ...(numberedPractice ? [
             "Check the specific learning_objective and cognitive_level assigned to each question_index against the actual task. Reject objectives inferred without support from the cited lesson. For a duplicate pair, identify the redundant question and keep the independently correct original. For a duplicate of previous_questions, reject the new question.",
             "Echo both the question_index and its original question_number exactly. Set reason_code to supported only for a passing verdict. For a rejection, choose the matching category and state the specific defect in one concise sentence.",
+            "Compare against rejected_duplicate_questions as well. For reason_code duplicate, copy the conflicting stem from another question, previous_questions or rejected_duplicate_questions into matched_question and explain the repeated learning check. Use an empty string for matched_question for all other verdicts. A shared concept or correct answer alone is insufficient to reject a question.",
+            "Use approved_questions only to compare the learning checks. Return verdicts only for questions in this review. Verify their answers using their own citations.",
           ] : []),
         ].join(" "),
         data: {
@@ -825,6 +864,7 @@ export async function generateQuizBatch(
               }))
             : questions,
           previous_questions: [...(preserveValidated ? previousQuestions : promptPreviousQuestions)],
+          ...duplicateContext,
           ...(reviewObjectives ? { objectives: reviewObjectives } : {}),
           assigned_slots: reviewSlots,
           ...(reviewFocus ? { practice_focus: reviewFocus } : {}),
@@ -832,14 +872,16 @@ export async function generateQuizBatch(
       });
       previousReview = review;
       if (preserveValidated) {
-        const approved = collectPracticeVerdicts(review, questions, reviewIndexes, rejectedSlots, boundSlots);
+        const approved = collectPracticeVerdicts(review, questions, reviewIndexes, rejectedSlots, {
+          slots: boundSlots, comparisonStems, onValidated,
+        });
         if (rejectedSlots.size)
           throw partialPracticeError(rejectedSlots, approved, boundSlots, orderedDraft);
       } else {
         validateQuizReview(review, questions);
         for (const question of questions) question.grounding.model_review_passed = true;
       }
-      onValidated?.(questions);
+      if (!numberedPractice) onValidated?.(questions);
       return questions;
     } catch (error) {
       if (error.statusCode || error.retryable) throw error;

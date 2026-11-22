@@ -177,7 +177,7 @@ export async function runModulePracticeJob({
     console.error(
       "Practice preparation failed:",
       error.code || error.statusCode || "GENERATION_ERROR",
-      { ...timing(), reason: error.cause?.code || error.code || "GENERATION_ERROR" },
+      { ...timing(), reason: error.cause?.safeReason || error.cause?.code || error.code || "GENERATION_ERROR" },
     );
     const [failed] = await database.execute(
       `UPDATE module_practice_jobs SET status = 'failed', error_json = ?,

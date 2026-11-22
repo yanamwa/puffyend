@@ -90,19 +90,21 @@ function normalizeQuestion(value) {
 export function validateQuizUniqueness(
   questions, previousQuestions = [], { offset = 0, compareSharedSetup = false } = {},
 ) {
-  const seen = new Set(previousQuestions.map(normalizeQuestion));
+  const seen = new Map(previousQuestions.map((stem) => [normalizeQuestion(stem), stem]));
   const stems = [...previousQuestions];
   for (const [index, item] of questions.entries()) {
     const question = normalizeQuestion(item.question);
-    if (
-      seen.has(question) ||
-      stems.some((previous) => nearlyIdentical(previous, item.question, compareSharedSetup))
-    )
+    const exact = seen.has(question);
+    const matchedQuestion = exact ? seen.get(question) :
+      stems.find((previous) => nearlyIdentical(previous, item.question, compareSharedSetup));
+    if (exact || matchedQuestion !== undefined) {
+      const detail = exact ? "The normalized stems match." : "The question wording is nearly identical.";
       throw Object.assign(
-        new Error(`Duplicate quiz question at position ${offset + index + 1}.`),
-        { code: DUPLICATE_QUIZ_QUESTION, safeReason: "duplicate" },
+        new Error(`Duplicate quiz question at position ${offset + index + 1}.` + (compareSharedSetup ? " " + detail : "")),
+        { code: DUPLICATE_QUIZ_QUESTION, safeReason: "duplicate", matchedQuestion },
       );
-    seen.add(question);
+    }
+    seen.set(question, item.question);
     stems.push(item.question);
     if (item.type === "multiple_choice") {
       const options = item.options.map((option) =>
