@@ -183,7 +183,7 @@ export async function runCatalogLessons(
     locked = Number(lock.acquired) === 1;
     if (!locked) return;
     const [[job]] = await connection.query(
-      `SELECT j.version_id,v.storage_name,v.coverage_modules,c.code,c.title,c.description FROM catalog_lesson_jobs j JOIN syllabus_versions v ON v.version_id=j.version_id JOIN course_catalog c ON c.catalog_id=v.catalog_id WHERE j.status IN ('queued','running') AND c.status='active' AND c.archived_at IS NULL ORDER BY j.version_id LIMIT 1`,
+      `SELECT j.version_id,v.storage_name,v.coverage_modules,v.academic_context,c.code,c.title,c.description FROM catalog_lesson_jobs j JOIN syllabus_versions v ON v.version_id=j.version_id JOIN course_catalog c ON c.catalog_id=v.catalog_id WHERE j.status IN ('queued','running') AND c.status='active' AND c.archived_at IS NULL ORDER BY j.version_id LIMIT 1`,
     );
     if (!job) return;
     versionId = job.version_id;
@@ -192,18 +192,28 @@ export async function runCatalogLessons(
       [versionId],
     );
     const modules = parseModuleList(job.coverage_modules);
+    if (job.academic_context != null) {
+      // Coverage was verified at upload. The organizer supplies teaching
+      // content separately, after a professor selects instructional sources.
+      await connection.execute("UPDATE catalog_lesson_jobs SET status='completed',completed_modules=?,error_message=NULL WHERE version_id=?", [modules.length,versionId]);
+      return;
+    }
     let syllabusIndex;
     for (let i = 0; i < modules.length; i++) {
       if (!modules[i].lesson_pages?.length || !modules[i].quiz_items?.length) {
         syllabusIndex ??= await readSyllabusIndex(job.storage_name, readSyllabus);
         const module = modules[i];
         const excerpts = retrieveSyllabusExcerpts(syllabusIndex, module);
-        modules[i] = await generateCatalogModule(
+        const draft = await generateCatalogModule(
           job,
           module,
           generate,
           excerpts,
         );
+        modules[i] = { ...draft,
+          ...(module.lesson_pages?.length ? { lesson_pages: module.lesson_pages } : {}),
+          ...(module.quiz_items?.length ? { quiz_items: module.quiz_items } : {}),
+        };
       }
       await connection.beginTransaction();
       try {

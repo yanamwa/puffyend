@@ -118,9 +118,20 @@ export async function cleanupSyllabusUploads() {
 
 async function analyzeFile(data) {
   const suggestions = await extractSyllabus(data);
-  const extractionMessage = suggestions.coverage_modules.length
-    ? ""
-    : "Course Coverage headings were not detected. You can add them from the PDF before saving.";
+  const missing = [
+    ...(!suggestions.description ? ["course description"] : []),
+    ...(!suggestions.programs?.length ? ["academic program"] : []),
+    ...(!suggestions.academic_year ? ["academic year"] : []),
+    ...(!suggestions.semester ? ["semester"] : []),
+    ...(!suggestions.course_outcomes?.length ? ["course outcomes"] : []),
+    ...(!suggestions.references?.length ? ["references"] : []),
+    ...(!suggestions.course_outcomes.length ? ["course learning outcomes"] : []),
+    ...(!suggestions.references.length ? ["references"] : []),
+  ];
+  const extractionMessage = [
+    !suggestions.coverage_modules.length && "Course Coverage headings were not detected. You can add them from the PDF before saving.",
+    missing.length && "The PDF did not identify these fields: " + missing.join(", ") + ".",
+  ].filter(Boolean).join(" ");
   return { cvsuSyllabusValidated: true, suggestions, extractionMessage };
 }
 router.post(
@@ -133,7 +144,11 @@ router.post(
       [req.params.id, actor(req)],
     );
     if (!row) fail("Upload expired or not found.", 404);
-    const data = await analyzeFile(await fs.readFile(filePath(row.storage_name)));
+    const data = row.extraction_json || await analyzeFile(await fs.readFile(filePath(row.storage_name)));
+    if (!row.extraction_json) await db.execute(
+      "UPDATE syllabus_uploads SET extraction_json=? WHERE upload_id=? AND uploader_id=?",
+      [JSON.stringify(data), row.upload_id, actor(req)],
+    );
     const [matches] = await db.execute(
       "SELECT * FROM course_catalog WHERE normalized_code=? AND archived_at IS NULL",
       [normalizeCatalogCode(data.suggestions.code)],
@@ -245,10 +260,10 @@ router.get(
     );
     if (!record) fail("Syllabus not found.", 404);
     const [[version]] = await db.execute(
-      "SELECT coverage_modules FROM syllabus_versions WHERE version_id=?",
+      "SELECT coverage_modules,academic_context FROM syllabus_versions WHERE version_id=?",
       [record.version_id],
     );
-    res.json({ success: true, syllabus: { ...present(record), coverage_modules: version.coverage_modules } });
+    res.json({ success: true, syllabus: { ...present(record), ...version } });
   }),
 );
 router.get(
@@ -420,8 +435,8 @@ router.post(
     await fs.writeFile(filePath(storageName), req.file.buffer, { flag: "wx" });
     try {
       await db.execute(
-        "INSERT INTO syllabus_uploads (upload_id,uploader_id,filename,storage_name,file_size,expires_at) VALUES (?,?,?,?,?,(NOW() + INTERVAL '24 hour'))",
-        [uploadId, actor(req), filename, storageName, req.file.size],
+        "INSERT INTO syllabus_uploads (upload_id,uploader_id,filename,storage_name,file_size,extraction_json,expires_at) VALUES (?,?,?,?,?,?,(NOW() + INTERVAL '24 hour'))",
+        [uploadId, actor(req), filename, storageName, req.file.size, JSON.stringify(data)],
       );
     } catch (error) {
       await fs.unlink(filePath(storageName));
@@ -556,7 +571,7 @@ router.post(
         [req.body.uploadId, actor(req)],
       );
       if (!file) fail("Upload expired or already saved. Upload the PDF again.");
-      const syllabus = await extractSyllabus(
+      const syllabus = file.extraction_json?.suggestions || await extractSyllabus(
         await fs.readFile(filePath(file.storage_name)),
         { includeCoverage: false },
       );
@@ -619,9 +634,16 @@ router.post(
         fail("Confirm that you reviewed the extracted information before saving a version to an active course.");
       const coverageModules = validateCoverageModules(
         req.body.coverage_modules,
-      );
+      ).map((row, index) => {
+        const extracted = syllabus.coverage_modules || [];
+        const sourceIndex = req.body.coverage_modules[index]?.syllabus_module_index;
+        const source = Number.isInteger(sourceIndex) ? extracted[sourceIndex] : extracted.find(m => m.title === row.title && m.source_page === row.source_page);
+          return source && source.source_page === row.source_page
+            ? { ...source, ...row, syllabus_title: source.title } : row;
+      });
+      const academicContext = { references: syllabus.references || [], course_outcomes: syllabus.course_outcomes || [] };
       const [version] = await connection.execute(
-        "INSERT INTO syllabus_versions (catalog_id,academic_year,semester,filename,storage_name,file_size,uploaded_by,coverage_modules) VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO syllabus_versions (catalog_id,academic_year,semester,filename,storage_name,file_size,uploaded_by,coverage_modules,academic_context) VALUES (?,?,?,?,?,?,?,?,?)",
         [
           course.catalog_id,
           academicYear,
@@ -631,6 +653,7 @@ router.post(
           file.file_size,
           actor(req),
           JSON.stringify(coverageModules),
+          JSON.stringify(academicContext),
         ],
       );
       await connection.execute(
@@ -706,12 +729,12 @@ router.patch(
         await connection.execute(
           `INSERT INTO catalog_lesson_jobs (version_id)
            SELECT version_id FROM syllabus_versions
-           WHERE catalog_id=? AND coverage_modules IS NOT NULL
+           WHERE version_id=? AND catalog_id=? AND coverage_modules IS NOT NULL
              AND coverage_modules <> '[]'
            ON CONFLICT (version_id) DO UPDATE
              SET status='queued',error_message=NULL,updated_at=NOW()
              WHERE catalog_lesson_jobs.status='failed'`,
-          [course.catalog_id],
+          [version.version_id, course.catalog_id],
         );
       }
       await audit(
@@ -758,7 +781,9 @@ router.use((error, _req, res, _next) => {
   res.status(error.statusCode || 500).json({
     success: false,
     code: error.code === INVALID_SYLLABUS ? error.code : undefined,
-    message: error.statusCode
+    message: error.code === INVALID_SYLLABUS
+      ? "The uploaded document is not recognized as a Cavite State University (CvSU) syllabus. Please upload a valid CvSU syllabus."
+      : error.statusCode
       ? error.message
       : "Course catalog request failed.",
     matches: error.matches,

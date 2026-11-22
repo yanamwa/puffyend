@@ -4,7 +4,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { extractText } from "./extractText.js";
 import { chunkText } from "./chunkText.js";
-import { embeddingConfig, embedTexts } from "./embeddingService.js";
+import { organizerEmbeddingConfig, embedOrganizerDocuments } from "./embeddingService.js";
+import { createAcademicWorkflow, runAcademicWorkflow } from "./academicWorkflow.js";
 import {
   createDocument,
   saveChunks,
@@ -15,7 +16,8 @@ import {
   withDatabaseLock,
   withDatabaseLocks,
 } from "./vectorRepository.js";
-import { retrieveContexts } from "./retrievalService.js";
+import { rankAcademicEvidence } from "./academicEvidence.js";
+import { belongsToModule } from "./lessonModuleScope.js";
 import { createSemanticOutline } from "./outlineService.js";
 import { generateGroundedPage } from "./groundingService.js";
 import {
@@ -43,16 +45,17 @@ export async function indexDocument({
   lessonId,
   uploaderId,
   preparedChunks,
+  moduleKey = null, session = createAcademicWorkflow("organize"),
   onProgress = async () => {},
 }) {
   const hash = crypto
     .createHash("sha256")
     .update(await fs.readFile(file.path))
     .digest("hex");
-  const config = embeddingConfig();
+  const preferred = organizerEmbeddingConfig(session.primary);
   const scopeHash = crypto
     .createHash("sha256")
-    .update(`${courseId}:${lessonId ?? ""}:${hash}`)
+    .update(JSON.stringify([courseId, lessonId, moduleKey, hash]))
     .digest("hex")
     .slice(0, 48);
   return withDatabaseLock(`rag-upload:${scopeHash}`, async () => {
@@ -60,7 +63,7 @@ export async function indexDocument({
       courseId,
       lessonId,
       hash,
-      config,
+      preferred, moduleKey,
     );
     if (existing) return existing.document_id;
     await onProgress({ phase: "extracting", progress: 5 });
@@ -80,13 +83,10 @@ export async function indexDocument({
         file,
         hash,
         storagePath,
+        moduleKey,
       });
       await onProgress({ phase: "embedding", progress: 10, documentId });
-      const vectors = await embedTexts(
-        chunks.map((c) => c.text),
-        "RETRIEVAL_DOCUMENT",
-        config,
-      );
+      const { vectors, config } = await embedOrganizerDocuments(chunks.map(c => c.text), session);
       await saveChunks(documentId, chunks, vectors, config);
       return documentId;
     } catch (error) {
@@ -97,7 +97,7 @@ export async function indexDocument({
   });
 }
 
-export async function reindexDocument(documentId, onProgress = async () => {}) {
+export async function reindexDocument(documentId, onProgress = async () => {}, session = createAcademicWorkflow("organize")) {
   return withDatabaseLock(`rag-document:${documentId}`, async () => {
     const document = await loadDocument(documentId);
     if (!document)
@@ -124,18 +124,9 @@ export async function reindexDocument(documentId, onProgress = async () => {}) {
         );
       await onProgress({ phase: "extracting", progress: 5, documentId });
       const chunks = await extractChunks(file);
-      const config = embeddingConfig();
       await onProgress({ phase: "embedding", progress: 10 });
-      await saveChunks(
-        documentId,
-        chunks,
-        await embedTexts(
-          chunks.map((c) => c.text),
-          "RETRIEVAL_DOCUMENT",
-          config,
-        ),
-        config,
-      );
+      const { vectors, config } = await embedOrganizerDocuments(chunks.map(c => c.text), session);
+      await saveChunks(documentId, chunks, vectors, config);
       return documentId;
     } catch (error) {
       await markFailed(documentId, error);
@@ -178,7 +169,11 @@ export async function generateFromDocuments(
   onProgress = async () => {},
   checkpoint = [],
   generationContext = null,
+  state = {},
 ) {
+  if (!state.session) return runAcademicWorkflow("organize", {}, session =>
+    generateFromDocuments(documentIds, onProgress, checkpoint, generationContext, { ...state, session }));
+  const { session, pageCheckpoint = {} } = state;
   const ids = [...new Set(documentIds.map(String))];
   return withDatabaseLocks(
     ids.map((id) => `rag-document:${id}`),
@@ -192,7 +187,10 @@ export async function generateFromDocuments(
         sources.some(
           (s) =>
             s.course_id !== sources[0].course_id ||
-            s.lesson_id !== sources[0].lesson_id,
+            (state.courseId != null && String(s.course_id) !== String(state.courseId)) ||
+            (state.scope && !belongsToModule(s, state.scope)) ||
+            (s.module_key != null && s.module_key !== (state.moduleKey ?? sources[0].module_key)) ||
+            (s.lesson_id != null && String(s.lesson_id) !== String(state.moduleKey ?? sources[0].lesson_id)),
         )
       )
         throw Object.assign(
@@ -234,6 +232,7 @@ export async function generateFromDocuments(
         onProgress,
         checkpoint,
         generationContext,
+        session,
       );
       const used = new Set();
       const configured = Number(process.env.RAG_PAGE_CONCURRENCY || 3);
@@ -246,14 +245,12 @@ export async function generateFromDocuments(
         phase: `generating ${outline.topics.length} pages`,
         progress: 40,
       });
-      const pages = await parallelMap(
+      const pageResults = await parallelMap(
         outline.topics,
         concurrency,
         async (topic) => {
-          const relevant = await retrieveContexts(ids, topic.title, {
-            topK: 3,
-            chunks,
-          });
+          session.left();
+          const relevant = rankAcademicEvidence(chunks, topic.title, 3);
           const context = [
             ...new Map(
               [...topic.anchors, ...relevant].map((c) => [
@@ -262,7 +259,15 @@ export async function generateFromDocuments(
               ]),
             ).values(),
           ].sort((a, b) => a.source_order - b.source_order);
-          const page = await generateGroundedPage(topic, context);
+          const digest = crypto.createHash("sha256").update(JSON.stringify([topic, context.map(c => [String(c.chunk_id),c.chunk_text]), generationContext])).digest("hex");
+          let page = pageCheckpoint[digest];
+          if (!page) {
+            try { page = await generateGroundedPage(topic, context, undefined, session); }
+            catch (error) {
+              if (error.code !== "LESSON_GROUNDING_FAILED" || !generationContext?.topics?.length) throw error;
+              return { uncovered: topic.syllabus_topic || topic.title };
+            }
+          }
           const citedSources = sources.filter((source) =>
             page.source_chunks.some(
               (c) => String(c.document_id) === String(source.document_id),
@@ -270,6 +275,7 @@ export async function generateFromDocuments(
           );
           const result = {
             ...page,
+            syllabus_topic: topic.syllabus_topic, learning_objective: topic.learning_objective,
             source_document_id:
               ids.length === 1 ? sources[0].document_id : null,
             source_document_ids: citedSources.map((s) => s.document_id),
@@ -277,18 +283,34 @@ export async function generateFromDocuments(
           };
           context.forEach((c) => used.add(String(c.chunk_id)));
           const count = ++completed;
+          pageCheckpoint[digest] = page;
+          session.record(1,0);
           // Serialize database progress writes; completed page order may differ from source order.
           progressQueue = progressQueue.then(() =>
             onProgress({
               phase: `verified ${count}/${outline.topics.length} pages`,
               progress: 40 + Math.round((55 * count) / outline.topics.length),
+              pageCheckpoint,
             }),
           );
           await progressQueue;
           return result;
         },
       );
+      const pages = pageResults.filter(p => !p.uncovered);
+      if (!pages.length) throw Object.assign(new Error("No lesson pages could be verified against the selected instructional materials. Add evidence for the syllabus topics and retry."), { statusCode: 422 });
       const coverage = computeCoverage(chunks, outline, pages, used);
+      const partial = new Set(pageResults.filter(p => p.uncovered).map(p => p.uncovered));
+      coverage.missing_topics = (generationContext?.topics || []).filter(t => partial.has(t) || !pages.some(p => p.syllabus_topic === t));
+      coverage.missing_topic_details = coverage.missing_topics.map(topic => ({
+        topic,
+        reason: partial.has(topic)
+          ? "The selected passages did not verify every proposed explanation. Add material supporting the remaining claims."
+          : "The selected files supplied no verified explanation of this topic. Add a reading, slide, or example that teaches it.",
+      }));
+      coverage.syllabus_references = generationContext?.syllabus_references || [];
+      coverage.syllabus_version_id = generationContext?.syllabus_version_id || null;
+      coverage.consulted_sources = [...new Set(pages.flatMap(p => p.source_chunks.map(c => c.filename)).filter(Boolean))];
       coverage.sources = sources.map((source) => {
         const local = chunks.filter(
           (c) => String(c.document_id) === String(source.document_id),
@@ -301,7 +323,7 @@ export async function generateFromDocuments(
             .length,
         };
       });
-      if (coverage.missing_point_ids.length)
+      if (coverage.missing_point_ids.length && !partial.size)
         throw Object.assign(new Error("Required key points are missing."), {
           statusCode: 422,
         });
@@ -316,15 +338,17 @@ export async function generateFromDocuments(
         rag_version: "3",
         embedding_model: chunks[0].embedding_model,
         embedding_dimensions: chunks[0].embedding_dimensions,
-        generation_model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+        generation_model: session.model,
       };
     },
   );
 }
 
 export async function processLessonWithRag(options) {
+  if (!options.session) return runAcademicWorkflow("organize", {}, session => processLessonWithRag({ ...options, session }));
   const files = options.files || (options.file ? [options.file] : []);
-  if (!files.length || files.length > 10)
+  const savedIds = options.savedIds || [];
+  if (!(files.length + savedIds.length) || files.length + savedIds.length > 10)
     throw Object.assign(new Error("Select between 1 and 10 files."), {
       statusCode: 400,
     });
@@ -346,7 +370,7 @@ export async function processLessonWithRag(options) {
       ),
       { statusCode: 413 },
     );
-  const ids = [];
+  const ids = [...savedIds];
   for (let i = 0; i < files.length; i++) {
     const documentId = await indexDocument({
       ...options,
@@ -370,5 +394,5 @@ export async function processLessonWithRag(options) {
       documentIds: ids,
     });
   }
-  return generateFromDocuments(ids, progress, options.outlineCheckpoint || [], options.generationContext);
+  return generateFromDocuments(ids, progress, options.outlineCheckpoint || [], options.generationContext, options);
 }

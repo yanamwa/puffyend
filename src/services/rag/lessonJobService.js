@@ -15,6 +15,8 @@ import {
 } from "./sourceLifecycleService.js";
 import { withDatabaseLock } from "./vectorRepository.js";
 import { assertWorkerAccess, requestError } from "./courseAccessService.js";
+import { runAcademicWorkflow } from "./academicWorkflow.js";
+import { lessonModuleScope } from "./lessonModuleScope.js";
 
 const json = (value) => (typeof value === "string" ? JSON.parse(value) : value);
 
@@ -41,6 +43,8 @@ export async function enqueueJob({
   files = file ? [file] : [],
   documentId = null,
   generationContext = null,
+  moduleKey = null,
+  savedIds = [],
 }) {
   const hashes = await Promise.all(
     files.map(async (input) =>
@@ -53,7 +57,7 @@ export async function enqueueJob({
   const hash = files.length ? hashes.join(":") : String(documentId);
   const fingerprint = crypto
     .createHash("sha256")
-    .update(`${type}:${courseId}:${lessonId}:${hash}:${JSON.stringify(generationContext)}`)
+    .update(JSON.stringify([type, courseId, lessonId, moduleKey, hash, savedIds, generationContext]))
     .digest("hex")
     .slice(0, 48);
   return withDatabaseLock(`rag-job:${fingerprint}`, async () => {
@@ -92,6 +96,7 @@ export async function enqueueJob({
       const payload = {
         fingerprint,
         generationContext,
+        moduleKey, savedIds,
         sourceHashes: hashes,
         courseId,
         lessonId,
@@ -119,10 +124,10 @@ export async function enqueueJob({
           "INSERT INTO lesson_rag_job_inputs (job_id, file_order, storage_path) VALUES (?, ?, ?)",
           [jobId, i, inputs[i].path],
         );
-      if (documentId)
+      for (const id of new Set([...savedIds, ...(documentId ? [documentId] : [])]))
         await connection.execute(
           "INSERT INTO lesson_rag_job_documents (job_id, document_id) VALUES (?, ?)",
-          [jobId, documentId],
+          [jobId, id],
         );
       await connection.commit();
     } catch (error) {
@@ -219,6 +224,7 @@ export async function runClaimedJob(job) {
     progress: percent,
     documentId,
     outlineCheckpoint,
+    pageCheckpoint,
     documentIds = documentId ? [documentId] : [],
   }) => {
     const [result] = await db.execute(
@@ -234,6 +240,9 @@ export async function runClaimedJob(job) {
         "UPDATE lesson_rag_jobs SET payload = jsonb_set(payload::jsonb, '{outlineCheckpoint}', ?::jsonb) WHERE job_id = ? AND worker_token = ?",
         [JSON.stringify(outlineCheckpoint), ...owner],
       );
+    if (pageCheckpoint) await db.execute(
+      "UPDATE lesson_rag_jobs SET payload=jsonb_set(payload::jsonb,'{pageCheckpoint}',?::jsonb) WHERE job_id=? AND worker_token=?",
+      [JSON.stringify(pageCheckpoint), ...owner]);
     for (const id of new Set(documentIds)) {
       await db.execute(
         "INSERT INTO lesson_rag_job_documents (job_id, document_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
@@ -250,26 +259,28 @@ export async function runClaimedJob(job) {
   heartbeat.unref();
   try {
     await assertWorkerAccess(job.requester_id, job.course_id, job.lesson_id);
-    let result;
-    if (job.payload.retryDocumentIds)
-      result = await generateFromDocuments(
-        job.payload.retryDocumentIds,
-        progress,
-        job.payload.outlineCheckpoint || [],
-        job.payload.generationContext,
-      );
-    else if (job.job_type === "upload")
-      result = await processLessonWithRag({
-        ...job.payload,
-        onProgress: progress,
-      });
-    else {
-      // Deletion never silently regenerates a document belonging to another job.
+    const scope = await lessonModuleScope(job.course_id, job.payload.moduleKey ?? (job.lesson_id == null ? null : String(job.lesson_id)), null);
+    const result = await runAcademicWorkflow("organize", {}, async session => {
+      const state = { session, pageCheckpoint: job.payload.pageCheckpoint || {}, moduleKey: scope.key, courseId: job.course_id, scope };
+      if (job.payload.retryDocumentIds)
+        return generateFromDocuments(
+          job.payload.retryDocumentIds,
+          progress,
+          job.payload.outlineCheckpoint || [],
+          job.payload.generationContext,
+          state,
+        );
+      if (job.job_type === "upload")
+        return processLessonWithRag({
+          ...job.payload,
+          ...state,
+          onProgress: progress,
+        });
       if (!job.document_id) throw requestError("Source no longer exists.", 404);
       if (job.job_type === "reindex")
-        await reindexDocument(job.document_id, progress);
-      result = await generateFromDocuments([job.document_id], progress, [], job.payload.generationContext);
-    }
+        await reindexDocument(job.document_id, progress, session);
+      return generateFromDocuments([job.document_id], progress, job.payload.outlineCheckpoint || [], job.payload.generationContext, state);
+    });
     await db.execute(
       `UPDATE lesson_rag_jobs SET status = 'completed', phase = 'completed', progress = 100, result = ?,
       document_id = ?, lease_expires_at = NULL WHERE job_id = ? AND worker_token = ? AND status = 'running'`,

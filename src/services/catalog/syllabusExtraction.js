@@ -1,5 +1,6 @@
 import { PDFParse } from "pdf-parse";
 import { catalogDetails, parseSyllabus } from "./catalogRules.js";
+import { extractAcademicSections, enrichSyllabusModules } from "./syllabusContext.js";
 
 // Keep PDF text positions: flattening the page mixes ILOs, topics and assessments.
 export function positionedLines(items) {
@@ -47,26 +48,27 @@ export function isExcludedCoverageTitle(title) {
     )
   );
 }
-export function coverageHeadings(pages) {
+export function coverageHeadings(pages, detailed = false) {
   const result = [];
   let bounds = null,
     inCoverage = false,
-    current = null;
+    current = null, active = null, lastTopic = null, plain = false;
   for (const page of pages) {
     const header = page.items.find((i) =>
       /^topic(?:s)?$/i.test(i.str?.trim() || ""),
     );
-    const coverage = positionedLines(page.items).find((l) =>
-      /^COURSE COVERAGE$/i.test(l.text),
+    const pageLines = positionedLines(page.items);
+    const coverage = pageLines.find((l) =>
+      /^COURSE COVERAGE\s*:?$/i.test(l.text),
     );
-    const stop = positionedLines(page.items).find((l) =>
-      /^(?:COURSE REQUIREMENTS|GRADING SYSTEM|REFERENCES(?: & SUPPLEMENTARY READINGS)?|REVISION HISTORY)$/i.test(
+    const stop = pageLines.find((l) =>
+      /^(?:COURSE REQUIREMENTS|GRADING SYSTEM|REFERENCES(?:\s*(?:&|and)\s*SUPPLEMENTARY (?:READINGS|MATERIALS))?|REVISION HISTORY)\s*:?$/i.test(
         l.text,
       ),
     );
     if (coverage) inCoverage = true;
     if (!inCoverage) continue;
-    if (stop && !coverage) break;
+    if (coverage && !header && !bounds) plain = true;
     if (header) {
       const teaching = page.items.find(
         (i) =>
@@ -82,11 +84,12 @@ export function coverageHeadings(pages) {
         };
       }
     }
-    if (!bounds) continue; // Do not guess modules from unrelated columns when no Topic header is identifiable.
+    if (!bounds && !(plain && detailed)) continue;
     const items = page.items.filter(
       (i) =>
-        i.transform[4] >= bounds.left * page.width &&
-        i.transform[4] < bounds.right * page.width &&
+        (!bounds || (i.transform[4] >= bounds.left * page.width &&
+        i.transform[4] < bounds.right * page.width)) &&
+        (!coverage || i.transform[5] < coverage.y) &&
         (!header || i.transform[5] < header.transform[5] - 28) &&
         (!stop || i.transform[5] > stop.y),
     );
@@ -97,14 +100,27 @@ export function coverageHeadings(pages) {
         line.text.match(
           /^(?:MODULE|LESSON|UNIT|CHAPTER)\s*([\dIVXLCDM]+)(?:\s*[:.–-]\s*|\s+)?(.*)$/i,
         );
-      if (match) {
+      if (match && !(lastTopic?.letter === "H" && /^I[.)]/.test(line.text))) {
         const title = match[2].trim();
         if (title.length > 255) continue;
-        current = { title, source_page: page.num };
+        current = { title, ordinal: match[1], source_page: page.num, topics: [], source_lines: [], objective_lines: [] };
+        active = current;
+        lastTopic = null;
         result.push(current);
         current.lastY = line.y;
         current.page = page.num;
         current.height = line.height;
+      } else if (active && /^(?:(?:module|unit)\s+)?description\s*:/i.test(line.text)) {
+        active.syllabus_description = line.text.replace(/^[^:]+:\s*/, "");
+        current = null;
+        lastTopic = null;
+      } else if (active && /^(?:[A-Za-z]|\d+(?:\.\d+)*)[.)]\s*\S/.test(line.text)) {
+        const label = line.text.match(/^([A-Za-z]|\d+(?:\.\d+)*)[.)]\s*(.+)$/);
+        current = null;
+        if (label) {
+          active.topics.push(label[2]);
+          lastTopic = { letter: label[1].toUpperCase(), page: page.num, y: line.y };
+        }
       } else if (current) {
         // Wrapped heading lines stay adjacent; stop at the first numbered subtopic or paragraph gap.
         if (
@@ -115,25 +131,49 @@ export function coverageHeadings(pages) {
           current.title.length + line.text.length > 255
         ) {
           current = null;
-          continue;
+        } else {
+          current.title = (current.title + " " + line.text).trim();
+          current.page = page.num;
+          current.lastY = line.y;
         }
-        current.title = (current.title + " " + line.text).trim();
-        current.page = page.num;
-        current.lastY = line.y;
+      } else if (lastTopic && lastTopic.page === page.num && lastTopic.y - line.y <= line.height * 1.65) {
+        active.topics[active.topics.length - 1] += " " + line.text;
+        lastTopic.y = line.y;
+      }
+      if (active) active.source_lines.push(line.text);
+    }
+    if (detailed && bounds) {
+      // ILOs occupy the column between the week column and Topic. Assign by
+      // the module heading's vertical range, including continuation pages.
+      const ilo = page.items.find(i => /^(?:intended learning(?: outcomes?)?|learning outcomes?|ILOs?)$/i.test(i.str?.trim()));
+      if (ilo && ilo.transform[4] < bounds.left * page.width) bounds.ilo = (ilo.transform[4] - 12) / page.width;
+      if (bounds.ilo != null) {
+        const headings = result.filter(row => row.source_page === page.num);
+        const firstY = row => lines.find(line => line.text.includes(row.source_lines[0]))?.y ?? -Infinity;
+        const left = positionedLines(page.items.filter(i => i.transform[4] >= bounds.ilo * page.width && i.transform[4] < bounds.left * page.width &&
+          (!header || i.transform[5] < header.transform[5] - 28) && (!coverage || i.transform[5] < coverage.y) && (!stop || i.transform[5] > stop.y)));
+        for (const line of left) {
+          const owner = headings.filter(row => line.y <= firstY(row) + 6).at(-1) || result.filter(row => row.source_page < page.num).at(-1);
+          if (owner) owner.objective_lines.push(line.text);
+        }
       }
     }
+    if (stop) break;
   }
-  const seen = new Set();
-  return result
-    .map(({ title, source_page }) => ({ title, source_page }))
-    .filter((row) => {
-      if (!row.title || isExcludedCoverageTitle(row.title)) return false;
-      const key = row.title.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 150);
+  const unique = new Map();
+  for (const { title, ordinal, source_page, topics, source_lines, objective_lines, syllabus_description } of result) {
+    if (!title || isExcludedCoverageTitle(title)) continue;
+    const key = (detailed ? ordinal + "|" : "") + title.toLowerCase();
+    const existing = unique.get(key);
+    if (!existing) unique.set(key, detailed
+      ? { title, source_page, topics, source_lines, objective_lines, syllabus_description } : { title, source_page });
+    else if (detailed) {
+      existing.topics.push(...topics.filter(topic => !existing.topics.includes(topic)));
+      existing.source_lines.push(...source_lines);
+      existing.objective_lines.push(...objective_lines);
+    }
+  }
+  return [...unique.values()].slice(0, 150);
 }
 async function readPositionedPage(document, num) {
   const page = await document.getPage(num);
@@ -152,7 +192,7 @@ function invalidSyllabus(message) {
   });
 }
 
-export async function extractSyllabus(data, { includeCoverage = true } = {}) {
+export async function extractSyllabus(data, { includeCoverage = true, workflowOptions } = {}) {
   const parser = new PDFParse({ data });
   try {
     const unreadable =
@@ -191,10 +231,12 @@ export async function extractSyllabus(data, { includeCoverage = true } = {}) {
     const pages = [cover];
     for (let num = 2; num <= document.numPages; num++)
       pages.push(await readPositionedPage(document, num));
-    return {
-      ...details,
-      coverage_modules: coverageHeadings(pages),
-    };
+    const textPages = pages.map(page => ({
+      page: page.num, lines: positionedLines(page.items).map(line => line.text),
+    }));
+    const academic = extractAcademicSections(textPages);
+    const modules = await enrichSyllabusModules(coverageHeadings(pages, true), details, academic, textPages, workflowOptions);
+    return { ...details, ...academic, coverage_modules: modules };
   } finally {
     await parser.destroy();
   }

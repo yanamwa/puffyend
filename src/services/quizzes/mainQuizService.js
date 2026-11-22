@@ -1,17 +1,12 @@
 import { db } from "../../db.js";
-import { embedTexts, embeddingConfig } from "../rag/embeddingService.js";
 import {
   assertCourseAccess,
   requestError,
 } from "../rag/courseAccessService.js";
-import { loadChunks } from "../rag/vectorRepository.js";
-import { retrieveContexts } from "../rag/retrievalService.js";
-import { generateQuizBatch } from "../rag/quizRagService.js";
-import { createMainQuizPrompt } from "./mainQuizPrompt.js";
+import { generateReviewedMainQuiz } from "./mainQuizGeneration.js";
 import {
   validateMainSettings,
-  mainQuizBlueprint,
-  validateAdaptiveQuestions,
+  mainQuizFromHistory,
   gradeMainQuiz,
   shuffleMainQuizQuestions,
   normalizeAnswer,
@@ -172,7 +167,7 @@ export async function saveMainConfig(user, body) {
     topics,
     moduleIndex,
     documentIds,
-    sourceMode: documentIds.length ? "documents" : "saved_lessons",
+    sourceMode: "saved_lessons",
     lessonTitle,
     learningObjectives:
       module.moduleLearningObjectives ||
@@ -198,6 +193,8 @@ const publicQuiz = (row) => {
         explanation,
         source_chunks,
         grounding,
+        concept,
+        learning_objective,
         source_question_index,
         accepted_answers,
         acceptedAnswers,
@@ -260,7 +257,7 @@ export async function startMainQuiz(user, body) {
     const snapshot = {
       ...config,
       questionCount: manualQuestions.length,
-      passingPercentage: 70,
+      passingPercentage: config.passingPercentage ?? 70,
       moduleIndex: Number(module.moduleIndex ?? module.module_index),
       lessonTitle: module.moduleTitle || module.module_title || "",
       mode: "manual",
@@ -320,22 +317,29 @@ async function generatePersonalized(
   config,
   preview = false,
 ) {
-  const [attempts] = preview
-    ? [[]]
-    : await db.execute(
-        `SELECT a.attempts_id,a.total,d.answers_json FROM quiz_attempts a JOIN quiz_attempt_details d ON d.attempts_id=a.attempts_id WHERE a.user_id=? AND a.course_id=? AND d.module_index=? AND d.assessment_type='practice' AND a.quiz_mode <> 'lesson' AND a.total>0 ORDER BY a.created_at DESC,a.attempts_id DESC LIMIT 1`,
-        [user.userId, courseId, config.moduleIndex],
-      );
-  let blueprint, practiceAttemptId;
-  try {
-    ({ blueprint, practiceAttemptId } = mainQuizBlueprint(config, attempts[0]));
-  } catch (error) {
-    throw requestError(error.message, 409);
-  }
+  // Modern Practice rows carry the stable module ID. Match their original
+  // assessment log when available; legacy records retain their historical index.
+  const [attempts] = preview ? [[]] : await db.execute(
+    `WITH practice AS (
+       SELECT a.attempts_id,a.total,a.created_at,d.module_index,
+         CASE WHEN d.answers_json::text IS JSON ARRAY THEN d.answers_json::jsonb END AS answers_json
+       FROM quiz_attempts a JOIN quiz_attempt_details d ON d.attempts_id=a.attempts_id
+       WHERE a.user_id=? AND a.course_id=? AND d.assessment_type='practice' AND COALESCE(a.quiz_mode,'') <> 'lesson' AND a.total>0
+     ), scoped AS (
+       SELECT m.module_id,CASE WHEN m.result_json::text IS JSON OBJECT THEN m.result_json::jsonb->'answers' END AS answers_json
+       FROM module_practice_attempts m WHERE m.user_id=? AND m.course_id=? AND m.result_json IS NOT NULL
+     )
+     SELECT p.* FROM practice p WHERE
+       EXISTS (SELECT 1 FROM scoped s WHERE s.module_id=? AND s.answers_json=p.answers_json)
+       OR (p.module_index=? AND NOT EXISTS (SELECT 1 FROM scoped s WHERE s.answers_json=p.answers_json))
+     ORDER BY p.created_at DESC,p.attempts_id DESC`,
+    [user.userId, courseId, user.userId, courseId, moduleId, config.moduleIndex],
+  );
+  const { blueprint, practiceAttemptId, previous } = mainQuizFromHistory(config, attempts, { preview });
   if (!preview && !practiceAttemptId && config.baselineQuestions?.length) {
     const questions = config.baselineQuestions;
     validateManualQuestions(questions);
-    blueprint = baselineQuestionBlueprint(questions);
+    const baseline = baselineQuestionBlueprint(questions);
     await db.execute(
       "INSERT INTO personalized_main_quizzes(course_id,module_id,user_id,revision,practice_attempt_id,questions_json,blueprint_json,config_json) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
       [
@@ -345,7 +349,7 @@ async function generatePersonalized(
         stored.revision,
         0,
         JSON.stringify(shuffleMainQuizQuestions(questions)),
-        JSON.stringify(blueprint),
+        JSON.stringify(baseline),
         JSON.stringify(config),
       ],
     );
@@ -355,127 +359,19 @@ async function generatePersonalized(
     );
     return publicQuiz(rows[0]);
   }
-  const [documents] = await db.execute(
-    "SELECT document_id,filename,processing_status FROM lesson_source_documents WHERE course_id=?",
-    [courseId],
-  );
-  const sources = documents.filter((document) =>
-    config.documentIds.includes(String(document.document_id)),
-  );
-  if (
-    sources.length !== config.documentIds.length ||
-    sources.some((document) => document.processing_status !== "ready")
-  )
-    throw requestError(
-      "Required lesson sources are unavailable. Ask your professor to reindex them.",
-      409,
-    );
-  let chunks = (
-    await Promise.all(
-      sources.map(async (document) =>
-        (await loadChunks(document.document_id)).map((chunk) => ({
-          ...chunk,
-          source_filename: document.filename,
-        })),
-      ),
-    )
-  ).flat();
-  if (!config.documentIds.length) {
-    const [courses] = await db.execute(
-      "SELECT lesson_pages FROM courses WHERE course_id=?",
-      [courseId],
-    );
-    chunks = savedLessonChunks(
-      parse(courses[0]?.lesson_pages || "[]"),
-      moduleId,
-    );
-    if (chunks.length) {
-      const embedding = embeddingConfig();
-      const vectors = await embedTexts(
-        chunks.map((chunk) => chunk.chunk_text),
-        "RETRIEVAL_DOCUMENT",
-        embedding,
-      );
-      chunks = chunks.map((chunk, index) => ({
-        ...chunk,
-        embedding: vectors[index],
-        embedding_model: embedding.model,
-        embedding_dimensions: embedding.dimensions,
-      }));
-    }
-  }
+  const [courses] = await db.execute("SELECT lesson_pages FROM courses WHERE course_id=?", [courseId]);
+  const chunks = savedLessonChunks(parse(courses[0]?.lesson_pages || "[]"), moduleId);
   if (!chunks.length)
-    throw requestError("No indexed source evidence is available.", 409);
-  const ids = [...new Set(chunks.map((chunk) => chunk.document_id))];
-  const [history] = preview
-    ? [[]]
-    : await db.execute(
-        `SELECT d.answers_json FROM quiz_attempts a JOIN quiz_attempt_details d ON d.attempts_id=a.attempts_id WHERE a.user_id=? AND a.course_id=? AND d.module_index=? AND d.assessment_type='practice' AND a.quiz_mode <> 'lesson' ORDER BY a.attempts_id`,
-        [user.userId, courseId, config.moduleIndex],
-      );
-  const previousPracticeQuestions = [
-    ...new Set(
-      history
-        .flatMap((row) => parse(row.answers_json))
-        .map((answer) => answer.question || answer.prompt)
-        .filter(Boolean),
-    ),
-  ];
-  const previousBaselineQuestions = preview
-    ? (config.baselineQuestions || [])
-        .map((question) => question?.question)
-        .filter(Boolean)
-    : [];
-  const previousQuestions = [
-    ...new Set([...previousPracticeQuestions, ...previousBaselineQuestions]),
-  ];
-  const contexts = new Map();
-  for (const topic of blueprint.tosDistribution)
-    contexts.set(
-      topic.topic,
-      await retrieveContexts(
-        ids,
-        `${topic.topic} ${config.learningObjectives}`,
-        { topK: Math.min(6, chunks.length), chunks },
-      ),
-    );
-  const questions = [];
-  for (let index = 0; index < blueprint.slots.length; index += 5) {
-    const slots = blueprint.slots.slice(index, index + 5);
-    const context = [
-      ...new Map(
-        slots
-          .flatMap((slot) => contexts.get(slot.topic))
-          .map((chunk) => [String(chunk.chunk_id), chunk]),
-      ).values(),
-    ];
-    const lessonContent = context.map((chunk) => chunk.chunk_text).join("\n\n");
-    const prompt = createMainQuizPrompt({
-      ...config,
-      ...blueprint,
-      lessonContent,
-      previousPracticeQuestions: previousQuestions,
-    });
-    const batch = await generateQuizBatch({
-      types: slots.map((slot) => slot.type),
-      skills: slots.map((slot) => slot.thinking_skill),
-      chunks: context,
-      title: config.lessonTitle,
-      objectives: config.learningObjectives,
-      mainPrompt: prompt,
-      assignedSlots: slots,
-      previousQuestions: [
-        ...previousQuestions,
-        ...questions.map((question) => question.question),
-      ],
-    });
-    questions.push(...batch);
-  }
-  validateAdaptiveQuestions(questions, blueprint.slots, previousQuestions);
+    throw requestError("No indexed source evidence is available in this module’s approved lesson pages. Save the lesson content before generating a Main Quiz.", 409);
+  const previousQuestions = [...previous, ...(preview ? config.baselineQuestions || [] : []).map(q => q.question)];
+  const questions = await generateReviewedMainQuiz(config, blueprint, chunks, previousQuestions);
   if (preview) return questions;
+  await studentAccess(user, courseId, moduleId);
+  if (await hasSubmittedMainQuiz([courseId,moduleId,user.userId])) throw alreadyTakenError();
   // Another process may have saved this revision while generation ran; preserve that saved quiz.
   await db.execute(
-    `INSERT INTO personalized_main_quizzes(course_id,module_id,user_id,revision,practice_attempt_id,questions_json,blueprint_json,config_json) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+    `INSERT INTO personalized_main_quizzes(course_id,module_id,user_id,revision,practice_attempt_id,questions_json,blueprint_json,config_json)
+     SELECT ?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM main_quiz_configs WHERE course_id=? AND module_id=? AND revision=?) ON CONFLICT DO NOTHING`,
     [
       courseId,
       moduleId,
@@ -485,12 +381,14 @@ async function generatePersonalized(
       JSON.stringify(shuffleMainQuizQuestions(questions)),
       JSON.stringify(blueprint),
       JSON.stringify(config),
+      courseId, moduleId, stored.revision,
     ],
   );
   const [saved] = await db.execute(
     "SELECT * FROM personalized_main_quizzes WHERE course_id=? AND module_id=? AND user_id=? AND revision=?",
     [courseId, moduleId, user.userId, stored.revision],
   );
+  if (!saved.length) throw requestError("Main Quiz settings changed during generation. Reopen the module to start the current quiz.", 409);
   return publicQuiz(saved[0]);
 }
 
@@ -527,9 +425,15 @@ export async function generateMainQuizPreview(user, body) {
     ...existingBaselineQuestions,
     ...generatedQuestions,
   ];
-  const nextConfig = { ...config, baselineQuestions };
+  const nextConfig = { ...config, baselineQuestions,
+    ...(config.tosSlots ? { tosSlots: baselineQuestions.map(questionAssignment) } : {}),
+    questionCount: baselineQuestions.length,
+    multipleChoiceCount: baselineQuestions.filter(q => q.type === "multiple_choice").length,
+    identificationCount: baselineQuestions.filter(q => q.type === "identification").length,
+    trueFalseCount: baselineQuestions.filter(q => q.type === "true_false").length,
+  };
   const [updated] = await db.execute(
-    "UPDATE main_quiz_configs SET config_json=? WHERE course_id=? AND module_id=? AND revision=?",
+    "UPDATE main_quiz_configs SET config_json=?,revision=revision+1 WHERE course_id=? AND module_id=? AND revision=?",
     [JSON.stringify(nextConfig), courseId, moduleId, stored.revision],
   );
   if (!updated.affectedRows)
@@ -538,6 +442,10 @@ export async function generateMainQuizPreview(user, body) {
       409,
     );
   return nextConfig;
+}
+
+function questionAssignment({ type, topic, cognitive_level, thinking_skill, learning_objective }) {
+  return { type, topic, cognitive_level, thinking_skill, ...(learning_objective ? { learning_objective } : {}) };
 }
 
 export function baselineQuestionBlueprint(questions) {
@@ -600,8 +508,10 @@ export async function saveMainQuizPreview(user, body) {
       thinking_skill: levels.indexOf(level) < 3 ? "LOTS" : "HOTS",
     };
   });
+  const current = parse(rows[0].config_json);
   const config = {
-    ...parse(rows[0].config_json),
+    ...current,
+    ...(current.tosSlots ? { tosSlots: questions.map(questionAssignment) } : {}),
     baselineQuestions: questions,
     questionCount: questions.length,
     multipleChoiceCount: questions.filter(
@@ -832,9 +742,15 @@ export function validateManualQuestions(questions) {
 
 export function savedLessonChunks(pages, moduleId) {
   return pages
+    .filter(page => page && String(page.moduleId ?? page.module_id) === String(moduleId))
+    .map(page => {
+      if (page.content != null) return page;
+      const statements = (Array.isArray(page.statements) ? page.statements : []).map(s => s?.text).filter(Boolean);
+      const quotes = (Array.isArray(page.source_chunks) ? page.source_chunks : []).map(s => s?.quote).filter(Boolean);
+      return { ...page, content: (statements.length ? statements : quotes).join("\n") };
+    })
     .filter(
       (page) =>
-        String(page.moduleId ?? page.module_id) === String(moduleId) &&
         typeof page.content === "string" &&
         page.content.trim().length >= 12,
     )

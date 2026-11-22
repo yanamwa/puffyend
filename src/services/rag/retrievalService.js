@@ -1,5 +1,6 @@
 import { embedQuery, validateVector } from "./embeddingService.js";
 import { loadChunks } from "./vectorRepository.js";
+import { rankAcademicEvidence } from "./academicEvidence.js";
 
 export function cosineSimilarity(a, b) {
   validateVector(a, b.length);
@@ -45,8 +46,11 @@ export async function retrieveContexts(
         c.embedding_model !== config.model ||
         c.embedding_dimensions !== config.dimensions,
     )
-  )
+  ) {
+    if (source.some(c => c.embedding_model?.startsWith("openai:")))
+      return rankAcademicEvidence(source, query, topK);
     throw new Error("Mixed embedding models. Reindex the document.");
+  }
   const vector = await embedQuery(query, config);
   return source
     .map((chunk) => ({

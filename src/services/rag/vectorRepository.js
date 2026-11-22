@@ -8,11 +8,12 @@ export async function createDocument({
   file,
   hash,
   storagePath,
+  moduleKey = null,
 }) {
   const [result] = await db.execute(
     `INSERT INTO lesson_source_documents
-    (course_id, lesson_id, uploader_id, filename, storage_path, mime_type, file_size_bytes, content_hash, processing_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processing')`,
+    (course_id, lesson_id, uploader_id, filename, storage_path, mime_type, file_size_bytes, content_hash, module_key, processing_status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing')`,
     [
       courseId,
       lessonId ?? null,
@@ -22,6 +23,7 @@ export async function createDocument({
       file.mimetype,
       file.size,
       hash,
+      moduleKey,
     ],
   );
   return result.insertId;
@@ -84,15 +86,15 @@ export async function loadDocument(documentId) {
   return rows[0];
 }
 
-export async function findReusableDocument(courseId, lessonId, hash, config) {
+export async function findReusableDocument(courseId, lessonId, hash, config, moduleKey = null) {
   const [rows] = await db.execute(
     `SELECT d.* FROM lesson_source_documents d
     WHERE d.course_id = ? AND d.lesson_id IS NOT DISTINCT FROM ? AND d.content_hash = ? AND d.processing_status = 'ready'
-    AND d.chunk_count > 0 AND d.chunk_count = (SELECT COUNT(*) FROM lesson_source_chunks c WHERE c.document_id = d.document_id)
+    AND d.module_key IS NOT DISTINCT FROM ? AND d.chunk_count > 0 AND d.chunk_count = (SELECT COUNT(*) FROM lesson_source_chunks c WHERE c.document_id = d.document_id)
     AND NOT EXISTS (SELECT 1 FROM lesson_source_chunks c WHERE c.document_id = d.document_id
       AND (c.embedding_model <> ? OR c.embedding_dimensions <> ?))
     ORDER BY d.document_id DESC LIMIT 1`,
-    [courseId, lessonId ?? null, hash, config.model, config.dimensions],
+    [courseId, lessonId ?? null, hash, moduleKey, config.model, config.dimensions],
   );
   return rows[0];
 }

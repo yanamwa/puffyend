@@ -82,6 +82,18 @@ export function validateMainSettings(body) {
     settings.passingPercentage > 100
   )
     throw new Error("Passing percentage must be 1–100.");
+  if (body.tos_slots != null) {
+    const slots = body.tos_slots;
+    const expected = { multiple_choice: settings.multipleChoiceCount, identification: settings.identificationCount, true_false: settings.trueFalseCount };
+    if (!Array.isArray(slots) || slots.length !== settings.questionCount ||
+      slots.some(s => !s || typeof s.topic !== "string" || !s.topic.trim() || s.topic.length > 100 ||
+        !LEVELS.includes(s.cognitive_level) || !Object.hasOwn(expected, s.type) ||
+        (s.learning_objective != null && (typeof s.learning_objective !== "string" || s.learning_objective.length > 500))) ||
+      Object.entries(expected).some(([type, count]) => slots.filter(s => s.type === type).length !== count))
+      throw new Error("TOS assignments must match every question type and the selected total.");
+    settings.tosSlots = slots.map(s => ({ topic: s.topic.trim(), type: s.type, cognitive_level: s.cognitive_level,
+      thinking_skill: skillForLevel(s.cognitive_level), ...(s.learning_objective?.trim() ? { learning_objective: s.learning_objective.trim() } : {}) }));
+  }
   return settings;
 }
 function apportion(total, weights, minimum = 0) {
@@ -145,10 +157,10 @@ export function calculateAdaptiveTos(
   const topicNames = [
     ...new Set([
       ...configuredTopics.map((topic) => topic.trim()),
-      ...observedTopics.map((topic) => topic.label),
+      ...(configuredTopics.length ? [] : observedTopics.map((topic) => topic.label)),
     ]),
   ];
-  if (!topicNames.length) topicNames.push("General Concepts");
+  if (!topicNames.length) topicNames.push(settings.lessonTitle?.trim() || "General Concepts");
   const topics = topicNames.map(
     (label) =>
       observedTopics.find((topic) => topic.label === label) || {
@@ -176,7 +188,7 @@ export function calculateAdaptiveTos(
   };
   const quotas = apportion(
     settings.questionCount,
-    topics.map((topic) => 1 + (100 - (topic.percent ?? 50)) / 100),
+    topics.map(topic => 1 + 2 * (topic.responses - topic.correct + 1) / (topic.responses + 2)),
     settings.questionCount >= topics.length ? 1 : 0,
   );
   // Baseline assesses both skills; weaker skill gains up to 10 percentage points without removing higher-order assessment.
@@ -270,6 +282,59 @@ export function mainQuizBlueprint(settings, attempt) {
     }),
     practiceAttemptId: usable ? attempt.attempts_id : 0,
   };
+}
+
+export function mainQuizFromHistory(settings, attempts, { preview = false } = {}) {
+  let latest = 0;
+  const answers = [], previous = new Set();
+  for (const attempt of attempts) {
+    let rows;
+    try { rows = typeof attempt.answers_json === "string" ? JSON.parse(attempt.answers_json) : attempt.answers_json; } catch { continue; }
+    if (!Array.isArray(rows) || rows.length !== Number(attempt.total)) continue;
+    for (const row of rows) {
+      if (typeof row?.question === "string") previous.add(row.question);
+      if (!row?.isSelfAssessed && typeof row?.topic === "string" && row.topic.trim() && LEVELS.includes(row.cognitive_level) &&
+          [true, false, 0, 1, "true", "false"].includes(row.isCorrect ?? row.is_correct)) {
+        answers.push(row);
+        latest ||= attempt.attempts_id;
+      }
+    }
+  }
+  const baseline = !preview && settings.baselineQuestions?.length ? settings.baselineQuestions : null;
+  const fixed = baseline || settings.tosSlots;
+  const blueprint = calculateAdaptiveTos(settings, answers, { allowBaseline: true });
+  if (fixed?.length) {
+    blueprint.slots = fixed.map(q => {
+      const level = LEVELS.includes(q.cognitive_level) ? q.cognitive_level : "Understand";
+      return { topic: q.topic || "General Concepts", type: q.type, cognitive_level: level, thinking_skill: skillForLevel(level),
+        ...(q.learning_objective ? { learning_objective: q.learning_objective } : {}) };
+    });
+    blueprint.lotsCount = blueprint.slots.filter(s => s.thinking_skill === "LOTS").length;
+    blueprint.hotsCount = blueprint.slots.length - blueprint.lotsCount;
+    blueprint.tosDistribution = [...new Set(blueprint.slots.map(s => s.topic))].map(topic => {
+      const rows = blueprint.slots.filter(s => s.topic === topic);
+      return { topic, question_count: rows.length,
+        practice_percent: blueprint.practicePerformance.topics.find(t => t.label === topic)?.percent ?? null,
+        cognitive_levels: Object.fromEntries([...new Set(rows.map(s => s.cognitive_level))].map(level => [level, rows.filter(s => s.cognitive_level === level).length])) };
+    });
+  }
+  for (const slot of blueprint.slots) {
+    const counts = new Map();
+    for (const answer of answers.filter(a => normalizeAnswer(a.topic) === normalizeAnswer(slot.topic))) {
+      const objective = answer.learning_objective || answer.learningObjective;
+      if (slot.learning_objective && objective && normalizeAnswer(slot.learning_objective) !== normalizeAnswer(objective)) continue;
+      const concept = String(answer.concept || answer.subtopic || objective || "").trim();
+      if (!concept) continue;
+      const tally = counts.get(concept) || { correct: 0, total: 0 };
+      tally.total++;
+      if ([true, 1, "true"].includes(answer.isCorrect ?? answer.is_correct)) tally.correct++;
+      counts.set(concept, tally);
+    }
+    const weak = [...counts].filter(([, t]) => t.total - t.correct >= 2 && t.correct / t.total < 0.7)
+      .sort((a,b) => a[1].correct / a[1].total - b[1].correct / b[1].total);
+    if (weak.length) slot.focus = weak[0][0];
+  }
+  return { blueprint, practiceAttemptId: latest || 0, previous: [...previous] };
 }
 function similar(a, b) {
   const x = new Set(normalizeAnswer(a).match(/[\p{L}\p{N}]+/gu) || []),

@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { generationContext } from "../services/rag/generationContext.js";
+import { belongsToModule, lessonModuleScope, moduleKeyFor, selectedLessonSources } from "../services/rag/lessonModuleScope.js";
 import path from "node:path";
 import { db } from "../db.js";
 import { enqueueJob, loadJob } from "../services/rag/lessonJobService.js";
@@ -37,7 +37,6 @@ export async function processLessonFile(req, res) {
     ...(req.file ? [req.file] : []),
   ];
   try {
-    if (!files.length) throw requestError("No files uploaded.", 400);
     if (
       files.length > 10 ||
       files.reduce((sum, file) => sum + file.size, 0) > 50 * 1024 * 1024
@@ -49,13 +48,17 @@ export async function processLessonFile(req, res) {
     const courseId = Number(req.body.course_id);
     const lessonId = req.body.lesson_id ? Number(req.body.lesson_id) : null;
     await assertCourseAccess(req.user, courseId, lessonId);
+    const moduleKey = moduleKeyFor(req.body.client_module_key, lessonId);
+    const scope = await lessonModuleScope(courseId, moduleKey, req.body.generation_context);
+    const savedIds = await selectedLessonSources(courseId, scope, req.body.saved_document_ids, files);
+    if (!files.length && !savedIds.length) throw requestError("Select an instructional file or a saved source for this module.", 400);
     const result = await enqueueJob({
       type: "upload",
       files,
       courseId,
       lessonId,
       requesterId: req.user.userId,
-      generationContext: generationContext(req.body?.generation_context),
+      moduleKey, savedIds, generationContext: scope.context,
     });
     return res.status(202).json({
       success: true,
@@ -106,16 +109,21 @@ export async function listLessonSources(req, res) {
   try {
     const courseId = Number(req.query.course_id);
     await assertCourseAccess(req.user, courseId);
+    const scoped = req.query.module_key != null;
+    const scope = scoped ? await lessonModuleScope(courseId, moduleKeyFor(req.query.module_key, null)) : null;
     const [rows] = await db.execute(
-      `SELECT document_id, lesson_id, filename, processing_status, processing_error,
-      chunk_count, created_at FROM lesson_source_documents WHERE course_id = ? ORDER BY document_id DESC LIMIT 200`,
-      [courseId],
+      `SELECT document_id, lesson_id, module_key, filename, processing_status, processing_error,
+      chunk_count, created_at FROM lesson_source_documents WHERE course_id = ?
+      ${scoped ? "AND (module_key=? OR (module_key IS NULL AND (lesson_id::text=? OR document_id IN (SELECT value::bigint FROM jsonb_array_elements_text(?::jsonb)))))" : ""}
+      ORDER BY document_id DESC LIMIT 200`,
+      scoped ? [courseId, scope.key, scope.key, [...scope.legacyIds]] : [courseId],
     );
     const [failedJobs] = await db.execute(
-      "SELECT job_id, lesson_id, error_message FROM lesson_rag_jobs WHERE course_id = ? AND status = 'failed' AND document_id IS NOT NULL ORDER BY created_at DESC LIMIT 20",
-      [courseId],
+      `SELECT job_id,lesson_id,error_message FROM lesson_rag_jobs WHERE course_id=? AND status='failed' AND document_id IS NOT NULL
+      ${scoped ? "AND (payload::jsonb->>'moduleKey'=? OR (payload::jsonb->>'moduleKey' IS NULL AND lesson_id::text=?))" : ""} ORDER BY created_at DESC LIMIT 20`,
+      scoped ? [courseId, scope.key, scope.key] : [courseId],
     );
-    return res.json({ success: true, sources: rows, failed_jobs: failedJobs });
+    return res.json({ success: true, sources: scope ? rows.filter(doc => belongsToModule(doc,scope)) : rows, failed_jobs: failedJobs });
   } catch (error) {
     return reportError(res, error);
   }
@@ -125,6 +133,9 @@ export async function queueSourceGeneration(req, res) {
   try {
     const document = await authorizedDocument(req);
     const type = req.path.endsWith("/reindex") ? "reindex" : "generate";
+    const moduleKey = moduleKeyFor(req.body?.client_module_key ?? document.module_key, document.lesson_id);
+    const scope = await lessonModuleScope(document.course_id, moduleKey, req.body?.generation_context);
+    if (!belongsToModule(document, scope)) throw requestError("The source belongs to another module.", 403);
     if (type === "generate" && document.processing_status !== "ready")
       throw requestError("Index or reindex this source first.", 409);
     const result = await enqueueJob({
@@ -133,7 +144,7 @@ export async function queueSourceGeneration(req, res) {
       courseId: document.course_id,
       lessonId: document.lesson_id,
       requesterId: req.user.userId,
-      generationContext: generationContext(req.body?.generation_context),
+      moduleKey, generationContext: scope.context,
     });
     return res
       .status(202)
