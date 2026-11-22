@@ -156,7 +156,7 @@ export async function runModulePracticeJob({
         { userId: job.user_id, role: "student" },
         JSON.parse(job.payload),
         undefined,
-        { signal: controller.signal, deadlineAt },
+        { signal: controller.signal, deadlineAt, jobId: job.job_id },
       ),
     ]);
     if (attempt.total !== 10 || attempt.questions?.length !== 10)

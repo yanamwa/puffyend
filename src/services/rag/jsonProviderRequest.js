@@ -17,6 +17,12 @@ export function remainingTime({ signal, deadlineAt }) {
   return remaining;
 }
 
+export function withEarlierDeadline(request, deadlineAt) {
+  const cutoff = AbortSignal.timeout(Math.max(0, deadlineAt - Date.now()));
+  const signal = request.signal ? AbortSignal.any([request.signal, cutoff]) : cutoff;
+  return { ...request, deadlineAt, signal };
+}
+
 export function incompleteOutput() {
   return failure("GENERATION_INCOMPLETE", "The provider did not complete the structured response.", 502);
 }

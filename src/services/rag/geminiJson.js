@@ -22,7 +22,7 @@ function readResponse(body) {
 
 export async function generateJson({
   instruction, data, schema, signal, deadlineAt, timeoutMs = 90000,
-  maxAttempts = 3, reserveFallbackMs = 0,
+  maxAttempts = 3, reserveFallbackMs = 0, fallbackOnTimeout = reserveFallbackMs > 0,
 }) {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
@@ -52,7 +52,7 @@ export async function generateJson({
       const remaining = remainingTime({ signal, deadlineAt });
       if (!error.retryable || attempt >= attempts) throw error;
       // If an entire call has already timed out, give the backup its chance now.
-      if (reserveFallbackMs && error.code === "PROVIDER_REQUEST_TIMEOUT") throw error;
+      if (fallbackOnTimeout && error.code === "PROVIDER_REQUEST_TIMEOUT") throw error;
       const delay = Math.max(1000 * 2 ** (attempt - 1), error.retryAfterMs || 0);
       if (delay > 10000 || remaining < delay + timeoutMs + reserveFallbackMs) throw error;
       try {

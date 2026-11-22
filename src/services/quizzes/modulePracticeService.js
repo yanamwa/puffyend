@@ -3,8 +3,8 @@ import { getEnrolledPracticeModule } from "../../controllers/courseController.js
 import { db } from "../../db.js";
 import { removeLessonPracticeActivities } from "../lessons/lessonPracticeContent.js";
 import { requestError } from "../rag/courseAccessService.js";
-import { createPracticeJsonGenerator } from "../rag/aiProviderService.js";
-import { remainingTime } from "../rag/jsonProviderRequest.js";
+import { createPracticeJsonGenerator, MIN_OPENAI_REQUEST_MS } from "../rag/aiProviderService.js";
+import { remainingTime, withEarlierDeadline } from "../rag/jsonProviderRequest.js";
 import {
   generateQuizBatch,
   selectPracticeFocus,
@@ -148,9 +148,10 @@ function recapPerformance(questions, submitted) {
 }
 
 async function generatePracticeBatch(options, generateBatch) {
-  const { types, skills, practiceFocus } = options;
+  const { types, skills, practiceFocus, requestOptions } = options;
   const provider = generateBatch ? undefined : createPracticeJsonGenerator();
   const generate = generateBatch ?? ((batch) => generateQuizBatch(batch, provider));
+  const draftAndReviewMs = 2 * requestOptions.timeoutMs;
   const allIndexes = [...types.keys()];
   const approved = new Map();
   const rejected = new Map();
@@ -158,12 +159,38 @@ async function generatePracticeBatch(options, generateBatch) {
   let round = 0;
   let stalledRounds = 0;
   let lastFailure;
+  const timings = { initialGenerationMs: 0, reviewMs: 0, repairMs: 0 };
   const log = (details) => console.info("[Practice validation]", JSON.stringify({
-    generationId, round, passed: approved.size, total: types.length, ...details,
+    generationId, jobId: options.jobId, round, passed: approved.size, total: types.length, ...details,
   }));
 
+  async function runRequest(phase, send, request) {
+    const remainingMs = remainingTime(request);
+    const started = Date.now();
+    const timing = phase === "review" ? "reviewMs" : round === 0 ? "initialGenerationMs" : "repairMs";
+    // A draft, including transport retries and availability fallback, must leave
+    // its own independent review a full call, or half of a shorter job window.
+    const reviewReserveMs = phase === "draft" ? Math.min(request.timeoutMs, Math.floor(remainingMs / 2)) : 0;
+    const phaseRequest = reviewReserveMs ? withEarlierDeadline(request, request.deadlineAt - reviewReserveMs) : request;
+    try {
+      const result = await send(phaseRequest, {
+        validationReserveMs: draftAndReviewMs,
+        repairing: round > 0,
+      });
+      remainingTime(phaseRequest);
+      return result;
+    } finally {
+      timings[timing] += Date.now() - started;
+    }
+  }
+
+  function approve(index, question) {
+    approved.set(index, question);
+    rejected.delete(index);
+  }
+
   async function prepare(indexes) {
-    remainingTime(options.requestOptions);
+    remainingTime(requestOptions);
     const retainedStems = [...approved.values()].map((item) => item.question);
     const previousQuestions = [...options.previousQuestions, ...retainedStems];
     const feedback = indexes.flatMap((index) => {
@@ -187,18 +214,19 @@ async function generatePracticeBatch(options, generateBatch) {
         onValidated: (questions) => validateQuizUniqueness(questions, previousQuestions, { compareSharedSetup: true }),
         maxAttempts: 1,
         preserveValidated: true,
+        runRequest,
       });
-      remainingTime(options.requestOptions);
+      remainingTime(requestOptions);
       if (!Array.isArray(batch) || batch.length !== indexes.length)
         throw requestError("The generator returned an incomplete question set.", 502);
-      indexes.forEach((index, position) => approved.set(index, batch[position]));
+      indexes.forEach((index, position) => approve(index, batch[position]));
     } catch (error) {
-      remainingTime(options.requestOptions);
+      remainingTime(requestOptions);
       if (error.statusCode !== 422 && error.code !== DUPLICATE_QUIZ_QUESTION) throw error;
       lastFailure = error;
       const passed = error.validatedQuestions || [];
       for (const { index, question } of passed)
-        approved.set(indexes[index], question);
+        approve(indexes[index], question);
       const slotsByReason = Object.create(null);
       for (const [position, index] of indexes.entries()) {
         if (approved.has(index)) continue;
@@ -216,44 +244,74 @@ async function generatePracticeBatch(options, generateBatch) {
       log({ attempted: indexes.length, batchPassed: passed.length, rejected: slotsByReason });
       return;
     }
-    log({
-      attempted: indexes.length, batchPassed: indexes.length,
-      ...(approved.size === types.length ? { stop: "all_slots_verified" } : {}),
-    });
+    log({ attempted: indexes.length, batchPassed: indexes.length });
   }
 
-  async function repairPending() {
-    round++;
-    const before = approved.size;
-    const pending = allIndexes.filter((index) => !approved.has(index));
-    for (let start = 0; start < pending.length; start += 5)
-      await prepare(pending.slice(start, start + 5));
-    stalledRounds = approved.size === before ? stalledRounds + 1 : 0;
+  const pendingSlots = () => allIndexes.filter((index) => !approved.has(index));
+
+  async function repairInGroups() {
+    while (approved.size < types.length && stalledRounds < MAX_STALLED_REPAIR_ROUNDS) {
+      const before = approved.size;
+      const pending = pendingSlots();
+      for (let start = 0; start < pending.length; start += 5) {
+        const remainingMs = remainingTime(requestOptions);
+        if (provider?.canStartOpenAIValidationRepair()) {
+          // Admit another Gemini batch only if both providers could still
+          // finish a draft and review. Recheck even between sibling batches.
+          if (remainingMs <= 2 * draftAndReviewMs) return "time_budget";
+          if (stalledRounds > 0) return "no_progress";
+        }
+        if (start === 0) round++;
+        try {
+          await prepare(pending.slice(start, start + 5));
+        } catch (error) {
+          if (error.code !== "PRACTICE_REPAIR_WINDOW_ENDED") throw error;
+          return "time_budget";
+        }
+      }
+      stalledRounds = approved.size === before ? stalledRounds + 1 : 0;
+    }
   }
 
   let validationStop = "no_progress";
+  let stop = "all_slots_verified";
   try {
     await prepare(allIndexes);
-    while (approved.size < types.length && stalledRounds < MAX_STALLED_REPAIR_ROUNDS)
-      await repairPending();
-
-    if (approved.size < types.length) {
-      if (!provider?.startOpenAIValidationRepair(options.requestOptions)) throw lastFailure;
-      log({ event: "openai_validation_repair", stalledRounds, maxRounds: MAX_OPENAI_VALIDATION_REPAIR_ROUNDS });
+    const handoff = await repairInGroups();
+    if (handoff) {
       validationStop = "openai_repair_limit";
-      stalledRounds = 0;
-      for (let pass = 0; pass < MAX_OPENAI_VALIDATION_REPAIR_ROUNDS && approved.size < types.length; pass++)
-        await repairPending();
-      if (approved.size < types.length) throw lastFailure;
+      for (let pass = 0; pass < MAX_OPENAI_VALIDATION_REPAIR_ROUNDS && approved.size < types.length; pass++) {
+        const remainingMs = remainingTime(requestOptions);
+        if (remainingMs < 2 * MIN_OPENAI_REQUEST_MS) {
+          validationStop = "insufficient_repair_time";
+          throw lastFailure;
+        }
+        if (pass === 0) {
+          if (!provider.startOpenAIValidationRepair(requestOptions)) throw lastFailure;
+          log({
+            event: "openai_validation_repair", reason: handoff, remainingMs,
+            reservedMs: Math.min(remainingMs, draftAndReviewMs),
+            stalledRounds, maxRounds: MAX_OPENAI_VALIDATION_REPAIR_ROUNDS,
+          });
+        }
+        round++;
+        // The reservation covers one pair of calls for all remaining gaps.
+        await prepare(pendingSlots());
+      }
     }
+    if (approved.size < types.length) throw lastFailure;
   } catch (error) {
-    let stop = "generation_error";
-    if (error.code === "GENERATION_TIMEOUT") stop = "deadline";
-    else if (error === lastFailure) stop = validationStop;
+    stop = "generation_error";
+    if (error.code === "GENERATION_TIMEOUT") {
+      if (Date.now() >= requestOptions.deadlineAt) stop = "deadline";
+      else stop = requestOptions.signal.aborted ? "cancelled" : "insufficient_request_time";
+    } else if (error === lastFailure) stop = validationStop;
     else if (error.statusCode === 503) stop = "provider_unavailable";
     else if (error.statusCode === 502) stop = "invalid_provider_response";
-    log({ stop, stalledRounds });
     throw error;
+  } finally {
+    log({ event: "summary", ...timings, approvedCount: approved.size, rejectedCount: rejected.size,
+      remainingMs: Math.max(0, requestOptions.deadlineAt - Date.now()), stop, stalledRounds });
   }
   return allIndexes.map((index) => approved.get(index));
 }
@@ -262,7 +320,7 @@ export async function generatePracticeQuestions(
   module,
   performance,
   previousQuestions,
-  { format = "mixed", generateBatch, history = [], isRepeatPractice = false, signal: jobSignal, deadlineAt: jobDeadline } = {},
+  { format = "mixed", generateBatch, history = [], isRepeatPractice = false, signal: jobSignal, deadlineAt: jobDeadline, jobId } = {},
 ) {
   const now = Date.now();
   const deadlineAt = Math.min(jobDeadline ?? Infinity, now + PRACTICE_GENERATION_TIMEOUT_MS);
@@ -401,6 +459,7 @@ export async function generatePracticeQuestions(
       skills,
       distribution,
       shortAnswer,
+      jobId,
       requestOptions: {
         signal,
         deadlineAt,
@@ -520,7 +579,7 @@ export async function startModulePractice(
   user,
   body,
   generate = generatePracticeQuestions,
-  { signal, deadlineAt } = {},
+  { signal, deadlineAt, jobId } = {},
 ) {
   const { courseId, module, mode, format } = await modulePracticeScope(
     user,
@@ -596,6 +655,7 @@ export async function startModulePractice(
         isRepeatPractice: Boolean(latestCompleted),
         signal,
         deadlineAt,
+        jobId,
       });
       if (!Array.isArray(questions) || questions.length !== QUESTION_COUNT)
         throw requestError(

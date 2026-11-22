@@ -154,7 +154,8 @@ test("the queue migration upgrades existing rows and enforces only one active jo
     started_at=CURRENT_TIMESTAMP - INTERVAL '238 seconds', lease_expires_at=CURRENT_TIMESTAMP - INTERVAL '1 second'
     WHERE job_id=?`, [hung.id]);
   const aborted = Promise.withResolvers();
-  await runModulePracticeJob({ start: (_user, _body, _generate, { signal, deadlineAt }) => {
+  await runModulePracticeJob({ start: (_user, _body, _generate, { signal, deadlineAt, jobId }) => {
+    assert.equal(jobId, hung.id);
     assert.ok(deadlineAt - Date.now() <= 2000);
     signal.addEventListener("abort", () => aborted.resolve(signal.reason.code), { once: true });
     return new Promise(() => {});
