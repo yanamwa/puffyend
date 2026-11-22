@@ -573,3 +573,90 @@ test("a practice already using OpenAI after a Gemini outage cannot restart OpenA
   await assert.rejects(fixture.generate(), { statusCode: 422, code: "QUIZ_REVIEW_REJECTED" });
   assert.deepEqual(fixture.providers(), ["gemini", ...Array(8).fill("openai")]);
 });
+
+test("after Gemini billing fallback a stalled tenth slot gets a unique reviewed OpenAI replacement", async (t) => {
+  const old = "What is the middle value of an ordered list called?";
+  const paraphrase = "Which statistic names the central ordered observation?";
+  const unique = "Four new trips took 6, 8, 20 and 90 minutes. What is their median?";
+  const reason = "Both questions ask for the name of the middle value.";
+  const secondGroup = { title: "Second commute group", content:
+    "Four new trips took 6, 8, 20 and 90 minutes. The median is the mean of the two middle times, 8 and 20." };
+  const lesson = { ...statisticsLesson, lessonPages: [
+    ...Array(8).fill(statisticsLesson.lessonPages[0]), secondGroup,
+  ] };
+  const history = [...Array.from({ length: 30 }, (_, i) => `Earlier exercise ${i}?`), old];
+  const drafts = [], reviews = [];
+  const durations = [25_000, 25_000, 20_000, 20_000, 45_000, 30_000, 25_000];
+  const mock = mockProviders(t, (provider, payload) => {
+    if (provider === "gemini") throw http(403, { message: "Billing must be enabled" });
+    const data = JSON.parse(payload.messages[1].content);
+    if (data.questions) {
+      reviews.push(data);
+      // A recycled paraphrase must also fail if it reaches independent review again.
+      if (data.questions.length === 10 || data.questions[0].question === unique)
+        mock.advanceTime(durations.shift());
+      return openai({ verdicts: data.questions.map(({ question, question_index, question_number }) => ({
+        question_index, question_number, supported: question !== paraphrase,
+        reason_code: question === paraphrase ? "duplicate" : "supported",
+        matched_question: question === paraphrase ? old : "",
+        reason: question === paraphrase ? reason : "",
+      })) });
+    }
+    const turn = drafts.push(data);
+    mock.advanceTime(durations.shift());
+    const questions = data.assigned_slots.map((slot) => {
+      const q = statisticsQuestion(slot, data, `Commute exercise ${slot.question_number}?`);
+      if (slot.question_number !== 10) return q;
+      return { ...q, cognitive_level: "Apply",
+        question: [paraphrase, "Commute exercise 2?", old, paraphrase, unique][turn - 1],
+        evidence_ids: turn === 5 ? [data.evidence.find((e) => e.filename === secondGroup.title).evidence_id] : q.evidence_ids,
+        correct_answer: turn === 5 ? "14 minutes" : "Median",
+        explanation: turn === 5 ? "The two middle times are 8 and 20 minutes. Their mean is 14." :
+          "The median is the middle of sorted observations.",
+      };
+    });
+    return openai({ questions });
+  });
+  const result = await generatePracticeQuestions(lesson, [], history);
+  assert.equal(drafts.length, 5);
+  assert.deepEqual(reviews.map((r) => r.questions.length), [10, 1]);
+  assert.deepEqual(mock.providers(), ["gemini", ...Array(7).fill("openai")]);
+  assert.ok(mock.logs.some(([, detail]) => detail?.errorCode === "PROVIDER_BILLING"));
+  const originals = reviews[0].questions.slice(0, 9);
+  const ordered = result.toSorted((a, b) => a.source_question_index - b.source_question_index);
+  for (const [index, original] of originals.entries()) {
+    const { question_index, question_number, ...reviewed } = original;
+    const { id, source_question_index, ...saved } = ordered[index];
+    assert.deepEqual(saved, { ...reviewed, grounding: { ...reviewed.grounding, model_review_passed: true } });
+  }
+  for (const repair of drafts.slice(1)) {
+    assert.deepEqual(repair.assigned_slots.map((s) => s.question_number), [10]);
+    const [slot] = repair.assigned_slots;
+    assert.equal(slot.type, "identification");
+    assert.equal(slot.thinking_skill, "LOTS");
+    assert.equal(slot.cognitive_level, "Apply");
+    assert.equal(slot.learning_objective, statisticsLesson.learningObjectives);
+    assert.ok(originals.every((q) => repair.previous_questions.includes(q.question)));
+    assert.deepEqual(repair.approved_questions, originals.map(({ question_number, question, correct_answer, concept }) => ({
+      question_number, question, correct_answer, concept,
+    })));
+    assert.equal(repair.repair_feedback[0].reason_code, "duplicate");
+  }
+  assert.equal(drafts[1].repair_feedback[0].reason, reason);
+  assert.equal(drafts[1].repair_feedback[0].matched_question, old);
+  assert.equal(drafts[2].repair_feedback[0].matched_question, originals[1].question);
+  assert.equal(drafts[3].repair_feedback[0].matched_question, old);
+  assert.ok(drafts[4].rejected_duplicate_questions.includes(paraphrase));
+  assert.ok(reviews[1].rejected_duplicate_questions.includes(paraphrase));
+  assert.equal(ordered[9].question, unique);
+  assert.equal(ordered[9].correct_answer, "14 minutes");
+  assert.ok(ordered[9].grounding.model_review_passed);
+  assert.equal(ordered[9].source_chunks[0].quote, secondGroup.content);
+  assert.ok(!drafts[0].evidence.some((e) => e.filename === secondGroup.title));
+  const events = mock.logs.filter(([label]) => label === "[Practice validation]").map(([, data]) => JSON.parse(data));
+  assert.equal(events.find((e) => e.event === "targeted_duplicate_repair").remainingMs, 105_000);
+  assert.equal(events.at(-1).stop, "all_slots_verified");
+  assert.equal(events.at(-1).remainingMs, 50_000);
+  assert.equal(durations.length, 0);
+  assert.doesNotMatch(JSON.stringify(mock.logs), /central ordered observation|Commute exercise|Both questions ask/);
+});

@@ -864,6 +864,31 @@ test("late partial repairs keep approved slots, their exact targets, and the lat
   assert.doesNotMatch(JSON.stringify(events), /Private review detail|Practice 1-|Role models/);
 });
 
+test("a duplicate discovered at the final uniqueness check retains its reviewed siblings", async () => {
+  const requests = [];
+  const result = await generatePracticeQuestions(lesson, [], [], {
+    generateBatch: (batch) => generateQuizBatch(batch, async ({ data, schema }) => {
+      if (schema.properties.questions) {
+        requests.push(data);
+        return practiceDraft({ data }, requests.length);
+      }
+      // Let a conflicting stem become visible between the pre-review and final checks.
+      if (requests.length === 2) batch.previousQuestions.push(data.questions[1].question);
+      return { verdicts: data.questions.map(({ question_index, question_number }) => ({
+        question_index, question_number, supported: requests.length > 1 || ![3, 8].includes(question_number),
+        reason: "Check the explanation.",
+      })) };
+    }),
+  });
+  assert.deepEqual(requests.slice(1).map((d) => d.assigned_slots.map((s) => s.question_number)), [[3, 8], [8]]);
+  const [feedback] = requests[2].repair_feedback;
+  assert.equal(feedback.matched_question, "Practice 2-1?");
+  assert.equal(feedback.reason_code, "duplicate");
+  assert.ok(requests[2].previous_questions.includes("Practice 2-0?"));
+  assert.equal(result.filter((q) => q.question.startsWith("Practice 1-")).length, 8);
+  assert.ok(result.some((q) => q.question === "Practice 2-0?" && q.grounding.model_review_passed));
+});
+
 test("ambiguous slot numbers and incomplete verdicts cannot approve an unreviewed question", async () => {
   const requested = [];
   const result = await generatePracticeQuestions(lesson, [], [], {
@@ -930,6 +955,50 @@ test("nine verified questions never become a quiz while the last explanation fai
   assert.equal(events.at(-1).stalledRounds, 3);
   assert.doesNotMatch(JSON.stringify(events), /private/i);
 });
+
+for (const stop of ["duplicate_repair_limit", "insufficient_repair_time", "deadline"]) {
+  test(`a repeatedly rejected tenth question stops at ${stop} without saving a partial quiz`, async (t) => {
+    const start = Date.now();
+    let now = start;
+    t.mock.method(Date, "now", () => now);
+    const logs = t.mock.method(console, "info", () => {});
+    const old = "Who gives students examples to observe?";
+    const turnDurations = [30_000, 35_000, 30_000, 30_000, 30_000, 30_000, 25_000, 21_000];
+    const drafts = [];
+    let reviews = 0;
+    const pending = generatePracticeQuestions(lesson, [], [old], {
+      generateBatch: (batch) => generateQuizBatch(batch, async ({ data, schema }) => {
+        if (stop === "insufficient_repair_time") now += turnDurations.shift();
+        if (schema.properties.questions) {
+          drafts.push(data.assigned_slots.map((s) => s.question_number));
+          return practiceDraft({ data }, drafts.length);
+        }
+        reviews++;
+        const lateReview = stop === "deadline" && drafts.length === 5;
+        if (lateReview) now = start + 240_000;
+        return { verdicts: data.questions.map(({ question_index, question_number }) => ({
+          question_index, question_number, supported: lateReview || question_number !== 10,
+          reason_code: !lateReview && question_number === 10 ? "duplicate" : "supported",
+          reason: "Private reviewer detail.", matched_question: question_number === 10 ? old : "",
+        })) };
+      }),
+    });
+    if (stop === "deadline") await assert.rejects(pending, { statusCode: 503, code: "GENERATION_TIMEOUT" });
+    else await assert.rejects(pending, { statusCode: 422, code: DUPLICATE_QUIZ_QUESTION, safeReason: "duplicate" });
+    const events = validationEvents(logs);
+    const summary = events.at(-1);
+    const extras = events.filter((e) => e.event === "targeted_duplicate_repair");
+    assert.equal(summary.stop, stop);
+    assert.equal(summary.approvedCount, 9);
+    assert.deepEqual(summary.rejectedByReason, { duplicate: [10] });
+    assert.ok(drafts.slice(1).every((slots) => slots.length === 1 && slots[0] === 10));
+    assert.equal(reviews, drafts.length);
+    assert.deepEqual(extras.map((e) => e.attempt), stop === "deadline" ? [1] : stop === "duplicate_repair_limit" ? [1, 2] : []);
+    assert.equal(drafts.length, 4 + extras.length);
+    if (stop === "insufficient_repair_time") assert.equal(summary.remainingMs, 9_000);
+    assert.doesNotMatch(JSON.stringify(events), /Private reviewer detail|Practice 1-|Who gives/);
+  });
+}
 
 test("the shared practice deadline stops later batches and repairs", async (context) => {
   let controller;
