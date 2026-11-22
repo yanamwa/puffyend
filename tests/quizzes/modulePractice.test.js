@@ -565,7 +565,6 @@ for (const format of ["mixed", "qna"]) {
   test(`${format} practice retains approved questions and repairs only rejected slots`, async () => {
     let drafts = 0;
     let reviews = 0;
-    let signal;
     const batchSizes = [];
     const directQuestion =
       "What term describes a person whose behavior students observe as an example?";
@@ -585,8 +584,7 @@ for (const format of ["mixed", "qna"]) {
         batchSizes.push(batch.types.length);
         assert.equal(batch.maxAttempts, 1);
         return generateQuizBatch(batch, async (request) => {
-          signal ||= request.signal;
-          assert.equal(request.signal, signal);
+          assert.equal(request.signal.aborted, false);
           assert.equal(request.timeoutMs, 45000);
           assert.equal(request.maxAttempts, 3);
           if (request.schema.properties.questions) {
@@ -973,12 +971,12 @@ test("a late deadline or provider outage ends repair after nine approvals", asyn
     const sizes = [];
     await assert.rejects(generatePracticeQuestions(lesson, [], [], {
       generateBatch: (batch) => generateQuizBatch(batch, async ({ schema, data, deadlineAt }) => {
-        assert.equal(deadlineAt, started + 240_000);
+        assert.equal(deadlineAt, started + (schema.properties.questions ? 195_000 : 240_000));
         if (schema.properties.questions) {
           const turn = sizes.push(data.assigned_slots.length);
           if (turn === 2) {
             assert.equal(data.assigned_slots[0].question_number, 5);
-            if (stop === "deadline") now = deadlineAt;
+            if (stop === "deadline") now = started + 240_000;
             throw Object.assign(new Error("Provider unavailable."), {
               statusCode: 503, code: "PRACTICE_PROVIDERS_UNAVAILABLE",
             });

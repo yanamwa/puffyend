@@ -17,6 +17,7 @@ const handler = source
 
 async function run({
   user = { userId: 7, email: "Professor@Example.test", role: "professor" },
+  query = {},
   courses = [
     { id: 42, title: "Understanding the Self", code: "PB-SELF" },
     { id: 43, title: "History", code: "PB-HISTORY" },
@@ -34,6 +35,7 @@ async function run({
   ],
   progress = [],
   attempts = [],
+  recordedScores = [],
   fails = false,
 } = {}) {
   const queries = [];
@@ -43,13 +45,15 @@ async function run({
       execute: async (sql, args = []) => {
         queries.push({ sql, args: Array.from(args) });
         if (fails) throw new Error("Database unavailable");
-        if (/FROM courses c/.test(sql)) return [courses];
+        if (/FROM courses c/.test(sql))
+          return [args.length === 4 ? courses.filter((course) => course.id === args[3]) : courses];
         if (/FROM system_settings/.test(sql))
           return [[{ passing_percentage: threshold }]];
         if (/FROM course_enrollments/.test(sql)) return [enrollments];
         if (/FROM learning_modules/.test(sql)) return [modules];
         if (/FROM lesson_progress/.test(sql)) return [progress];
         if (/FROM quiz_attempts/.test(sql)) return [attempts];
+        if (/FROM practice_score_entries/.test(sql)) return [recordedScores];
         throw new Error("Unexpected report query");
       },
     },
@@ -75,7 +79,7 @@ async function run({
     },
   };
   await context.handler(
-    { user, query: { professorId: 999, courseId: 999 }, body: { userId: 999 } },
+    { user, query: { professorId: 999, ...query }, body: { userId: 999 } },
     res,
     (error) => {
       failure = error;
@@ -125,6 +129,52 @@ test("averages and scored-attempt counts remain separate for each student and co
   assert.equal(history.scoredAttempts, 1);
   assert.equal(history.needsAttention, false);
   assert.equal(res.body.students.length, 3);
+});
+
+test("course practice history attaches separately recorded entries only to the matching enrollment", async () => {
+  const history = [
+    { quizNumber: 2, score: 0, total: 10, proposedDisplayAt: null },
+    { quizNumber: 1, score: 5, total: 5, proposedDisplayAt: null },
+  ];
+  const courses = [{ id: 42, can_read_recorded_scores: true }, { id: 43, can_read_recorded_scores: true }];
+  const { res, queries } = await run({
+    query: { courseId: "42" }, courses,
+    attempts: [{ courseId: 42, userId: 1, score: 9, total: 10 }],
+    recordedScores: [
+      { courseId: 42, userId: 1, average: 50, history },
+      { courseId: 43, userId: 2, average: 50, history },
+    ],
+  });
+  assert.match(queries[0].sql, /AND c\.course_id = \?/);
+  assert.deepEqual(queries[0].args, [7, "professor@example.test", "professor@example.test", 42]);
+  assert.deepEqual(queries.find(({ sql }) => sql.includes("FROM practice_score_entries")).args, [42]);
+  const [diana] = res.body.students.filter((row) => row.key === "42:1");
+  assert.equal(diana.scoredAttempts, 1);
+  assert.equal(diana.averageScore, 90);
+  assert.equal(diana.recordedScoreEntries, 2);
+  assert.equal(diana.recordedAverageScore, 50);
+  assert.deepEqual(diana.recordedHistory, history);
+  assert.deepEqual(res.body.students.find((row) => row.key === "42:2").recordedHistory, []);
+  assert.ok(res.body.students.every((row) => row.courseId === 42));
+
+  const otherCourse = await run({ query: { courseId: 999 }, courses });
+  assert.deepEqual(otherCourse.res.body.students, []);
+  assert.equal(otherCourse.queries.length, 2);
+  assert.equal((await run({ query: { courseId: "invalid" } })).res.code, 400);
+});
+
+test("submitted performance stays available when recorded scores cannot be read", async () => {
+  for (const canRead of [null, false]) {
+    const { res, queries } = await run({
+      courses: [{ id: 42, can_read_recorded_scores: canRead }],
+      attempts: [{ courseId: 42, userId: 1, score: 8, total: 10 }],
+    });
+    assert.match(queries[0].sql, /has_table_privilege\(to_regclass\('practice_score_entries'\), 'SELECT'\)/);
+    assert.ok(queries.every(({ sql }) => !sql.includes("FROM practice_score_entries")));
+    assert.equal(res.code, 200);
+    assert.equal(res.body.students.find((row) => row.userId === 1).averageScore, 80);
+    assert.equal(res.body.recordedScoresUnavailable, canRead === false ? true : undefined);
+  }
 });
 
 test("zero scores count, unscored attempts do not, and threshold equality is not flagged", async () => {

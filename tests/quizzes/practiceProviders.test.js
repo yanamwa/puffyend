@@ -314,7 +314,7 @@ test("OpenAI drafts and reviews use the same evidence, history, and slot repair 
 });
 
 // Both providers respond over the normal HTTP adapters. Gemini's first review
-// approves eight slots. Three subsequent Gemini drafts make no progress.
+// approves eight slots. Its next repair still has an unsupported and a missing slot.
 const unsupportedExplanation = "The mean is unaffected by an extreme observation.";
 function mockStalledPractice(t, changeResponse) {
   const exchanges = [];
@@ -332,7 +332,7 @@ function mockStalledPractice(t, changeResponse) {
         if (provider === "gemini" && slot.question_number === 8) q.correct_answer = "Range";
         return q;
       });
-      response = { questions: provider === "gemini" && turn === 4
+      response = { questions: provider === "gemini" && turn === 2
         ? questions.filter((q) => q.question_number !== 8) : questions };
     } else {
       response = { verdicts: data.questions.map((q) => {
@@ -354,7 +354,9 @@ function mockStalledPractice(t, changeResponse) {
   ] };
   const miss = { question: "Which statistic resists outliers?", topic: "Measures of center",
     concept: "Median", isCorrect: false, userAnswer: "Mean", correctAnswer: "Median" };
-  return { ...mock, exchanges, generate: () => generatePracticeQuestions(lesson, [miss], [miss.question]) };
+  const events = () => mock.logs.filter(([label]) => label === "[Practice validation]").map(([, line]) => JSON.parse(line));
+  return { ...mock, exchanges, events,
+    generate: (options) => generatePracticeQuestions(lesson, [miss], [miss.question], options) };
 }
 
 test("OpenAI repairs and independently reviews only two slots after Gemini exhausts validation with eight approved", async (t) => {
@@ -364,16 +366,16 @@ test("OpenAI repairs and independently reviews only two slots after Gemini exhau
   const numbers = (slots) => slots.map((s) => s.question_number);
   const all = Array.from({ length: 10 }, (_, i) => i + 1);
   const gaps = [1, 8];
-  assert.deepEqual(fixture.providers(), [...Array(8).fill("gemini"), "openai", "openai"]);
+  assert.deepEqual(fixture.providers(), [...Array(4).fill("gemini"), "openai", "openai"]);
   assert.deepEqual(exchanges.map(({ data }) => numbers(data.assigned_slots)),
-    [all, all, gaps, gaps, gaps, gaps, gaps, [1], gaps, gaps]);
+    [all, all, gaps, [1], gaps, gaps]);
   const [draft, review] = exchanges.slice(-2).map((e) => e.data);
   assert.deepEqual(numbers(review.questions), gaps);
   assert.equal(exchanges.at(-1).phase, "review");
   assert.deepEqual(draft.repair_feedback.map(({ question_number, reason }) => [question_number, reason]), [
-    [1, "Draft 4: The explanation claims the mean is unaffected."], [8, "Question 8 is missing from the draft."],
+    [1, "Draft 2: The explanation claims the mean is unaffected."], [8, "Question 8 is missing from the draft."],
   ]);
-  assert.deepEqual(draft.repair_feedback.map((f) => f.draft.question), ["gemini example 4.1?", "gemini example 3.8?"]);
+  assert.deepEqual(draft.repair_feedback.map((f) => f.draft.question), ["gemini example 2.1?", "gemini example 1.8?"]);
   assert.deepEqual(draft.evidence, exchanges[0].data.evidence);
   const firstReview = exchanges[1].data;
   const assignments = firstReview.assigned_slots.filter((s) => gaps.includes(s.question_number));
@@ -392,6 +394,7 @@ test("OpenAI repairs and independently reviews only two slots after Gemini exhau
     assert.deepEqual(saved, { ...q, grounding: { ...q.grounding, model_review_passed: true } });
   }
   assert.deepEqual(fixture.waits, []);
+  assert.equal(fixture.events().find((e) => e.event === "openai_validation_repair").reason, "no_progress");
 });
 
 test("OpenAI validation repair keeps new approvals, rejects duplicates and stops on an unsupported final explanation", async (t) => {
@@ -433,15 +436,118 @@ test("OpenAI repairs must pass the evidence, answer-key, type and LOTS/HOTS chec
   assert.equal(stop.passed, 8);
 });
 
-test("an OpenAI review that crosses the original 240-second deadline cannot complete a practice", async (t) => {
-  const fixture = mockStalledPractice(t, ({ provider, phase, turn }) => {
-    if (provider === "gemini") fixture.advanceTime(turn < 4 ? 30_000 : phase === "draft" ? 25_000 : 15_000);
-    if (provider === "openai") fixture.advanceTime(phase === "draft" ? 12_000 : 8_001);
+test("eight approvals and two gaps finish at 234 seconds with a reserved OpenAI draft and review", async (t) => {
+  const durations = [30_000, 28_000, 43_000, 44_000, 44_000, 45_000];
+  const fixture = mockStalledPractice(t, () => fixture.advanceTime(durations.shift()));
+  const jobId = "185a574a-101e-4a8f-9671-ff09b8988166";
+  const result = await fixture.generate({ jobId });
+  assert.deepEqual(durations, []);
+  assert.deepEqual(fixture.providers(), ["gemini", "gemini", "gemini", "gemini", "openai", "openai"]);
+  const handoff = fixture.events().find((e) => e.event === "openai_validation_repair");
+  assert.equal(handoff.reason, "time_budget");
+  assert.equal(handoff.remainingMs, 95_000);
+  assert.equal(handoff.reservedMs, 90_000);
+  assert.equal(handoff.passed, 8);
+  const backup = fixture.exchanges.slice(-2);
+  assert.deepEqual(backup.map(({ phase, data }) => [phase, data.assigned_slots.map((s) => s.question_number)]),
+    [["draft", [1, 8]], ["review", [1, 8]]]);
+  assert.ok(backup.every((e) => e.options.timeout === 45_000));
+  assert.equal(result.filter((q) => q.question.startsWith("gemini example 1.")).length, 8);
+  assert.equal(result.filter((q) => q.question.startsWith("openai example 1.")).length, 2);
+  assert.ok(result.every((q) => q.grounding.model_review_passed && q.grounding.exact_quotes_verified));
+  const summary = fixture.events().at(-1);
+  assert.equal(summary.jobId, jobId);
+  assert.equal(summary.initialGenerationMs, 30_000);
+  assert.equal(summary.reviewMs, 117_000);
+  assert.equal(summary.repairMs, 87_000);
+  assert.equal(summary.approvedCount, 10);
+  assert.equal(summary.rejectedCount, 0);
+  assert.equal(summary.remainingMs, 6_000);
+  assert.equal(summary.stop, "all_slots_verified");
+  assert.doesNotMatch(JSON.stringify(fixture.logs), /example 1\.|mean is unaffected|test-primary-secret|test-backup-secret/);
+});
+
+for (const overrun of [false, true]) {
+  test(`a reclaimed job shares its last 30 seconds between the two OpenAI slots and their review (overrun=${overrun})`, async (t) => {
+    const durations = [6_000, 4_000, 12_000, overrun ? 18_001 : 17_000];
+    const fixture = mockStalledPractice(t, () => fixture.advanceTime(durations.shift()));
+    // The worker's original deadline is 40 seconds away when generation starts.
+    const pending = fixture.generate({ deadlineAt: Date.now() + 40_000 });
+    if (overrun) await assert.rejects(pending, { statusCode: 503, code: "GENERATION_TIMEOUT" });
+    else assert.equal((await pending).length, 10);
+    assert.deepEqual(fixture.providers(), ["gemini", "gemini", "openai", "openai"]);
+    const [draft, review] = fixture.exchanges.slice(-2);
+    assert.deepEqual(draft.data.assigned_slots.map((s) => s.question_number), [1, 8]);
+    assert.deepEqual(review.data.questions.map((q) => q.question_number), [1, 8]);
+    assert.deepEqual([draft.options.timeout, review.options.timeout], [15_000, 18_000]);
+    const summary = fixture.events().at(-1);
+    assert.equal(summary.stop, overrun ? "deadline" : "all_slots_verified");
+    assert.equal(summary.remainingMs, overrun ? 0 : 1_000);
+    assert.equal(summary.approvedCount, overrun ? 8 : 10);
+    assert.equal(summary.rejectedCount, overrun ? 2 : 0);
   });
-  await assert.rejects(fixture.generate(), { code: "GENERATION_TIMEOUT" });
-  const backup = fixture.exchanges.filter((e) => e.provider === "openai");
-  assert.deepEqual(backup.map((e) => [e.phase, e.options.timeout]), [["draft", 20_000], ["review", 8_000]]);
-  assert.ok(backup.every((e) => e.options.signal === fixture.exchanges[0].options.signal));
+}
+
+test("a late Gemini repair cannot consume the reservation or restart already verified slots", async (t) => {
+  const fixture = mockStalledPractice(t, ({ provider, phase, turn }) => {
+    if (provider !== "gemini") return;
+    if (turn === 1) fixture.advanceTime(phase === "draft" ? 30_000 : 28_000);
+    else fixture.advanceTime(47_001); // Beyond the Gemini draft cutoff, inside the job deadline.
+  });
+  const result = await fixture.generate();
+  assert.deepEqual(fixture.providers(), ["gemini", "gemini", "gemini", "openai", "openai"]);
+  const [draft, review] = fixture.exchanges.slice(-2);
+  assert.deepEqual(draft.data.repair_feedback.map((f) => [f.question_number, f.reason]), [
+    [1, "Draft 1: The explanation claims the mean is unaffected."], [8, "Draft 1: The answer is unsupported."],
+  ]);
+  assert.deepEqual(review.data.questions.map((q) => q.question_number), [1, 8]);
+  assert.equal(result.filter((q) => q.question.startsWith("gemini example 1.")).length, 8);
+  assert.ok(result.every((q) => q.grounding.model_review_passed));
+  assert.equal(fixture.events().find((e) => e.event === "openai_validation_repair").reason, "time_budget");
+});
+
+test("time is rechecked between Gemini repair groups and OpenAI receives every outstanding slot in one batch", async (t) => {
+  const durations = [20_000, 18_000, 23_000, 20_000];
+  const fixture = mockStalledPractice(t, ({ provider, phase, turn, response }) => {
+    if (provider !== "gemini") return;
+    fixture.advanceTime(durations.shift());
+    if (turn === 1 && phase === "review") {
+      for (const verdict of response.verdicts) Object.assign(verdict, {
+        supported: false, reason_code: "unsupported_answer", reason: "Explain the answer using the cited passage.",
+      });
+    }
+  });
+  const result = await fixture.generate();
+  const groups = fixture.exchanges.map(({ data }) => data.assigned_slots.map((s) => s.question_number));
+  assert.deepEqual(fixture.providers(), ["gemini", "gemini", "gemini", "gemini", "openai", "openai"]);
+  assert.deepEqual(groups.slice(2), [
+    [1, 2, 3, 4, 5], [1, 2, 3, 4, 5], [1, 6, 7, 8, 9, 10], [1, 6, 7, 8, 9, 10],
+  ]);
+  assert.equal(result.filter((q) => q.question.startsWith("gemini example 2.")).length, 4);
+  assert.ok(result.every((q) => q.grounding.model_review_passed));
+});
+
+test("too little time for both OpenAI calls preserves the validation failure without starting a draft", async (t) => {
+  const fixture = mockStalledPractice(t, ({ phase }) => fixture.advanceTime(phase === "draft" ? 2_000 : 4_500));
+  await assert.rejects(fixture.generate({ deadlineAt: Date.now() + 15_000 }), {
+    statusCode: 422, code: "QUIZ_REVIEW_REJECTED",
+  });
+  assert.deepEqual(fixture.providers(), ["gemini", "gemini"]);
+  const summary = fixture.events().at(-1);
+  assert.equal(summary.stop, "insufficient_repair_time");
+  assert.equal(summary.rejectedCount, 2);
+  assert.equal(summary.remainingMs, 8_500);
+});
+
+test("cancellation during the OpenAI repair draft stops its request and suppresses the review", async (t) => {
+  const job = new AbortController();
+  const fixture = mockStalledPractice(t, ({ provider }) => {
+    if (provider === "openai") job.abort();
+  });
+  await assert.rejects(fixture.generate({ signal: job.signal }), { statusCode: 503, code: "GENERATION_TIMEOUT" });
+  assert.deepEqual(fixture.providers(), ["gemini", "gemini", "gemini", "gemini", "openai"]);
+  assert.ok(fixture.exchanges.every(({ options }) => options.signal.aborted));
+  assert.equal(fixture.events().at(-1).stop, "cancelled");
 });
 
 test("without an OpenAI key, exhausted Gemini validation remains a 422", async (t) => {
@@ -456,7 +562,7 @@ test("an OpenAI outage after Gemini validation exhaustion reports only the OpenA
     if (provider === "openai") throw http(503);
   });
   await assert.rejects(fixture.generate(), { statusCode: 503, code: "PROVIDER_UNAVAILABLE" });
-  assert.deepEqual(fixture.providers(), [...Array(8).fill("gemini"), "openai"]);
+  assert.deepEqual(fixture.providers(), [...Array(4).fill("gemini"), "openai"]);
 });
 
 test("a practice already using OpenAI after a Gemini outage cannot restart OpenAI's repair budget", async (t) => {

@@ -559,10 +559,15 @@ export async function generateQuizBatch(
     preserveValidated = false,
     initialCorrection = "",
     requestOptions,
+    runRequest,
   },
   generate = generateJson,
 ) {
   const isPractice = skills.length > 0 && !mainPrompt;
+  function requestJson(phase, payload) {
+    const request = { ...requestOptions, ...payload };
+    return runRequest ? runRequest(phase, generate, request) : generate(request);
+  }
   const numberedPractice = isPractice && preserveValidated && !!practiceTargets;
   const objectiveChoices = numberedPractice ? practiceObjectives(objectives) : [];
   const reviewObjectives = (isPractice || preserveValidated) && objectives;
@@ -628,8 +633,7 @@ export async function generateQuizBatch(
     previousReview = null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const draft = await generate({
-        ...requestOptions,
+      const draft = await requestJson("draft", {
         schema,
         instruction: mainPrompt
           ? mainPrompt +
@@ -767,8 +771,7 @@ export async function generateQuizBatch(
         : practiceFocus;
       if (mainPrompt)
         validateAdaptiveQuestions(questions, assignedSlots, previousQuestions);
-      const review = await generate({
-        ...requestOptions,
+      const review = await requestJson("review", {
         schema: numberedPractice ? practiceReviewSchema : reviewSchema,
         instruction: [
           "Independently audit every question against its exact source quotes.",

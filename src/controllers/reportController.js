@@ -195,6 +195,10 @@ export async function getProfessorAssessmentSummary(req, res, next) {
       .status(401)
       .json({ success: false, message: "Authentication required." });
   }
+  const courseId = req.query?.courseId == null ? null : Number(req.query.courseId);
+  if (courseId !== null && (!Number.isSafeInteger(courseId) || courseId < 1)) {
+    return res.status(400).json({ success: false, message: "A valid course ID is required." });
+  }
 
   try {
     const email = String(req.user.email || "")
@@ -203,13 +207,15 @@ export async function getProfessorAssessmentSummary(req, res, next) {
     const [courses] = await db.execute(
       `SELECT c.course_id AS id,
               COALESCE(NULLIF(c.course_name, ''), c.title) AS title,
-              COALESCE(NULLIF(c.course_code, ''), c.code) AS code
+              COALESCE(NULLIF(c.course_code, ''), c.code) AS code,
+              has_table_privilege(to_regclass('practice_score_entries'), 'SELECT') AS can_read_recorded_scores
        FROM courses c
        WHERE COALESCE(c.archived, 0) = 0
          AND (c.professor_id = ? OR
               ((c.professor_id IS NULL OR c.professor_id = 0)
-               AND LOWER(c.professor_email) = ? AND ? <> ''))`,
-      [professorId, email, email],
+               AND LOWER(c.professor_email) = ? AND ? <> ''))
+         ${courseId === null ? "" : "AND c.course_id = ?"}`,
+      courseId === null ? [professorId, email, email] : [professorId, email, email, courseId],
     );
     const [settings] = await db.execute(
       "SELECT passing_percentage FROM system_settings ORDER BY setting_id ASC LIMIT 1",
@@ -227,7 +233,7 @@ export async function getProfessorAssessmentSummary(req, res, next) {
     if (courses.length) {
       const ids = courses.map((course) => course.id);
       const placeholders = ids.map(() => "?").join(", ");
-      const [[enrollments], [modules], [progress], [attempts]] =
+      const [[enrollments], [modules], [progress], [attempts], [recordedScores]] =
         await Promise.all([
           db.execute(
             `SELECT ce.course_id AS courseId, ce.user_id AS userId,
@@ -258,7 +264,24 @@ export async function getProfessorAssessmentSummary(req, res, next) {
            FROM quiz_attempts WHERE course_id IN (${placeholders})`,
             ids,
           ),
+          courses[0].can_read_recorded_scores
+            ? db.execute(
+                `SELECT course_id AS courseId, user_id AS userId,
+                        AVG(100.0 * score / total)::float8 AS average,
+                        json_agg(json_build_object(
+                          'quizNumber', quiz_number, 'score', score, 'total', total,
+                          'proposedDisplayAt', proposed_display_at::timestamptz
+                        ) ORDER BY proposed_display_at DESC NULLS LAST, quiz_number DESC) AS history
+                 FROM practice_score_entries
+                 WHERE course_id IN (${placeholders}) AND total > 0 AND score BETWEEN 0 AND total
+                 GROUP BY course_id, user_id`,
+                ids,
+              )
+            : [[]],
         ]);
+      const recordedByStudent = new Map(
+        recordedScores.map((row) => [`${row.courseId}:${row.userId}`, row]),
+      );
       const courseMap = new Map(
         courses.map((course) => [String(course.id), course]),
       );
@@ -295,6 +318,7 @@ export async function getProfessorAssessmentSummary(req, res, next) {
           if (!course) return [];
           const key = `${enrollment.courseId}:${enrollment.userId}`;
           const score = scores.get(key);
+          const recorded = recordedByStudent.get(key);
           const averageScore = score ? score.sum / score.count : null;
           return [
             {
@@ -308,6 +332,9 @@ export async function getProfessorAssessmentSummary(req, res, next) {
               courseCode: course.code,
               scoredAttempts: score?.count || 0,
               averageScore,
+              recordedScoreEntries: recorded?.history.length ?? 0,
+              recordedAverageScore: recorded?.average ?? null,
+              recordedHistory: recorded?.history ?? [],
               completedModules: completed.get(key)?.size || 0,
               totalModules: moduleIds.get(String(course.id))?.size || 0,
               needsAttention:
@@ -325,7 +352,10 @@ export async function getProfessorAssessmentSummary(req, res, next) {
     }
 
     res.set("Cache-Control", "no-store");
-    return res.json({ success: true, passingPercentage, students });
+    return res.json({
+      success: true, passingPercentage, students,
+      ...(courses[0]?.can_read_recorded_scores === false && { recordedScoresUnavailable: true }),
+    });
   } catch (error) {
     next(error);
   }
